@@ -14,6 +14,7 @@ from archon_horizon.core.tasks import TaskStatus
 from archon_horizon.harnesses.base import HarnessResult
 from archon_horizon.harnesses.command import CommandHarness
 from archon_horizon.harnesses.null import NullHarness
+from archon_horizon.transcript.model import TranscriptKind
 
 CONFIG = """
 workspace:
@@ -73,6 +74,31 @@ def test_registry_builds_codex_argv(tmp_path: Path) -> None:
     assert argv[-1] == "PROMPT"
 
 
+def test_registry_applies_optional_pricing_to_codex_parser() -> None:
+    cfg = HarnessConfig(
+        name="horizon",
+        kind="codex",
+        model="fable5",
+        options={
+            "pricing": {
+                "input_per_million_usd": 10,
+                "cached_input_per_million_usd": 1,
+                "output_per_million_usd": 20,
+            }
+        },
+    )
+    harness = HarnessRegistry().build(cfg)
+    assert isinstance(harness, CommandHarness)
+    [event] = harness._parser(  # noqa: SLF001 — asserting config-to-parser wiring
+        '{"type":"turn.completed","usage":{"input_tokens":1000000,'
+        '"cached_input_tokens":250000,"output_tokens":500000}}'
+    )
+    assert event.kind is TranscriptKind.USAGE
+    assert event.usage is not None
+    assert event.usage.cost_usd == 17.75
+    assert event.data["cost_estimated"] is True
+
+
 def test_unknown_kind_is_explicit(tmp_path: Path) -> None:
     with pytest.raises(UnknownHarnessKind):
         HarnessRegistry().build(HarnessConfig(name="x", kind="does-not-exist"))
@@ -88,9 +114,15 @@ def test_build_orchestrator_runs_with_harness_overrides(tmp_path: Path) -> None:
         "horizon-default": NullHarness(lambda req: HarnessResult(ok=True, text="done")),
     }
     orch = build_orchestrator(tmp_path, harnesses=overrides)
-    reports = orch.run(RunRecord(id="S-0001", rounds_requested=1))
+    reports = orch.run(RunRecord(id="", rounds_requested=1))
 
     assert reports[0].tasks_run == ("T-0001",)
     assert orch.task_store.get("T-0001").status is TaskStatus.DONE
-    # Freeze from config is live: a task on Frozen.lean would be blocked.
-    assert (tmp_path / ".archon-horizon" / "roadmap.yaml").parent.exists()
+
+    # The run claimed a numbered log dir with ordered sessions + a transcript.
+    run_dir = tmp_path / ".archon-horizon" / "runs" / "0001"
+    assert (run_dir / "run.yaml").exists()
+    sessions = sorted((run_dir / "sessions").iterdir())
+    assert sessions[0].name == "0001-round0-informal"
+    assert any((s / "transcript.jsonl").exists() for s in sessions)
+    assert any(s.name.startswith("0002-horizon-T-0001") for s in sessions)

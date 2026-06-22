@@ -18,6 +18,8 @@ from collections.abc import Callable
 from archon_horizon.harnesses.base import Harness
 from archon_horizon.harnesses.command import PROMPT_TOKEN, CommandHarness
 from archon_horizon.harnesses.null import NullHarness
+from archon_horizon.transcript.parsers import parse_claude_line, parse_codex_line, parse_plain_line
+from archon_horizon.transcript.pricing import pricing_from_mapping, with_usage_pricing
 
 from .schema import HarnessConfig
 
@@ -31,15 +33,25 @@ class UnknownHarnessKind(ValueError):
 def _build_command(cfg: HarnessConfig) -> Harness:
     if not cfg.command:
         raise ValueError(f"harness {cfg.name!r} (kind={cfg.kind}) needs a 'command'")
-    return CommandHarness(cfg.name, [cfg.command, *cfg.args])
+    parser = with_usage_pricing(parse_plain_line, pricing_from_mapping(cfg.options.get("pricing")))
+    return CommandHarness(cfg.name, [cfg.command, *cfg.args], parser=parser)
 
 
 def _build_claude_code(cfg: HarnessConfig) -> Harness:
-    argv = ["claude", "-p"]
+    argv = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
     if cfg.model:
         argv += ["--model", cfg.model]
     argv += [*cfg.args, PROMPT_TOKEN]
-    return CommandHarness(cfg.name, argv)
+    
+    env_overrides = {}
+    backend = cfg.options.get("backend")
+    if backend == "vscode":
+        env_overrides["CLAUDE_CODE_ENTRYPOINT"] = "claude-vscode"
+    elif backend == "desktop":
+        env_overrides["CLAUDE_CODE_ENTRYPOINT"] = "claude-desktop"
+        
+    parser = with_usage_pricing(parse_claude_line, pricing_from_mapping(cfg.options.get("pricing")))
+    return CommandHarness(cfg.name, argv, parser=parser, env_overrides=env_overrides)
 
 
 def _build_codex(cfg: HarnessConfig) -> Harness:
@@ -50,7 +62,17 @@ def _build_codex(cfg: HarnessConfig) -> Harness:
     if effort:
         argv += ["-c", f"model_reasoning_effort={effort}"]
     argv += [*cfg.args, PROMPT_TOKEN]
-    return CommandHarness(cfg.name, argv)
+    parser = with_usage_pricing(parse_codex_line, pricing_from_mapping(cfg.options.get("pricing")))
+    return CommandHarness(cfg.name, argv, parser=parser)
+
+
+def _build_antigravity(cfg: HarnessConfig) -> Harness:
+    argv = ["agy", "headless"]
+    if cfg.model:
+        argv += ["--model", cfg.model]
+    argv += [*cfg.args, PROMPT_TOKEN]
+    parser = with_usage_pricing(parse_plain_line, pricing_from_mapping(cfg.options.get("pricing")))
+    return CommandHarness(cfg.name, argv, parser=parser)
 
 
 def _build_null(cfg: HarnessConfig) -> Harness:
@@ -62,6 +84,7 @@ _DEFAULT_BUILDERS: dict[str, HarnessBuilder] = {
     "external-agent": _build_command,
     "claude-code": _build_claude_code,
     "codex": _build_codex,
+    "antigravity": _build_antigravity,
     "null": _build_null,
 }
 

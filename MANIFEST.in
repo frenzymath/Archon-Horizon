@@ -1,0 +1,1 @@
+recursive-include src/archon_horizon/frontend/dist *

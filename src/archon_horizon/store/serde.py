@@ -18,6 +18,7 @@ from typing import Any
 from archon_horizon.core.events import Event
 from archon_horizon.core.inbox import InboxItem, InboxKind, InboxScope, InboxStatus
 from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus
+from archon_horizon.core.sessions import Focus, RunRecord
 from archon_horizon.core.tasks import (
     HorizonTask,
     Proposal,
@@ -138,4 +139,19 @@ def roadmap_from_dict(data: dict[str, Any]) -> Roadmap:
         version=data.get("version", 1),
         updated_at=_dt(data["updated_at"]),
         items=tuple(roadmap_item_from_dict(item) for item in data.get("items", ())),
+    )
+
+
+def run_record_from_dict(data: dict[str, Any]) -> RunRecord:
+    focus = data.get("focus") or {}
+    return RunRecord(
+        id=data["id"],
+        focus=Focus(
+            projects=tuple(focus.get("projects", ())),
+            task=focus.get("task"),
+            proposal=focus.get("proposal"),
+        ),
+        rounds_requested=int(data.get("rounds_requested", 1)),
+        created_at=_dt(data["created_at"]),
+        metadata=dict(data.get("metadata", {})),
     )

@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
-from .base import EventLog, MemoryStore, ProposalStore, RoadmapStore, TaskStore
+from .base import (
+    EventLog,
+    MemoryStore,
+    ProposalStore,
+    ReportStore,
+    RoadmapStore,
+    RunStore,
+    TaskStore,
+)
 from .codec import Codec, JsonCodec, YamlCodec
 from .filesystem import (
     FilesystemEventLog,
     FilesystemMemoryStore,
     FilesystemProposalStore,
+    FilesystemReportStore,
     FilesystemRoadmapStore,
+    FilesystemRunStore,
     FilesystemTaskStore,
 )
 
@@ -18,12 +28,16 @@ __all__ = [
     "FilesystemEventLog",
     "FilesystemMemoryStore",
     "FilesystemProposalStore",
+    "FilesystemReportStore",
     "FilesystemRoadmapStore",
+    "FilesystemRunStore",
     "FilesystemTaskStore",
     "JsonCodec",
     "MemoryStore",
     "ProposalStore",
+    "ReportStore",
     "RoadmapStore",
+    "RunStore",
     "TaskStore",
     "YamlCodec",
 ]

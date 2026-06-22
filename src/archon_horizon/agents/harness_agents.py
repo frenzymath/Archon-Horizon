@@ -50,7 +50,7 @@ class HarnessHorizonAgent(HorizonAgent):
             prompt=self._compose(context),
             cwd=context.workspace.project_path(context.task.project),
             context_refs=context.previous_report_refs,
-            artifact_dir=context.workspace.artifact_dir(context.run.id, context.task.id),
+            artifact_dir=context.log_dir,
         )
         result = self._harness.run(request)
         return HorizonResult(
@@ -78,7 +78,7 @@ class HarnessInformalAgent(InformalAgent):
         request = HarnessRequest(
             prompt=prompt,
             cwd=context.workspace.root,
-            artifact_dir=context.workspace.artifact_dir(context.run.id, "informal"),
+            artifact_dir=context.log_dir,
         )
         result = self._harness.run(request)
         update = self._parse(result.text)

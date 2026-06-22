@@ -1,0 +1,27 @@
+:root { color-scheme: light; }
+body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: #1a1a1a; }
+.wrap { max-width: 70rem; margin: 1.5rem auto; padding: 0 1rem; }
+header { display: flex; align-items: baseline; gap: .75rem; border-bottom: 2px solid #333; }
+header h1 { margin: 0 0 .3rem; }
+.mode { font-size: .75rem; padding: .1rem .5rem; border-radius: 1rem; }
+.mode.live { background: #d6f5d6; color: #1a6b1a; }
+.mode.static { background: #eee; color: #666; }
+nav { display: flex; gap: .5rem; margin: .75rem 0; }
+nav button { padding: .35rem .9rem; border: 1px solid #ccc; background: #fafafa; cursor: pointer; border-radius: 4px; }
+nav button.on { background: #333; color: #fff; border-color: #333; }
+table { border-collapse: collapse; width: 100%; margin: .5rem 0; }
+th, td { border: 1px solid #ddd; padding: .35rem .5rem; text-align: left; }
+th { background: #f4f4f4; }
+pre { background: #f6f8fa; padding: .75rem; overflow-x: auto; white-space: pre-wrap; }
+button.mini { margin-left: .5rem; font-size: .75rem; cursor: pointer; }
+.add { display: flex; gap: .5rem; margin-top: .5rem; }
+.add input { flex: 1; padding: .35rem; }
+.cols { display: grid; grid-template-columns: 18rem 1fr; gap: 1rem; }
+.list ul { list-style: none; padding: 0; }
+.list button { width: 100%; text-align: left; padding: .3rem .5rem; border: 1px solid #eee; background: #fafafa; cursor: pointer; margin-bottom: .25rem; }
+.ev { border-left: 3px solid #ddd; padding: .25rem .5rem; margin: .3rem 0; }
+.ev .k { font-size: .7rem; text-transform: uppercase; color: #888; }
+.ev.thinking { border-color: #b39ddb; }
+.ev.text { border-color: #64b5f6; }
+.ev.tool_call { border-color: #ffb74d; }
+.ev.error { border-color: #e57373; }

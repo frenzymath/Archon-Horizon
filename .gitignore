@@ -8,3 +8,8 @@ dist/
 build/
 *.egg-info/
 
+# frontend
+node_modules/
+frontend/dist/
+src/archon_horizon/server/static/
+

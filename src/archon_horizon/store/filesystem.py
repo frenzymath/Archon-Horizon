@@ -15,10 +15,20 @@ from pathlib import Path
 
 from archon_horizon.core.events import Event
 from archon_horizon.core.roadmap import Roadmap
+from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonTask, Proposal
+from archon_horizon.runlog import RunLogTree
 
 from . import serde
-from .base import EventLog, MemoryStore, ProposalStore, RoadmapStore, TaskStore
+from .base import (
+    EventLog,
+    MemoryStore,
+    ProposalStore,
+    ReportStore,
+    RoadmapStore,
+    RunStore,
+    TaskStore,
+)
 from .codec import Codec, JsonCodec
 
 _ID_RE = re.compile(r"-(\d+)\b")
@@ -141,3 +151,62 @@ class FilesystemMemoryStore(MemoryStore):
     def save(self, text: str) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(text, "utf-8")
+
+
+class FilesystemRunStore(RunStore):
+    """Run records as ``runs/<id>/run.<ext>`` — the record lives inside the
+    run's own log directory, alongside its sessions."""
+
+    def __init__(self, tree: RunLogTree, codec: Codec | None = None) -> None:
+        self._tree = tree
+        self._codec = codec or JsonCodec()
+
+    def _path(self, run_id: str) -> Path:
+        return self._tree.get(run_id).path / f"run.{self._codec.extension}"
+
+    def allocate_id(self) -> str:
+        return self._tree.allocate().id
+
+    def get(self, run_id: str) -> RunRecord:
+        return serde.run_record_from_dict(self._codec.loads(self._path(run_id).read_text("utf-8")))
+
+    def list(self) -> list[RunRecord]:
+        records = []
+        for run_id in self._tree.ids():
+            path = self._path(run_id)
+            if path.exists():
+                records.append(serde.run_record_from_dict(self._codec.loads(path.read_text("utf-8"))))
+        return records
+
+    def put(self, run: RunRecord) -> RunRecord:
+        if not run.id:
+            run = dataclasses.replace(run, id=self._tree.allocate().id)
+        path = self._path(run.id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._codec.dumps(serde.to_jsonable(run)), "utf-8")
+        return run
+
+
+class FilesystemReportStore(ReportStore):
+    """Markdown reports under ``reports/``; refs are workspace-relative posix."""
+
+    def __init__(self, directory: Path, state_path: Path) -> None:
+        self._dir = directory
+        self._state_path = state_path
+
+    def _path(self, name: str) -> Path:
+        return self._dir / f"{name}.md"
+
+    def write(self, name: str, text: str) -> str:
+        self._dir.mkdir(parents=True, exist_ok=True)
+        path = self._path(name)
+        path.write_text(text, "utf-8")
+        return path.relative_to(self._state_path.parent).as_posix()
+
+    def read(self, name: str) -> str:
+        return self._path(name).read_text("utf-8")
+
+    def list(self) -> list[str]:
+        if not self._dir.exists():
+            return []
+        return sorted(p.stem for p in self._dir.glob("*.md"))

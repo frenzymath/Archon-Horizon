@@ -88,7 +88,7 @@ class ProjectConfig:
             path=data["path"],
             type=data.get("type", "lean"),
             vcs=ProjectVcs(
-                enabled=bool(vcs_raw.get("enabled", False)),
+                enabled=bool(vcs_raw.get("enabled", True)),
                 git_dir=Path(git_dir) if git_dir else None,
                 origin=vcs_raw.get("origin"),
                 branch=vcs_raw.get("branch"),
@@ -107,20 +107,27 @@ class WorkspaceConfig:
     rounds: int = 1
     informal_harness: str | None = None
     horizon_harness: str | None = None
+    informal_subagents: tuple[str, ...] | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     harnesses: dict[str, HarnessConfig] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
     github: GithubConfig = field(default_factory=GithubConfig)
+    freeze_agents: tuple[str, ...] = ()
+    freeze_projects: tuple[str, ...] = ()
+    freeze_files: tuple[str, ...] = ()
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "WorkspaceConfig":
         ws = data.get("workspace", {})
+        subagents = ws.get("informal_agent", {}).get("subagents")
+        freeze = data.get("freeze", {})
         return cls(
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
             informal_harness=ws.get("informal_agent", {}).get("harness"),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
+            informal_subagents=tuple(subagents) if subagents is not None else None,
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
             harnesses={
                 name: HarnessConfig.from_raw(name, h)
@@ -131,4 +138,7 @@ class WorkspaceConfig:
                 for name, p in data.get("projects", {}).items()
             },
             github=GithubConfig.from_raw(data.get("github", {})),
+            freeze_agents=tuple(freeze.get("agents", ())),
+            freeze_projects=tuple(freeze.get("projects", ())),
+            freeze_files=tuple(freeze.get("files", ())),
         )

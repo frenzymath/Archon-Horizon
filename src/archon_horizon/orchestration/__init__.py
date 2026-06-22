@@ -1,12 +1,13 @@
 """Orchestration: the round driver, scheduler, locks, and sync."""
 
-from .locks import InMemoryLockManager, LockManager, write_sets_conflict
+from .locks import FilesystemLockManager, InMemoryLockManager, LockManager, write_sets_conflict
 from .orchestrator import Orchestrator, RoundReport
 from .scheduler import FreezeAwareScheduler, Scheduler
 from .sync import MultiProviderSyncCoordinator, SyncCoordinator
 
 __all__ = [
     "FreezeAwareScheduler",
+    "FilesystemLockManager",
     "InMemoryLockManager",
     "LockManager",
     "MultiProviderSyncCoordinator",
@@ -16,4 +17,3 @@ __all__ = [
     "SyncCoordinator",
     "write_sets_conflict",
 ]
-

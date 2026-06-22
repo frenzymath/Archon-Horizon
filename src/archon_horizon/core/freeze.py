@@ -66,6 +66,12 @@ class FreezeSet:
                 return rule
         return None
 
+    def agent_rule(self, agent: str) -> FreezeRule | None:
+        for rule in self._by_level(FreezeLevel.AGENT):
+            if rule.pattern in (agent, "*"):
+                return rule
+        return None
+
 
 def frozen_violations(write_set: WriteSet, freeze: FreezeSet) -> tuple[FreezeRule, ...]:
     """Return the freeze rules a write set would violate (empty == allowed).

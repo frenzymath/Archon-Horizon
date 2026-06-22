@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 
 from archon_horizon.core.events import Event
 from archon_horizon.core.roadmap import Roadmap
+from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonTask, Proposal
 
 
@@ -67,3 +68,29 @@ class MemoryStore(ABC):
 
     @abstractmethod
     def save(self, text: str) -> None: ...
+
+
+class RunStore(ABC):
+    @abstractmethod
+    def allocate_id(self) -> str: ...
+
+    @abstractmethod
+    def get(self, run_id: str) -> RunRecord: ...
+
+    @abstractmethod
+    def list(self) -> list[RunRecord]: ...
+
+    @abstractmethod
+    def put(self, run: RunRecord) -> RunRecord: ...
+
+
+class ReportStore(ABC):
+    @abstractmethod
+    def write(self, name: str, text: str) -> str:
+        """Write a markdown report and return its workspace-relative ref."""
+
+    @abstractmethod
+    def read(self, name: str) -> str: ...
+
+    @abstractmethod
+    def list(self) -> list[str]: ...

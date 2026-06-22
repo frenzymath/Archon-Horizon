@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from archon_horizon.core.inbox import InboxItem
+from archon_horizon.core.inbox import InboxDraft, InboxItem
 from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.sessions import Focus, RunRecord
 from archon_horizon.core.tasks import HorizonResult, HorizonTask, Proposal
@@ -21,8 +22,10 @@ class InformalContext:
     roadmap: Roadmap
     accepted_inbox: tuple[InboxItem, ...] = ()
     memory: str = ""
+    blueprint_summary: str = ""
     previous_report_refs: tuple[str, ...] = ()
     artifact_refs: tuple[str, ...] = ()
+    log_dir: Path | None = None
     metadata: Metadata = field(default_factory=dict)
 
 
@@ -32,7 +35,7 @@ class InformalUpdate:
     memory: str | None = None
     tasks: tuple[HorizonTask, ...] = ()
     proposals: tuple[Proposal, ...] = ()
-    local_issues: tuple[InboxItem, ...] = ()
+    local_issues: tuple[InboxDraft, ...] = ()
     report: str = ""
     artifact_refs: tuple[str, ...] = ()
     metadata: Metadata = field(default_factory=dict)
@@ -48,6 +51,7 @@ class HorizonContext:
     memory: str = ""
     previous_report_refs: tuple[str, ...] = ()
     artifact_refs: tuple[str, ...] = ()
+    log_dir: Path | None = None
     metadata: Metadata = field(default_factory=dict)
 
 

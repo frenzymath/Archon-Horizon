@@ -34,19 +34,27 @@ interfaces.
 
 ## Status
 
-This repository is currently a pre-alpha implementation skeleton. The first
-contracts are in place for:
+Pre-alpha, but the full backend is implemented and tested end to end:
 
-- workspace/project configuration;
-- local and GitHub-like inbox providers;
-- `archon:accept`, `archon:pending`, and `archon:rejected` labels;
-- structured roadmaps, tasks, proposals, events, memory, and freeze rules;
-- abstract informal/Horizon agents;
-- abstract harnesses;
-- deterministic sync boundaries between agents;
-- a smoke-tested orchestration loop.
+- workspace/project config (`config.yaml`) → wired, runnable orchestrator;
+- the engine seam (`Harness`) with a generic `CommandHarness` (Claude Code /
+  Codex / any CLI, selected by config) and an in-process `NullHarness`;
+- concrete, engine-agnostic informal and Horizon agents;
+- local (filesystem), GitHub (shadow, via `gh`), and in-memory inbox providers
+  with the `archon:accept` / `archon:pending` / `archon:rejected` gate;
+- structured roadmap, tasks, proposals, runs, reports, events, memory stores;
+- freeze enforced deterministically before dispatch; write-set locks;
+- the collaboration-round driver across fixed sync boundaries;
+- structural project operations (add / archive / remove / merge);
+- workspace manifest git + out-of-tree project VCS wrappers;
+- a blueprint LaTeX-subset parser → dependency DAG (KaTeX renders);
+- roadmap markdown + static dashboard renderers;
+- the `archon-horizon` CLI.
 
-See [ROADMAP.md](./ROADMAP.md) for the architecture and open design direction.
+The live editable web dashboard remains a separate frontend; the static
+dashboard generator and the CLI cover viewing and editing here.
+
+See [ROADMAP.md](./ROADMAP.md) for the architecture and design rationale.
 
 ## Core Ideas
 
@@ -100,25 +108,20 @@ The roadmap should have a machine-readable source of truth:
 
 Focused runs receive a sliced roadmap context, not a separate roadmap.
 
-## Planned CLI Shape
-
-The intended user-facing entry point is:
+## CLI
 
 ```bash
-archon-horizon run
-```
-
-Focused runs restrict scheduling to selected projects:
-
-```bash
-archon-horizon run ag-main topology-base
-```
-
-Narrower task/proposal entry points may be added later:
-
-```bash
-archon-horizon run --task T-0007
-archon-horizon run --proposal P-0003
+archon-horizon init --name my-workspace          # scaffold config + .archon-horizon/
+archon-horizon project add ag-main projects/ag-main --build "lake build"
+archon-horizon inbox add --kind hint --body "Try the affine case first."
+archon-horizon inbox list
+archon-horizon run                               # all projects, workspace.rounds rounds
+archon-horizon run ag-main topology-base         # focused run (scheduling restricted)
+archon-horizon run --task T-0007                 # pin one task
+archon-horizon run ag-main --dry-run             # plan only; do not run Horizon
+archon-horizon roadmap render                    # roadmap.yaml -> reports/roadmap.md
+archon-horizon dashboard                         # static HTML dashboard (read-only)
+archon-horizon sync                              # refresh inbox providers (e.g. GitHub)
 ```
 
 ## Development
@@ -139,13 +142,17 @@ Current repository layout:
 
 ```text
 src/archon_horizon/
-  agents/
-  config/
-  core/
-  harnesses/
-  inboxes/
-  orchestration/
-  store/
+  agents/         concrete informal & Horizon agents (engine-agnostic)
+  blueprint/      LaTeX-subset parser -> dependency DAG
+  config/         config.yaml -> orchestrator; harness registry; structural ops
+  core/           pure contracts (no I/O)
+  harnesses/      the engine seam: Harness, CommandHarness, NullHarness
+  inboxes/        local / GitHub-shadow / in-memory providers
+  orchestration/  round driver, scheduler, locks, sync
+  render/         roadmap markdown + static dashboard
+  store/          event/task/proposal/roadmap/run/report stores + codecs
+  vcs/            workspace manifest git + project VCS wrappers
+  cli.py
 tests/
 ROADMAP.md
 ```

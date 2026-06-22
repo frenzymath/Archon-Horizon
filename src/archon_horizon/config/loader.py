@@ -20,17 +20,29 @@ from archon_horizon.core.freeze import FreezeLevel, FreezeRule, FreezeSet
 from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import Harness
 from archon_horizon.inboxes.base import InboxProvider
-from archon_horizon.orchestration.locks import InMemoryLockManager
+from archon_horizon.orchestration.locks import FilesystemLockManager
 from archon_horizon.orchestration.orchestrator import Orchestrator
 from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
-from archon_horizon.store.base import EventLog, MemoryStore, ProposalStore, RoadmapStore, TaskStore
+from archon_horizon.runlog import RunLogTree
+from archon_horizon.subagents.registry import build_subagents
+from archon_horizon.store.base import (
+    EventLog,
+    MemoryStore,
+    ProposalStore,
+    ReportStore,
+    RoadmapStore,
+    RunStore,
+    TaskStore,
+)
 from archon_horizon.store.codec import Codec, YamlCodec
 from archon_horizon.store.filesystem import (
     FilesystemEventLog,
     FilesystemMemoryStore,
     FilesystemProposalStore,
+    FilesystemReportStore,
     FilesystemRoadmapStore,
+    FilesystemRunStore,
     FilesystemTaskStore,
 )
 
@@ -69,6 +81,11 @@ def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:
 
 def build_freeze(cfg: WorkspaceConfig) -> FreezeSet:
     rules: list[FreezeRule] = []
+    # Workspace-level freeze (top-level `freeze:` section).
+    rules.extend(FreezeRule(level=FreezeLevel.AGENT, pattern=a) for a in cfg.freeze_agents)
+    rules.extend(FreezeRule(level=FreezeLevel.PROJECT, pattern=p) for p in cfg.freeze_projects)
+    rules.extend(FreezeRule(level=FreezeLevel.FILE, pattern=f) for f in cfg.freeze_files)
+    # Per-project freeze.
     for pc in cfg.projects.values():
         rules.extend(FreezeRule(level=FreezeLevel.FILE, pattern=f) for f in pc.freeze_files)
         rules.extend(
@@ -84,17 +101,24 @@ class Stores:
     memory: MemoryStore
     tasks: TaskStore
     proposals: ProposalStore
+    runs: RunStore
+    reports: ReportStore
+    run_logs: RunLogTree
 
 
 def build_stores(workspace: Workspace, codec: Codec | None = None) -> Stores:
     codec = codec or YamlCodec()
     state = workspace.state_path
+    run_logs = RunLogTree(state / "runs")
     return Stores(
         events=FilesystemEventLog(state / "events.jsonl"),
         roadmap=FilesystemRoadmapStore(state / f"roadmap.{codec.extension}", codec),
         memory=FilesystemMemoryStore(state / "memory.md"),
         tasks=FilesystemTaskStore(state / "tasks", codec),
         proposals=FilesystemProposalStore(state / "proposals", codec),
+        runs=FilesystemRunStore(run_logs, codec),
+        reports=FilesystemReportStore(state / "reports", state),
+        run_logs=run_logs,
     )
 
 
@@ -130,8 +154,15 @@ def build_orchestrator(
     freeze = build_freeze(cfg)
 
     built = harnesses if harnesses is not None else (registry or HarnessRegistry()).build_all(cfg.harnesses)
-    informal = HarnessInformalAgent(_resolve_harness(built, cfg.informal_harness, "informal"))
+    informal_harness = _resolve_harness(built, cfg.informal_harness, "informal")
+    informal = HarnessInformalAgent(informal_harness)
     horizon = HarnessHorizonAgent(_resolve_harness(built, cfg.horizon_harness, "horizon"))
+    informal_subagents = build_subagents(
+        cfg.informal_subagents,
+        descriptor_dir=workspace.state_path / "subagents",
+        harnesses=built,
+        default_harness=informal_harness,
+    )
 
     stores = build_stores(workspace, codec)
     return Orchestrator(
@@ -142,12 +173,16 @@ def build_orchestrator(
             freeze=freeze, max_parallel=cfg.scheduler.max_parallel_sessions
         ),
         sync=MultiProviderSyncCoordinator(inbox_providers),
-        locks=InMemoryLockManager(),
+        locks=FilesystemLockManager(workspace.state_path / "locks"),
         event_log=stores.events,
         roadmap_store=stores.roadmap,
         memory_store=stores.memory,
         task_store=stores.tasks,
         proposal_store=stores.proposals,
         inbox_providers=inbox_providers,
+        report_store=stores.reports,
+        run_store=stores.runs,
+        run_logs=stores.run_logs,
+        informal_subagents=informal_subagents,
         freeze=freeze,
     )
