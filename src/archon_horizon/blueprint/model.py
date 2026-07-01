@@ -30,8 +30,11 @@ class BlueprintNode:
     title: str | None = None
     lean: str | None = None
     uses: tuple[str, ...] = ()
+    sources: tuple[str, ...] = ()
     leanok: bool = False
     notready: bool = False
+    # ``\\mathlibok``: the statement already exists in mathlib (rendered blue).
+    mathlibok: bool = False
 
 
 @dataclass(frozen=True, slots=True)

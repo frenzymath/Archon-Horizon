@@ -22,9 +22,13 @@ def build_dag(bp: Blueprint) -> dict[str, Any]:
             "id": node.id,
             "kind": node.kind,
             "title": node.title,
+            "statement": node.statement,
             "lean": node.lean,
+            "uses": list(node.uses),
+            "sources": list(node.sources),
             "leanok": node.leanok,
             "notready": node.notready,
+            "mathlibok": node.mathlibok,
         }
         for node in bp.nodes
     ]

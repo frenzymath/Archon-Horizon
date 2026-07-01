@@ -9,6 +9,7 @@ later. Pure stdlib — no plasTeX, no LaTeX engine.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from .model import Blueprint, BlueprintNode
 
@@ -33,8 +34,10 @@ _TITLE_RE = re.compile(r"\s*\[([^\]]*)\]")
 _LEAN_RE = re.compile(r"\\lean\s*\{([^{}]*)\}")
 _LABEL_RE = re.compile(r"\\label\s*\{([^{}]*)\}")
 _USES_RE = re.compile(r"\\uses\s*\{([^{}]*)\}")
+_SOURCE_RE = re.compile(r"\\source\s*\{([^{}]*)\}")
 _LEANOK_RE = re.compile(r"\\leanok\b")
 _NOTREADY_RE = re.compile(r"\\notready\b")
+_MATHLIBOK_RE = re.compile(r"\\mathlibok\b")
 
 
 def _strip_trailing_comment(line: str) -> str:
@@ -104,8 +107,10 @@ def _extract_meta(body: str) -> tuple[str, dict[str, object]]:
         "lean": None,
         "label": None,
         "uses": [],
+        "sources": [],
         "leanok": False,
         "notready": False,
+        "mathlibok": False,
     }
 
     def take_lean(m: re.Match[str]) -> str:
@@ -122,13 +127,22 @@ def _extract_meta(body: str) -> tuple[str, dict[str, object]]:
                 meta["uses"].append(tok)  # type: ignore[union-attr]
         return ""
 
+    def take_source(m: re.Match[str]) -> str:
+        for tok in (t.strip() for t in m.group(1).split(",")):
+            if tok:
+                meta["sources"].append(tok)  # type: ignore[union-attr]
+        return ""
+
     body = _LEAN_RE.sub(take_lean, body)
     body = _LABEL_RE.sub(take_label, body)
     body = _USES_RE.sub(take_uses, body)
+    body = _SOURCE_RE.sub(take_source, body)
     body, n_ok = _LEANOK_RE.subn("", body)
     body, n_nr = _NOTREADY_RE.subn("", body)
+    body, n_ml = _MATHLIBOK_RE.subn("", body)
     meta["leanok"] = n_ok > 0
     meta["notready"] = n_nr > 0
+    meta["mathlibok"] = n_ml > 0
     return body.strip(), meta
 
 
@@ -153,6 +167,24 @@ def parse_blueprint(source: str) -> Blueprint:
         body = src[cursor : end_idx - len(f"\\end{{{name}}}")]
 
         statement, meta = _extract_meta(_strip_nested_envs(body))
+
+        # A ``proof`` is not a standalone node: leanblueprint attaches its
+        # ``\uses`` (extra dependencies) and ``\leanok`` (proof formalised) to
+        # the statement it proves — the most recent node. Folding it in here
+        # avoids the spurious ``node-N`` "PROOF" nodes the DAG would otherwise
+        # show. A leading proof with no statement to attach to is dropped.
+        if name == "proof":
+            if nodes:
+                parent = nodes[-1]
+                nodes[-1] = replace(
+                    parent,
+                    uses=tuple(dict.fromkeys((*parent.uses, *meta["uses"]))),  # type: ignore[misc]
+                    sources=tuple(dict.fromkeys((*parent.sources, *meta["sources"]))),  # type: ignore[misc]
+                    leanok=parent.leanok or bool(meta["leanok"]),
+                    notready=parent.notready or bool(meta["notready"]),
+                )
+            continue
+
         label = meta["label"]
         if not label:
             synth += 1
@@ -166,8 +198,10 @@ def parse_blueprint(source: str) -> Blueprint:
                 title=title,
                 lean=meta["lean"],  # type: ignore[arg-type]
                 uses=tuple(meta["uses"]),  # type: ignore[arg-type]
+                sources=tuple(meta["sources"]),  # type: ignore[arg-type]
                 leanok=bool(meta["leanok"]),
                 notready=bool(meta["notready"]),
+                mathlibok=bool(meta["mathlibok"]),
             )
         )
 
