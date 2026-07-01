@@ -13,3 +13,15 @@ node_modules/
 frontend/dist/
 src/archon_horizon/server/static/
 
+# ephemeral workspace leases (never committed; see vcs/integration.py)
+.archon-horizon/locks/
+.archon-horizon/run.lock
+
+# local scratch / probes
+.claude/
+subagent_test/
+/claude_error.log
+/claude_test.jsonl
+/codex_error.log
+/codex_test.jsonl
+

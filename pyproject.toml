@@ -1,22 +1,74 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "archon-horizon"
-version = "0.0.0"
+dynamic = ["version"]
 description = "Workspace-first orchestration for long-horizon Lean formalization agents."
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["PyYAML>=6", "typer>=0.12", "rich>=13", "pyfiglet>=1.0"]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Axel Delaval" }]
+keywords = ["lean", "lean4", "formalization", "agents", "orchestration", "mathlib"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+# The dependency-graph engine (leandag) is vendored under
+# ``archon_horizon.leandag`` (see its __init__), so it ships in-repo with no
+# external git install. The built-in blueprint parser remains a defensive fallback.
+dependencies = [
+    "PyYAML>=6",
+    "typer>=0.12",
+    "rich>=13",
+    "pyfiglet>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.urls]
+Homepage = "https://github.com/frenzymath/Archon-Horizon"
+Repository = "https://github.com/frenzymath/Archon-Horizon"
+Changelog = "https://github.com/frenzymath/Archon-Horizon/blob/main/docs/CHANGELOG.md"
+Issues = "https://github.com/frenzymath/Archon-Horizon/issues"
 
 [project.scripts]
 horizon = "archon_horizon.cli:main"
 
+# include-package-data is intentionally OFF: it sweeps the whole package tree,
+# which pulled hundreds of ``frontend/node_modules`` files into the wheel. We
+# enumerate exactly what ships via package-data below instead.
 [tool.setuptools]
-include-package-data = true
+include-package-data = false
+
+[tool.setuptools.dynamic]
+# Single source of truth: the version lives in archon_horizon.__version__.
+version = { attr = "archon_horizon.__version__" }
+
+[tool.setuptools.package-data]
+# Non-.py data we ship: skill + subagent-descriptor markdown, and the built
+# dashboard assets (the frontend *source* and node_modules are excluded).
+"archon_horizon" = [
+    "skills/**/*.md",
+    "subagents/**/*.md",
+    "frontend/dist/**/*",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["archon_horizon*"]
+# Never treat the frontend toolchain tree as importable packages (katex ships
+# loose .py build scripts that setuptools would otherwise sweep into the wheel).
+exclude = ["archon_horizon.frontend*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

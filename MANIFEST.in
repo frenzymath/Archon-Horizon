@@ -1,1 +1,4 @@
+# Ship the built dashboard assets; never the frontend toolchain or deps.
 recursive-include src/archon_horizon/frontend/dist *
+prune src/archon_horizon/frontend/node_modules
+global-exclude __pycache__ *.py[cod]

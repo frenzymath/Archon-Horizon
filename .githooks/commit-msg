@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# commit-msg hook — strip AI-assistant attribution from commit messages.
+#
+# Removes:
+#   * "Co-authored-by: … Claude/Anthropic …" trailers
+#   * "Generated with [Claude Code]…" / "🤖 Generated with …" lines
+#
+# Enable once per clone (see CONTRIBUTING.md):
+#   git config core.hooksPath .githooks
+#
+msg_file="$1"
+[ -n "$msg_file" ] && [ -f "$msg_file" ] || exit 0
+
+tmp="$(mktemp)" || exit 0
+
+# 1) Drop the offending lines (case-insensitive).
+grep -viE '^[[:space:]]*Co-authored-by:.*(claude|anthropic)' "$msg_file" \
+  | grep -viE 'generated with \[?claude code' \
+  | grep -viE '^[[:space:]]*🤖[[:space:]]*generated with' \
+  > "$tmp"
+
+# 2) Collapse any trailing blank lines the removals left behind.
+awk 'NF{last=NR} {line[NR]=$0} END{for (i=1; i<=last; i++) print line[i]}' \
+  "$tmp" > "$msg_file"
+
+rm -f "$tmp"
+exit 0

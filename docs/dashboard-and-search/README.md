@@ -1,0 +1,76 @@
+# Live Dashboard & Offline Declaration Search
+
+Archon Horizon includes both an interactive Single Page Application (SPA) dashboard for monitoring workspace progress and a high-performance offline search engine for querying Lean 4 declarations.
+
+---
+
+## Table of Contents
+
+- [1. Live Web Dashboard Server](#1-live-web-dashboard-server)
+- [2. Static Snapshot Export & GitHub Pages](#2-static-snapshot-export--github-pages)
+  - [Automated GitHub Pages Workflow](#automated-github-pages-workflow)
+- [3. Offline Lean Declaration Search (`horizon search`)](#3-offline-lean-declaration-search-horizon-search)
+  - [Three Search Modes](#three-search-modes)
+  - [Index Maintenance](#index-maintenance)
+
+---
+
+## 1. Live Web Dashboard Server
+
+To launch the live dashboard server, run:
+
+```bash
+horizon dashboard --host 127.0.0.1 --port 8765
+```
+
+The server is implemented in [`server/app.py`](../../src/archon_horizon/server/app.py) (with data assembled by [`server/service.py`](../../src/archon_horizon/server/service.py) and Git/source endpoints in [`server/git_api.py`](../../src/archon_horizon/server/git_api.py) and [`server/source_api.py`](../../src/archon_horizon/server/source_api.py)); the CLI entry point is [`commands/dashboard.py`](../../src/archon_horizon/commands/dashboard.py), and the SPA source lives under [`frontend/`](../../src/archon_horizon/frontend). It provides real-time visualization and management features:
+- **Interactive DAG Viewer**: Explore blueprint dependency graphs rendered with KaTeX and interactive node selection.
+- **Roadmap & Task Tracker**: Monitor ongoing execution runs, inspect step-by-step run logs, and view milestone progress.
+- **Inbox Management**: Directly review, triage, and comment on workspace inbox hints and issues.
+
+---
+
+## 2. Static Snapshot Export & GitHub Pages
+
+For public reporting or static documentation hosting, Horizon can export a self-contained static HTML snapshot of the entire dashboard (see [`render/static_export.py`](../../src/archon_horizon/render/static_export.py) and [`render/dashboard.py`](../../src/archon_horizon/render/dashboard.py)):
+
+```bash
+# Build the SPA first so the export includes the interactive app (with run logs):
+npm --prefix src/archon_horizon/frontend install && npm --prefix src/archon_horizon/frontend run build
+horizon dashboard --static --out ./public_dashboard --dist src/archon_horizon/frontend/dist
+```
+
+The export writes one `data/api/<sha256(path)>.json` per endpoint — **including every session's transcript and report**, so the run logs travel with the snapshot. In static mode the SPA redirects `/api/*` fetches to those files, resolved against the page's directory so it works whether the page is opened at `…/repo/` or `…/repo/index.html`.
+
+> [!IMPORTANT]
+> The static logs viewer only renders when a **built SPA** is supplied via `--dist` (or shipped in the installed package — `install.sh` builds it for you). Without one, the export falls back to a read-only single-file page that omits the run logs.
+
+### Automated GitHub Pages Workflow
+You can automatically generate a GitHub Actions workflow that publishes your static dashboard snapshot directly to GitHub Pages whenever changes are pushed:
+
+```bash
+horizon dashboard --static --out ./docs_site --workflow
+```
+
+This writes a ready-to-use continuous deployment pipeline to `.github/workflows/`, allowing automated publication to `github.io`.
+
+---
+
+## 3. Offline Lean Declaration Search (`horizon search`)
+
+Finding the right lemma in Mathlib or local member projects is crucial during formalization. `horizon search` builds and queries an offline index directly from `.lean` source files on disk—requiring zero GPU resources, API keys, or network connectivity. The index is built in [`search/index.py`](../../src/archon_horizon/search/index.py), workspace-wide crawling in [`search/workspace.py`](../../src/archon_horizon/search/workspace.py), and the CLI in [`commands/search.py`](../../src/archon_horizon/commands/search.py).
+
+### Three Search Modes
+
+| Mode | Command Example | Description |
+| :--- | :--- | :--- |
+| **Natural Language (BM25)** | `horizon search "continuous function on compact set"` | Scores lemmas based on combined docstrings, names, and type signatures. |
+| **Name Match (Loogle-style)** | `horizon search --name "Continuous.compact"` | Fast substring and exact matching against declaration identifiers. |
+| **Signature Pattern (`--type`)** | `horizon search --type "?a -> ?b -> ?a"` | Heuristic signature matching where `?a` and `_` act as type wildcards. |
+
+### Index Maintenance
+If you update external libraries or compile new Mathlib files via `lake build`, rebuild your cached index with:
+
+```bash
+horizon search --reindex
+```

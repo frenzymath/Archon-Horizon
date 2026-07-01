@@ -1,2 +1,0 @@
-- The core does not use git submodules or external paths. If a project needs its own VCS history, its git directory should live outside the project tree under .archon-horizon/vcs/<project>.git. --> is this a good way to handle the issue ? isn't it better to use an inner git `git-dir` inside each project and see the workspace's git as a combination of those gits ? For instance if I launch several instances of archon horizon at the same time, I want it to be handled correctly. 
-- The roadmap should be made by ai, not deterministically. 
