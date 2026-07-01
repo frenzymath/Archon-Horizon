@@ -1,7 +1,7 @@
 """Abstract execution harness — the engine seam.
 
 This is the single boundary across which the system swaps engines (Claude
-Code, Codex, agy, ...). Everything engine-specific lives below this line:
+Code, Codex, ...). Everything engine-specific lives below this line:
 agents and orchestration program against :class:`Harness` only and never
 branch on an engine name.
 
@@ -91,6 +91,9 @@ class HarnessRequest:
     timeout_s: float | None = None
     idle_timeout_s: float | None = None
     cancel: CancelToken | None = None
+    # When set and the engine supports RESUME, continue this native engine
+    # session instead of starting fresh (the prompt is then a short nudge).
+    resume_session_id: str | None = None
     metadata: Metadata = field(default_factory=dict)
 
 

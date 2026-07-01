@@ -21,6 +21,7 @@ from archon_horizon.core.types import Metadata
 
 class TranscriptKind(StrEnum):
     SESSION_START = "session_start"
+    SESSION_META = "session_meta"
     THINKING = "thinking"
     TEXT = "text"
     TOOL_CALL = "tool_call"

@@ -8,6 +8,7 @@ from .parsers import (
     aggregate,
     parse_claude_line,
     parse_codex_line,
+    parse_codex_rollout_line,
     parse_plain_line,
 )
 from .pricing import (
@@ -39,6 +40,7 @@ __all__ = [
     "event_from_dict",
     "parse_claude_line",
     "parse_codex_line",
+    "parse_codex_rollout_line",
     "parse_plain_line",
     "price_event",
     "pricing_from_mapping",

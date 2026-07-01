@@ -37,7 +37,7 @@ class NullHarness(Harness):
         if request.artifact_dir is not None:
             path = request.artifact_dir / "transcript.jsonl"
             sink = JsonlTranscriptSink(path)
-            sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"harness": self.name}))
+            sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"harness": self.name, "prompt": request.prompt}))
             if result.text:
                 sink.emit(TranscriptEvent(TranscriptKind.TEXT, text=result.text))
             sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": result.ok}))

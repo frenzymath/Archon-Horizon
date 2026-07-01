@@ -13,7 +13,7 @@ Layout::
       0001/
         run.yaml
         sessions/
-          0001-informal/              transcript.jsonl  meta.json
+          0001-ground/                transcript.jsonl  meta.json
           0002-horizon-T-0007/        transcript.jsonl  meta.json
             subagents/
               0001-blueprint-lint/    transcript.jsonl  meta.json
