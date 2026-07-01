@@ -14,6 +14,7 @@ import time
 import threading
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -24,6 +25,10 @@ from archon_horizon.core.tasks import WriteSet
 def write_sets_conflict(a: WriteSet, b: WriteSet) -> bool:
     """True if two write sets cannot safely run at the same time."""
     if a.workspace or b.workspace:
+        return True
+    if set(a.declarations) & set(b.declarations):
+        return True
+    if set(a.blueprint_nodes) & set(b.blueprint_nodes):
         return True
     shared_projects = set(a.projects) & set(b.projects)
     if not shared_projects:
@@ -76,6 +81,114 @@ def _process_alive(pid: int, host: str) -> bool:
     return True
 
 
+class RunLockHeld(RuntimeError):
+    """Raised when another live orchestrator already owns the workspace run lock.
+
+    Two orchestrator processes on one workspace would both mutate the shared
+    roadmap, blueprints, and memory — clobbering each other and corrupting the
+    YAML (the "duplicate Ground" hazard). Raised only under ``exclusive=True``;
+    advisory callers warn and proceed instead (see :func:`workspace_run_lock`).
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class RunLockStatus:
+    """Outcome of acquiring a workspace run lock.
+
+    ``owned`` is True when we created (or stole a stale) lock and therefore must
+    release it on exit. ``concurrent`` holds the live foreign holder's metadata
+    when an advisory acquire proceeded alongside another run.
+    """
+
+    owned: bool
+    concurrent: dict | None = None
+
+
+@contextmanager
+def workspace_run_lock(
+    path: Path, *, run_id: str = "", exclusive: bool = True
+) -> Iterator[RunLockStatus]:
+    """Hold a process-aware lock on a workspace for one run.
+
+    The lock is a single file created with ``O_EXCL`` (atomic). If it already
+    exists we inspect the holder: a *live* process under ``exclusive=True`` means
+    we refuse (raising :class:`RunLockHeld`); under ``exclusive=False`` we leave
+    its lock untouched and proceed anyway, reporting it via
+    ``RunLockStatus.concurrent`` so the caller can warn. A dead holder's lock is
+    stale and gets stolen regardless. The file is removed on exit only if we own
+    it, so a crash leaves a stale — not a poisoned — lock the next run reclaims.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        {"pid": os.getpid(), "host": socket.gethostname(), "run_id": run_id, "created_at": time.time()}
+    )
+    owned = False
+    concurrent: dict | None = None
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            holder = _read_run_lock(path)
+            if holder is not None and _process_alive(int(holder.get("pid") or 0), str(holder.get("host") or "")):
+                if exclusive:
+                    raise RunLockHeld(
+                        f"another horizon run is active on this workspace "
+                        f"(pid {holder.get('pid')} on {holder.get('host')}, run {holder.get('run_id') or '?'}); "
+                        "refusing to start a second — it would clobber the shared roadmap/blueprints. "
+                        "Wait for it to finish, or remove the stale lock at "
+                        f"{path} if that process is gone."
+                    )
+                # Advisory: another live run owns the lock; proceed beside it.
+                concurrent = holder
+                break
+            # Holder is dead (or unreadable): steal the stale lock and retry.
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w") as handle:
+            handle.write(payload)
+        owned = True
+        break
+    try:
+        yield RunLockStatus(owned=owned, concurrent=concurrent)
+    finally:
+        if not owned:
+            return
+        holder = _read_run_lock(path)
+        if holder is not None and int(holder.get("pid") or 0) == os.getpid():
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _read_run_lock(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text("utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def live_run_lock(path: Path) -> dict | None:
+    """Return the run-lock holder's metadata iff a *live* process still owns it.
+
+    The dashboard uses this to tell a genuinely-active run from one whose
+    process died without writing a clean end — the latter would otherwise show a
+    perpetual "running" spinner. Returns ``None`` when there is no lock or its
+    holder is gone.
+    """
+    holder = _read_run_lock(path)
+    if holder is None:
+        return None
+    pid = int(holder.get("pid") or 0)
+    host = str(holder.get("host") or "")
+    if pid and _process_alive(pid, host):
+        return holder
+    return None
+
+
 class FilesystemLockManager(LockManager):
     """Persistent write locks for concurrent ``archon-horizon`` processes.
 
@@ -84,11 +197,35 @@ class FilesystemLockManager(LockManager):
     conflict-free state and claim overlapping write sets.
     """
 
+    # A guard older than this (and whose owner is gone, or whose age we cannot
+    # otherwise bound) is considered abandoned and stolen. The critical section
+    # it protects is a fast scan-and-write, so a few seconds is generous.
+    _GUARD_STALE_SECONDS = 15.0
+
     def __init__(self, locks_dir: Path, *, stale_dir_name: str = "stale") -> None:
         self._root = locks_dir
         self._active = locks_dir / "active"
         self._stale = locks_dir / stale_dir_name
         self._guard = locks_dir / ".guard"
+        self._guard_owner = self._guard / "owner.json"
+
+    def _guard_is_abandoned(self) -> bool:
+        """True if the held guard should be stolen: its owner process is dead, or
+        it is older than the stale window (covering a crash that left no readable
+        owner, or a dead holder on another host)."""
+        owner = _read_run_lock(self._guard_owner)
+        if owner is not None:
+            pid, host = int(owner.get("pid") or 0), str(owner.get("host") or "")
+            if pid and host == socket.gethostname() and not _process_alive(pid, host):
+                return True  # local owner is gone
+            created = owner.get("created_at")
+            if isinstance(created, (int, float)):
+                return (time.time() - created) > self._GUARD_STALE_SECONDS
+        # No readable owner marker: fall back to the directory's own age.
+        try:
+            return (time.time() - self._guard.stat().st_mtime) > self._GUARD_STALE_SECONDS
+        except FileNotFoundError:
+            return False
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -98,13 +235,37 @@ class FilesystemLockManager(LockManager):
                 self._guard.mkdir(exist_ok=False)
                 break
             except FileExistsError:
+                # A crash between mkdir and rmdir would otherwise deadlock every
+                # future acquire/release; steal an abandoned guard instead of
+                # spinning forever.
+                if self._guard_is_abandoned():
+                    try:
+                        self._guard_owner.unlink()
+                    except FileNotFoundError:
+                        pass
+                    try:
+                        self._guard.rmdir()
+                    except (FileNotFoundError, OSError):
+                        pass
+                    continue
                 time.sleep(0.05)
+        try:
+            self._guard_owner.write_text(
+                json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "created_at": time.time()}),
+                "utf-8",
+            )
+        except OSError:
+            pass
         try:
             yield
         finally:
             try:
-                self._guard.rmdir()
+                self._guard_owner.unlink()
             except FileNotFoundError:
+                pass
+            try:
+                self._guard.rmdir()
+            except (FileNotFoundError, OSError):
                 pass
 
     @staticmethod

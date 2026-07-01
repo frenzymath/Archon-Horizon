@@ -11,6 +11,13 @@ from archon_horizon.core.workspace import Workspace
 
 from .locks import write_sets_conflict
 
+_PRIORITY_ORDER = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
+
+
+def _priority_key(task: HorizonTask) -> tuple[int, str]:
+    raw = task.metadata.get("roadmap_priority", task.metadata.get("priority", "normal"))
+    return (_PRIORITY_ORDER.get(str(raw).lower(), _PRIORITY_ORDER["normal"]), task.id)
+
 
 class Scheduler(ABC):
     """Chooses Horizon tasks while respecting focus and write locks."""
@@ -39,6 +46,8 @@ class FreezeAwareScheduler(Scheduler):
         self._max_parallel = max_parallel
 
     def _in_focus(self, task: HorizonTask, focus: Focus) -> bool:
+        if focus.tasks:
+            return task.id in focus.tasks
         if focus.task is not None:
             return task.id == focus.task
         if focus.projects:
@@ -53,7 +62,7 @@ class FreezeAwareScheduler(Scheduler):
         candidates: list[HorizonTask],
     ) -> list[HorizonTask]:
         selected: list[HorizonTask] = []
-        for task in candidates:
+        for task in sorted(candidates, key=_priority_key):
             if task.status is not TaskStatus.QUEUED:
                 continue
             if not self._in_focus(task, focus):
@@ -66,4 +75,3 @@ class FreezeAwareScheduler(Scheduler):
             if len(selected) >= self._max_parallel:
                 break
         return selected
-

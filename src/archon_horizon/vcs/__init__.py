@@ -10,7 +10,7 @@ from .git import (
     git_available,
     project_git_for,
 )
-from .integration import CommitOutcome, SessionIntegration, integrate_workspace_session, project_checkpoint
+from .integration import CommitOutcome, SessionIntegration, integrate_workspace_run, integrate_workspace_session, project_checkpoint
 
 __all__ = [
     "CommitOutcome",
@@ -20,6 +20,7 @@ __all__ = [
     "WorkspaceGit",
     "collect_revisions",
     "git_available",
+    "integrate_workspace_run",
     "integrate_workspace_session",
     "project_git_for",
     "project_checkpoint",
