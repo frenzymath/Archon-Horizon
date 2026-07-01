@@ -13,7 +13,7 @@ from archon_horizon.config.loader import load_config
 
 def _ws(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
-    main(["--root", str(ws), "init"])
+    main(["--root", str(ws), "init", "--no-interactive"])
     return ws
 
 

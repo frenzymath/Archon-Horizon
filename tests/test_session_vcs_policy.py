@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from archon_horizon.config.loader import build_workspace, load_config
 from archon_horizon.core.tasks import WriteSet
 from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
 from archon_horizon.orchestration.locks import FilesystemLockManager
-from archon_horizon.vcs.git import git_available
+from archon_horizon.vcs.git import WorkspaceGit, git_available
 from archon_horizon.vcs.integration import integrate_workspace_session, project_checkpoint
 
 
@@ -36,7 +37,15 @@ def test_add_project_enables_and_initializes_project_vcs(tmp_path: Path) -> None
     workspace = build_workspace(cfg, tmp_path)
     assert workspace.project("p").vcs.enabled
     assert workspace.project("p").vcs.git_dir == Path(".archon-horizon/vcs/p.git")
-    assert (tmp_path / ".archon-horizon" / "vcs" / "p.git").exists()
+    git_dir = tmp_path / ".archon-horizon" / "vcs" / "p.git"
+    assert git_dir.exists()
+    # A registered project gets a baseline commit immediately, so it is never
+    # stuck on an empty branch with "no commits yet" if it is never scheduled.
+    head = subprocess.run(
+        ["git", "--git-dir", str(git_dir), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    assert head.returncode == 0 and head.stdout.strip()
 
 
 def test_project_checkpoint_and_workspace_session_integration(tmp_path: Path) -> None:
@@ -57,7 +66,11 @@ def test_project_checkpoint_and_workspace_session_integration(tmp_path: Path) ->
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
     (project_dir / "Foo.lean").write_text("def foo := 1\n", "utf-8")
 
-    checkpoint = project_checkpoint(workspace, "p", message="checkpoint")
+    from archon_horizon.vcs.integration import author_for
+
+    checkpoint = project_checkpoint(
+        workspace, "p", message="checkpoint", author=author_for("horizon")
+    )
     assert checkpoint.changed and checkpoint.sha
 
     integration = integrate_workspace_session(
@@ -65,15 +78,205 @@ def test_project_checkpoint_and_workspace_session_integration(tmp_path: Path) ->
         run_id="0001",
         session="0001-horizon-T-1",
         role="horizon",
+        round_index=1,
         project="p",
         task_id="T-1",
         project_commits={"p": checkpoint.sha},
     )
 
-    assert integration.manifest_ref == ".archon-horizon/manifests/sessions/0001/0001-horizon-T-1.json"
-    assert (tmp_path / integration.manifest_ref).exists()
-    assert integration.workspace_commit or integration.workspace_commit_error is None
+    # No manifest artifacts are written; the session is committed straight into
+    # the workspace ledger instead.
+    assert not (tmp_path / ".archon-horizon" / "manifests").exists()
+    assert integration.workspace_commit and integration.workspace_commit_error is None
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+    tracked = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+         "ls-files", "projects/p/Foo.lean"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "projects/p/Foo.lean" in tracked
     assert not (tmp_path / "projects" / "p" / ".git").exists()
+    assert not (tmp_path / ".git").exists()  # workspace git is out-of-tree
+
+    # The ledger commit subject encodes the step, the body carries the per-project
+    # sha, and the commit is authored as the acting agent (committer stays system).
+    show = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+         "show", "-s", "--format=%an%n%s%n%b", "HEAD"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    ).stdout
+    author_line, subject, body = show.split("\n", 2)
+    assert author_line == "Archon Horizon (Horizon)"
+    assert subject == "workspace[0001 r1] horizon T-1: integrate 0001-horizon-T-1"
+    assert f"p: {checkpoint.sha[:10]}" in body
+
+    # The project checkpoint is likewise authored as Horizon.
+    proj_author = subprocess.run(
+        ["git", "--git-dir", str(tmp_path / ".archon-horizon" / "vcs" / "p.git"),
+         "show", "-s", "--format=%an", "HEAD"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert proj_author == "Archon Horizon (Horizon)"
+
+
+def test_workspace_integration_excludes_build_and_nested_git_artifacts(tmp_path: Path) -> None:
+    """The ledger must not swallow Lean build output (.lake/.olean) or a disabled
+    nested git — the cause of the multi-hundred-MB push. Even pre-existing tracked
+    artifacts (from the old force-add) are pruned on the next integration."""
+    from archon_horizon.vcs.integration import integrate_workspace_run
+
+    _identity()
+    project_dir = tmp_path / "projects" / "p"
+    (project_dir / ".lake" / "build").mkdir(parents=True)
+    (project_dir / ".git.disabled" / "objects").mkdir(parents=True)
+    (project_dir / "Foo.lean").write_text("def foo := 1\n", "utf-8")
+    (project_dir / ".lake" / "build" / "Foo.olean").write_text("BIG", "utf-8")
+    (project_dir / ".git.disabled" / "objects" / "p.pack").write_text("PACK", "utf-8")
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    workspace = Workspace(
+        name="ws", root=tmp_path,
+        projects={"p": Project(name="p", path=Path("projects/p"),
+                               vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/p.git")))},
+    )
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+
+    # Simulate the OLD bug: force-add the whole project tree into the ledger.
+    WorkspaceGit(tmp_path).init()
+    subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                    "add", "-f", "--", "projects/p"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                    "commit", "-q", "-m", "bloat"], cwd=tmp_path, check=True)
+
+    integrate_workspace_run(workspace, run_id="0001", projects=("p",))
+
+    tracked = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "ls-files"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    ).stdout
+    assert "projects/p/Foo.lean" in tracked          # real source kept
+    assert ".lake" not in tracked                     # build output pruned + excluded
+    assert ".olean" not in tracked
+    assert ".git.disabled" not in tracked             # disabled nested git excluded
+    # The secret-guard hook is installed and executable.
+    hook = ws_git_dir / "hooks" / "pre-commit"
+    assert hook.exists() and (hook.stat().st_mode & 0o111)
+
+
+def test_nested_git_project_is_committed_as_files_not_gitlink(tmp_path: Path) -> None:
+    """A project cloned with its own in-tree .git must land in the ledger as its
+    files (a tree), not a submodule gitlink (mode 160000)."""
+    from archon_horizon.vcs.integration import integrate_workspace_run
+
+    _identity()
+    project_dir = tmp_path / "projects" / "leheng"
+    project_dir.mkdir(parents=True)
+    (project_dir / "Ch0.lean").write_text("def ch0 := 0\n", "utf-8")
+    # Give it a real nested repo (the cause of the gitlink).
+    subprocess.run(["git", "init", "-q", str(project_dir)], check=True)
+    assert (project_dir / ".git").is_dir()
+
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    workspace = Workspace(
+        name="ws", root=tmp_path,
+        projects={"leheng": Project(name="leheng", path=Path("projects/leheng"),
+                                    vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/leheng.git")))},
+    )
+
+    integrate_workspace_run(workspace, run_id="0001", projects=("leheng",))
+
+    # The nested .git was renamed aside, not committed.
+    assert not (project_dir / ".git").is_dir()
+    assert (project_dir / ".git.disabled").is_dir()
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+    entry = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "ls-tree", "HEAD", "projects/leheng"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    ).stdout
+    assert "040000 tree" in entry          # a real directory tree…
+    assert "160000 commit" not in entry    # …not a submodule gitlink
+    tracked = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "ls-files", "projects/leheng"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    ).stdout
+    assert "projects/leheng/Ch0.lean" in tracked
+    assert ".git.disabled" not in tracked  # the disabled repo is excluded
+
+
+def test_existing_gitlink_is_converted_to_tracked_files(tmp_path: Path) -> None:
+    """A project already committed as a submodule gitlink (before its nested .git
+    was neutralized) is converted to its files on the next integration."""
+    from archon_horizon.vcs.integration import integrate_workspace_run
+
+    _identity()
+    project_dir = tmp_path / "projects" / "leheng"
+    project_dir.mkdir(parents=True)
+    (project_dir / "Ch0.lean").write_text("def ch0 := 0\n", "utf-8")
+    subprocess.run(["git", "init", "-q", str(project_dir)], check=True)
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+
+    # Simulate the OLD state: a committed gitlink for the project.
+    subprocess.run(["git", "-C", str(project_dir), "-c", "user.email=t@e", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    WorkspaceGit(tmp_path).init()
+    subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                    "-c", "protocol.file.allow=always", "add", "projects/leheng"],
+                   cwd=tmp_path, check=True)
+    subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                    "commit", "-q", "-m", "gitlink"], cwd=tmp_path, check=True)
+    entry = subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                            "ls-tree", "HEAD", "projects/leheng"], cwd=tmp_path,
+                           capture_output=True, text=True, check=True).stdout
+    assert "160000 commit" in entry  # precondition: it is a gitlink
+
+    workspace = Workspace(
+        name="ws", root=tmp_path,
+        projects={"leheng": Project(name="leheng", path=Path("projects/leheng"),
+                                    vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/leheng.git")))},
+    )
+    integrate_workspace_run(workspace, run_id="0001", projects=("leheng",))
+
+    entry = subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                            "ls-tree", "HEAD", "projects/leheng"], cwd=tmp_path,
+                           capture_output=True, text=True, check=True).stdout
+    assert "040000 tree" in entry and "160000 commit" not in entry
+    tracked = subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                              "ls-files", "projects/leheng"], cwd=tmp_path,
+                             capture_output=True, text=True, check=True).stdout
+    assert "projects/leheng/Ch0.lean" in tracked
+
+
+def test_secret_guard_hook_blocks_credentials(tmp_path: Path) -> None:
+    """The installed pre-commit hook rejects an obvious credential; the documented
+    env override lets a commit through when explicitly allowed."""
+    import os as _os
+
+    _identity()
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    (tmp_path / ".archon-horizon").mkdir()
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+    WorkspaceGit(tmp_path).init()
+    (tmp_path / ".archon-horizon" / "leak.txt").write_text(
+        'token = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz012345"\n', "utf-8"
+    )
+    subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+                    "add", "-f", ".archon-horizon/leak.txt"], cwd=tmp_path, check=True)
+
+    blocked = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "commit", "-m", "x"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    assert blocked.returncode != 0
+
+    allowed = subprocess.run(
+        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "commit", "-m", "x"],
+        cwd=tmp_path, capture_output=True, text=True,
+        env={**_os.environ, "ARCHON_HORIZON_ALLOW_SECRETS": "1"},
+    )
+    assert allowed.returncode == 0
 
 
 def test_filesystem_lock_manager_blocks_overlapping_files(tmp_path: Path) -> None:

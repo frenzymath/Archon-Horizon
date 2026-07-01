@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from archon_horizon.core.inbox import InboxKind, InboxStatus
-from archon_horizon.core.labels import is_accepted
+from archon_horizon.core.labels import is_agent_ready
 from archon_horizon.inboxes.github import GithubInboxProvider
 
 ISSUES_JSON = json.dumps(
@@ -17,7 +17,7 @@ ISSUES_JSON = json.dumps(
             "body": "The cover lemma is wrong.",
             "state": "OPEN",
             "updatedAt": "2024-01-02T03:04:05Z",
-            "labels": [{"name": "archon:accept"}, {"name": "bug"}],
+            "labels": [{"name": "agent-ready"}, {"name": "bug"}],
             "comments": [],
         },
         {
@@ -46,7 +46,7 @@ def _boom(argv: list[str]) -> str:
 
 
 def test_sync_imports_maps_and_persists(tmp_path: Path) -> None:
-    shadow = tmp_path / ".archon-horizon" / "inboxes" / "github-shadow.yaml"
+    shadow = tmp_path / ".archon-horizon" / "inbox" / "github"
     provider = GithubInboxProvider("owner/repo", shadow, runner=_runner)
 
     result = provider.sync()
@@ -55,28 +55,38 @@ def test_sync_imports_maps_and_persists(tmp_path: Path) -> None:
     assert result.errors == ()
     assert shadow.exists()
 
-    item = provider.get_item("gh-issue-42")
+    item = provider.get_item("issue-42")
     assert item.kind is InboxKind.ISSUE
     assert item.source_ref == "issue:42"
     assert item.status is InboxStatus.OPEN
     assert "Affine cover bug" in item.body
 
 
+def test_sync_honors_labeled_only_import_policy(tmp_path: Path) -> None:
+    shadow = tmp_path / "github"
+    provider = GithubInboxProvider("owner/repo", shadow, runner=_runner, import_policy="labeled-only")
+
+    result = provider.sync()
+
+    assert result.imported == 1
+    assert [item.id for item in provider.list_items()] == ["issue-42"]
+
+
 def test_reads_are_offline_and_acceptance_is_label_gated(tmp_path: Path) -> None:
-    shadow = tmp_path / "github-shadow.yaml"
+    shadow = tmp_path / "github"
     GithubInboxProvider("owner/repo", shadow, runner=_runner).sync()
 
     # Fresh instance whose runner always raises: reads must still work from cache.
     offline = GithubInboxProvider("owner/repo", shadow, runner=_boom)
     by_id = {item.id: item for item in offline.list_items()}
 
-    assert set(by_id) == {"gh-issue-42", "gh-issue-7"}
-    assert is_accepted(by_id["gh-issue-42"].labels)  # carries archon:accept
-    assert not is_accepted(by_id["gh-issue-7"].labels)  # no archon:* label
+    assert set(by_id) == {"issue-42", "issue-7"}
+    assert is_agent_ready(by_id["issue-42"].labels)  # carries agent-ready
+    assert not is_agent_ready(by_id["issue-7"].labels)  # no triage label
 
 
 def test_sync_failure_returns_errors_without_crashing(tmp_path: Path) -> None:
-    shadow = tmp_path / "github-shadow.yaml"
+    shadow = tmp_path / "github"
     provider = GithubInboxProvider("owner/repo", shadow, runner=_boom)
 
     result = provider.sync()

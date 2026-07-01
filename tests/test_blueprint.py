@@ -41,9 +41,36 @@ def _parsed() -> Blueprint:
 
 def test_node_count_and_kinds() -> None:
     bp = _parsed()
-    # definition, lemma, theorem, and the nested proof.
-    assert len(bp.nodes) == 4
-    assert [n.kind for n in bp.nodes] == ["definition", "lemma", "theorem", "proof"]
+    # definition, lemma, theorem. The proof is folded into the theorem it
+    # proves rather than becoming a standalone node.
+    assert len(bp.nodes) == 3
+    assert [n.kind for n in bp.nodes] == ["definition", "lemma", "theorem"]
+
+
+def test_source_macros_are_metadata_and_fold_from_proofs() -> None:
+    bp = parse_blueprint(
+        r"\begin{theorem}\label{t}\source{paper:page-0007}stmt\end{theorem}"
+        r"\begin{proof}\source{paper:page-0008, notes:page-0001}pf\end{proof}"
+    )
+    node = bp.node("t")
+    assert node.sources == ("paper:page-0007", "paper:page-0008", "notes:page-0001")
+    assert "\\source" not in node.statement
+    dag_node = next(n for n in build_dag(bp)["nodes"] if n["id"] == "t")
+    assert dag_node["sources"] == list(node.sources)
+
+
+def test_proof_uses_fold_into_statement() -> None:
+    # A proof's \uses become extra dependencies of the statement it proves,
+    # deduplicated against the statement's own \uses.
+    bp = parse_blueprint(
+        r"\begin{theorem}\label{t}\uses{a}stmt\end{theorem}"
+        r"\begin{proof}\uses{b, a}\leanok pf\end{proof}"
+    )
+    assert len(bp.nodes) == 1
+    t = bp.node("t")
+    assert t.uses == ("a", "b")
+    # \leanok inside the proof marks the statement formalised (proof complete).
+    assert t.leanok is True
 
 
 def test_metadata_extraction() -> None:
@@ -70,6 +97,17 @@ def test_uses_parsed_dropping_empties() -> None:
     assert bp.node("thm:main").uses == ("lem:glue", "def:nonexistent")
 
 
+def test_mathlibok_parsed_and_in_dag() -> None:
+    bp = parse_blueprint(
+        r"\begin{lemma}\label{l}\lean{Foo}\mathlibok In mathlib already.\end{lemma}"
+    )
+    assert bp.node("l").mathlibok is True
+    assert bp.node("l").leanok is False
+    assert "\\mathlibok" not in bp.node("l").statement
+    node = next(n for n in build_dag(bp)["nodes"] if n["id"] == "l")
+    assert node["mathlibok"] is True
+
+
 def test_label_less_node_gets_synthetic_id() -> None:
     bp = parse_blueprint(r"\begin{remark}No label here.\end{remark}")
     assert len(bp.nodes) == 1
@@ -79,8 +117,8 @@ def test_label_less_node_gets_synthetic_id() -> None:
 def test_dag_edges_and_dangling() -> None:
     dag = build_dag(_parsed())
 
-    # The nested proof carries no \label, so it gets a synthetic id.
-    assert {n["id"] for n in dag["nodes"]} == {"def:affine", "lem:glue", "thm:main", "node-1"}
+    # The proof folds into thm:main, so no synthetic proof node appears.
+    assert {n["id"] for n in dag["nodes"]} == {"def:affine", "lem:glue", "thm:main"}
 
     edges = {(e["source"], e["target"]) for e in dag["edges"]}
     # used -> dependent direction; lem:glue used by both thm:main and its proof.

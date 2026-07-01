@@ -17,7 +17,7 @@ CONFIG = """
 workspace:
   name: w
   rounds: 1
-  informal_agent:
+  ground_agent:
     harness: inf
     subagents: [echo]
   horizon_agent: {harness: hor}
@@ -53,7 +53,7 @@ def test_descriptor_file_parses_frontmatter(tmp_path: Path) -> None:
 
 def test_subagent_cli_creates_nested_transcript(tmp_path: Path) -> None:
     _workspace(tmp_path)
-    parent = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions" / "0001-informal"
+    parent = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions" / "0001-ground"
     parent.mkdir(parents=True)
     directive = parent / "echo-directive.md"
     directive.write_text("Report on the roadmap.", "utf-8")
@@ -79,12 +79,12 @@ def test_subagent_cli_creates_nested_transcript(tmp_path: Path) -> None:
     assert [event.kind for event in events] == [TranscriptKind.SESSION_START, TranscriptKind.SESSION_END]
 
 
-def test_orchestrator_keeps_harnessed_subagent_transcript_single(tmp_path: Path) -> None:
+def test_orchestrator_does_not_auto_dispatch_descriptor_subagents(tmp_path: Path) -> None:
     _workspace(tmp_path)
     orch = build_orchestrator(
         tmp_path,
         harnesses={
-            "inf": NullHarness("subagent report"),
+            "inf": NullHarness("ground report"),
             "hor": NullHarness(""),
         },
     )
@@ -97,14 +97,9 @@ def test_orchestrator_keeps_harnessed_subagent_transcript_single(tmp_path: Path)
         / "runs"
         / "0001"
         / "sessions"
-        / "0001-round0-informal"
+        / "0001-ground"
         / "subagents"
         / "0001-echo"
         / "transcript.jsonl"
     )
-    events = read_transcript(transcript)
-    assert [event.kind for event in events] == [
-        TranscriptKind.SESSION_START,
-        TranscriptKind.TEXT,
-        TranscriptKind.SESSION_END,
-    ]
+    assert not transcript.exists()

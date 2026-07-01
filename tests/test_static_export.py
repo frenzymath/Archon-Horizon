@@ -7,14 +7,19 @@ import json
 from pathlib import Path
 
 from archon_horizon.cli import main
-from archon_horizon.render.static_export import endpoint_key, export_static
+from archon_horizon.render.static_export import (
+    PAGES_WORKFLOW_FILENAME,
+    endpoint_key,
+    export_static,
+    write_pages_workflow,
+)
 from archon_horizon.server.service import WorkspaceService
 
 
 def _workspace(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
-    main(["--root", str(ws), "init", "--name", "demo"])
-    main(["--root", str(ws), "inbox", "add", "--kind", "hint", "--body", "x"])
+    main(["--root", str(ws), "init", "--no-interactive"])
+    main(["--root", str(ws), "inbox", "add", "--kind", "hint", "--body", "x\n\nseed item"])
     return ws
 
 
@@ -29,7 +34,7 @@ def test_export_writes_hashed_endpoint_files(tmp_path: Path) -> None:
 
     state_file = out / "data" / "api" / f"{endpoint_key('/api/state')}.json"
     assert state_file.exists()
-    assert json.loads(state_file.read_text())["workspace"] == "demo"
+    assert json.loads(state_file.read_text())["workspace"] == "ws"
     assert (out / "index.html").exists()  # fallback HTML present
 
 
@@ -44,3 +49,35 @@ def test_export_with_spa_injects_static_marker(tmp_path: Path) -> None:
     index = (out / "index.html").read_text()
     assert "__ARCHON_STATIC__" in index           # flipped into static mode
     assert (out / "assets" / "app.js").exists()    # SPA assets copied
+
+
+def test_pages_workflow_written_with_relative_upload_path(tmp_path: Path) -> None:
+    import yaml
+
+    ws = _workspace(tmp_path)
+    out = ws / "docs"
+    out.mkdir()
+
+    path, status = write_pages_workflow(ws, out)
+    assert status == "written"
+    assert path == ws / ".github" / "workflows" / PAGES_WORKFLOW_FILENAME
+    doc = yaml.safe_load(path.read_text("utf-8"))
+    # upload-pages-artifact gets the out dir *relative to the repo root*.
+    upload = next(s for j in doc["jobs"].values() for s in j["steps"] if "upload-pages" in str(s.get("uses")))
+    assert upload["with"]["path"] == "docs"
+    # the GitHub expression survived templating intact (not brace-mangled).
+    assert "${{ steps.deployment.outputs.page_url }}" in path.read_text("utf-8")
+
+    # Idempotent: a second call leaves the existing file untouched.
+    _, status2 = write_pages_workflow(ws, out)
+    assert status2 == "exists"
+
+
+def test_pages_workflow_refuses_out_dir_outside_repo(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+
+    path, status = write_pages_workflow(ws, outside)
+    assert status == "outside"
+    assert not (ws / ".github").exists()

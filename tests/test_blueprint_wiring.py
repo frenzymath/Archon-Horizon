@@ -1,13 +1,12 @@
-"""Blueprint wired to the workspace + the deterministic subagents."""
+"""Blueprint wired to the workspace + the deterministic checks."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from archon_horizon.blueprint.workspace import workspace_dags
+from archon_horizon.blueprint.checks import blueprint_lint_issues, dag_consistency_issues
+from archon_horizon.blueprint.workspace import project_dag, project_rich_dag, workspace_dags
 from archon_horizon.core.workspace import Project, Workspace
-from archon_horizon.subagents.base import SubagentContext
-from archon_horizon.subagents.builtins import BlueprintLintSubagent, DagConsistencySubagent
 
 CYCLE_TEX = r"""
 \begin{definition}\label{a}\uses{c}\lean{A}\leanok
@@ -40,14 +39,27 @@ def test_workspace_dags_built_from_sources(tmp_path: Path) -> None:
     assert {n["id"] for n in dags["ag-main"]["nodes"]} == {"a", "b", "c"}
 
 
+def test_rich_dag_preserves_source_anchors(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    bp = tmp_path / "projects" / "ag-main" / "blueprint" / "source.tex"
+    bp.write_text(
+        r"\begin{lemma}\label{s}\source{ega:page-0042}S.\end{lemma}",
+        "utf-8",
+    )
+    dag = project_rich_dag(ws, "ag-main")
+    assert dag is not None
+    node = next(n for n in dag["nodes"] if n["id"] == "s")
+    assert node["sources"] == ["ega:page-0042"]
+
+
 def test_dag_consistency_finds_cycle(tmp_path: Path) -> None:
-    result = DagConsistencySubagent().run(SubagentContext(_workspace(tmp_path)))
-    assert not result.ok
-    assert any("cycle" in i.body.lower() for i in result.issues)
+    dag = project_dag(_workspace(tmp_path), "ag-main")
+    issues = dag_consistency_issues(dag)
+    assert any("cycle" in i.lower() for i in issues)
 
 
 def test_blueprint_lint_flags_missing_lean_and_leanok_dep(tmp_path: Path) -> None:
-    result = BlueprintLintSubagent().run(SubagentContext(_workspace(tmp_path)))
-    bodies = " ".join(i.body for i in result.issues)
+    dag = project_dag(_workspace(tmp_path), "ag-main")
+    bodies = " ".join(blueprint_lint_issues(dag))
     assert "no \\lean link" in bodies          # c (theorem) has no \lean
     assert "leanok" in bodies                   # a is leanok but depends on not-leanok c

@@ -14,16 +14,16 @@ def test_runs_are_numbered_and_sessions_ordered(tmp_path: Path) -> None:
     second = tree.allocate()
     assert first.id == "0001" and second.id == "0002"
 
-    s1 = first.new_session("informal")
+    s1 = first.new_session("ground")
     s2 = first.new_session("horizon-T-0007")
-    assert s1.name == "0001-informal"
+    assert s1.name == "0001-ground"
     assert s2.name == "0002-horizon-T-0007"
-    assert [s.name for s in first.sessions()] == ["0001-informal", "0002-horizon-T-0007"]
+    assert [s.name for s in first.sessions()] == ["0001-ground", "0002-horizon-T-0007"]
 
 
 def test_subagent_sessions_nest(tmp_path: Path) -> None:
     tree = RunLogTree(tmp_path / "runs")
-    session = tree.allocate().new_session("informal")
+    session = tree.allocate().new_session("ground")
     child = session.new_subsession("blueprint-lint")
     child.transcript_path.write_text("{}\n", "utf-8")
     assert child.path.parent.name == "subagents"
@@ -64,14 +64,14 @@ def test_run_numbers_continue_past_four_digits(tmp_path: Path) -> None:
 def test_session_numbers_continue_past_four_digits(tmp_path: Path) -> None:
     run = RunLogTree(tmp_path / "runs").allocate()
     sessions = run.sessions_dir
-    (sessions / "9998-informal").mkdir(parents=True)
+    (sessions / "9998-ground").mkdir(parents=True)
     (sessions / "9999-horizon").mkdir()
 
-    session = run.new_session("informal")
+    session = run.new_session("ground")
 
-    assert session.name == "10000-informal"
+    assert session.name == "10000-ground"
     assert [s.name for s in run.sessions()] == [
-        "9998-informal",
+        "9998-ground",
         "9999-horizon",
-        "10000-informal",
+        "10000-ground",
     ]
