@@ -15,7 +15,7 @@ from rich.text import Text
 
 _console = Console()
 _err_console = Console(stderr=True)
-_PREFIX = "[bold cyan]\\[HORIZON][/bold cyan]"
+_PREFIX = "[bold #d8b4fe]\\[HORIZON][/bold #d8b4fe]"
 _REPO_URL = "https://github.com/frenzymath/Archon-Horizon"
 _BANNER_TEXT = "Archon Horizon"
 _BANNER_FONT = "smslant"
@@ -38,30 +38,39 @@ def _banner_text() -> str:
 class HorizonLog:
     """Small Rich-backed logger used by CLI commands."""
 
+    def __init__(self) -> None:
+        # Human-facing chrome goes here. ``route_to_stderr`` flips it to the
+        # stderr console so ``--json`` commands keep stdout as pure data.
+        self._out = _console
+
+    def route_to_stderr(self) -> None:
+        """Send all human-facing output to stderr (used in machine/JSON mode)."""
+        self._out = _err_console
+
     def banner(self, version: str) -> None:
-        _err_console.print(f"\n[bold cyan]{_banner_text()}[/bold cyan]\n")
-        meta = Text.assemble((f" v{version} ", "bold cyan"), "  ", (f" {_REPO_URL} ", "dim italic"))
-        _err_console.print(Rule(title=meta, style="cyan", align="left"))
+        _err_console.print(f"\n[bold #d8b4fe]{_banner_text()}[/bold #d8b4fe]\n")
+        meta = Text.assemble((f" v{version} ", "bold #d8b4fe"), "  ", (f" {_REPO_URL} ", "dim italic"))
+        _err_console.print(Rule(title=meta, style="#d8b4fe", align="left"))
         _err_console.print()
 
     def info(self, msg: str) -> None:
-        _console.print(f"{_PREFIX} {msg}")
+        self._out.print(f"{_PREFIX} {msg}")
 
     def success(self, msg: str) -> None:
-        _console.print(f"{_PREFIX} [green]✓ {msg}[/green]")
+        self._out.print(f"{_PREFIX} [#86efac]✓ {msg}[/#86efac]")
 
     def warn(self, msg: str) -> None:
-        _console.print(f"{_PREFIX} [yellow]⚠ {msg}[/yellow]")
+        self._out.print(f"{_PREFIX} [#fcd34d]⚠ {msg}[/#fcd34d]")
 
     def error(self, msg: str) -> None:
-        _console.print(f"{_PREFIX} [bold red]✗ {msg}[/bold red]")
+        self._out.print(f"{_PREFIX} [bold #fda4af]✗ {msg}[/bold #fda4af]")
 
     def step(self, msg: str) -> None:
-        _console.print(f"{_PREFIX} [dim]›[/dim] {msg}")
+        self._out.print(f"{_PREFIX} [dim]›[/dim] {msg}")
 
     def header(self, title: str) -> None:
-        _console.print()
-        _console.print(Rule(title=f"[bold]{title}[/bold]", style="cyan", align="left"))
+        self._out.print()
+        self._out.print(Rule(title=f"[bold]{title}[/bold]", style="#d8b4fe", align="left"))
 
     def key_value(self, data: dict[str, str], title: str = "") -> None:
         table = Table(show_header=False, border_style="dim", padding=(0, 2), title=title or None)
@@ -69,7 +78,7 @@ class HorizonLog:
         table.add_column("Value")
         for key, value in data.items():
             table.add_row(key, value)
-        _console.print(table)
+        self._out.print(table)
 
     def results_table(self, rows: list[tuple[str, str, str]], title: str = "") -> None:
         table = Table(border_style="dim", padding=(0, 1), title=title or None)
@@ -77,12 +86,12 @@ class HorizonLog:
         table.add_column("Status", no_wrap=True)
         table.add_column("Detail")
         styles = {
-            "ok": "green",
-            "done": "green",
-            "success": "green",
-            "error": "red",
-            "failed": "red",
-            "blocked": "yellow",
+            "ok": "#86efac",
+            "done": "#86efac",
+            "success": "#86efac",
+            "error": "#fda4af",
+            "failed": "#fda4af",
+            "blocked": "#fcd34d",
             "pending": "dim",
             "skipped": "dim",
         }
@@ -90,10 +99,10 @@ class HorizonLog:
             style = styles.get(status.lower(), "")
             styled = f"[{style}]{status}[/{style}]" if style else status
             table.add_row(name, styled, detail)
-        _console.print(table)
+        self._out.print(table)
 
-    def panel(self, content: str, title: str = "", style: str = "cyan") -> None:
-        _console.print(Panel(content, title=title or None, border_style=style, padding=(1, 2)))
+    def panel(self, content: str, title: str = "", style: str = "#d8b4fe") -> None:
+        self._out.print(Panel(content, title=title or None, border_style=style, padding=(1, 2)))
 
 
 log = HorizonLog()

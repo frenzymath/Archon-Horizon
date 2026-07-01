@@ -13,6 +13,8 @@ from archon_horizon.runlog import RunLogTree, SessionLog
 from archon_horizon.subagents.base import SubagentContext
 from archon_horizon.subagents.registry import build_registry
 
+from .shared import emit_json
+
 
 class SubagentCommand:
     def __init__(
@@ -24,6 +26,7 @@ class SubagentCommand:
         directive_file: Path,
         parent_log_dir: Path | None = None,
         write_domain: tuple[str, ...] = (),
+        as_json: bool = False,
     ) -> None:
         self.root = root
         self.name = name
@@ -31,6 +34,7 @@ class SubagentCommand:
         self.directive_file = directive_file
         self.parent_log_dir = parent_log_dir
         self.write_domain = write_domain
+        self.as_json = as_json
 
     def _session(self, workspace) -> SessionLog:
         if self.parent_log_dir is not None:
@@ -48,7 +52,7 @@ class SubagentCommand:
         cfg = load_config(self.root)
         workspace = build_workspace(cfg, self.root)
         harnesses = HarnessRegistry().build_all(cfg.harnesses)
-        default_harness = harnesses.get(cfg.informal_harness or "")
+        default_harness = harnesses.get(cfg.ground_harness or "")
         registry = build_registry(
             workspace.state_path / "subagents",
             harnesses=harnesses,
@@ -76,11 +80,22 @@ class SubagentCommand:
             "write_domain": list(self.write_domain),
             "data": result.data,
         })
-        if result.report:
+        # Persist the subagent's report. Prefer what the subagent returned; if
+        # that's empty (e.g. it was blocked from writing and we lost the text),
+        # recover it from the streamed transcript so a report.md always exists.
+        report_text = result.report
+        if not report_text and session.transcript_path.exists():
+            from archon_horizon.transcript.parsers import aggregate
+            from archon_horizon.transcript.sink import read_transcript
+
+            report_text, _ = aggregate(read_transcript(session.transcript_path))
+        if report_text:
             report_path = session.path / "report.md"
-            if not report_path.exists():
-                report_path.write_text(result.report, "utf-8")
-        log.success(f"{self.name}/{self.slug} complete: {session.path}")
+            report_path.write_text(report_text, "utf-8")
+        if self.as_json:
+            emit_json({"name": self.name, "slug": self.slug, "ok": result.ok, "session": str(session.path)})
+        else:
+            log.success(f"{self.name}/{self.slug} complete: {session.path}")
         raise typer.Exit(0 if result.ok else 1)
 
 
@@ -99,6 +114,7 @@ def subagent(
         "--write-domain",
         help="Glob/path this subagent may write. Repeat for multiple domains.",
     ),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout."),
 ) -> None:
     """Run a subagent through its configured harness."""
     SubagentCommand(
@@ -108,4 +124,5 @@ def subagent(
         directive_file=directive_file,
         parent_log_dir=parent_log_dir,
         write_domain=tuple(write_domain or ()),
+        as_json=as_json,
     ).run()
