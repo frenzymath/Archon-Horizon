@@ -10,8 +10,10 @@ otherwise the single-file Python dashboard is served as a fallback.
 
 from __future__ import annotations
 
+import errno
 import json
 import mimetypes
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -39,6 +41,15 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
             self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
         def _serve_asset(self, route: str) -> None:
+            if route.startswith("/reports/") and route.endswith(".md"):
+                report = route.removeprefix("/reports/").removesuffix(".md")
+                target = (service.workspace.state_path / "reports" / f"{report}.md").resolve()
+                reports_dir = (service.workspace.state_path / "reports").resolve()
+                if reports_dir in target.parents and target.is_file():
+                    self._send(200, target.read_bytes(), "text/markdown; charset=utf-8")
+                else:
+                    self._json({"error": "not found"}, 404)
+                return
             if dist_dir is None:
                 if route == "/":
                     self._send(200, service.render_html(live=True).encode("utf-8"), "text/html; charset=utf-8")
@@ -67,14 +78,19 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
                 self._json({"error": str(exc)}, 400)
 
         def do_POST(self) -> None:  # noqa: N802
-            if urlparse(self.path).path != "/api/inbox":
+            if urlparse(self.path).path not in ("/api/inbox", "/api/roadmap", "/api/tasks"):
                 self._json({"error": "not found"}, 404)
                 return
             length = int(self.headers.get("Content-Length", 0))
             try:
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 action = payload.pop("action")
-                self._json(service.edit_inbox(action, **payload))
+                if urlparse(self.path).path == "/api/inbox":
+                    self._json(service.edit_inbox(action, **payload))
+                elif urlparse(self.path).path == "/api/roadmap":
+                    self._json(service.edit_roadmap(action, **payload))
+                elif urlparse(self.path).path == "/api/tasks":
+                    self._json(service.edit_task(action, **payload))
             except Exception as exc:
                 self._json({"error": str(exc)}, 400)
 
@@ -84,21 +100,70 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
 def create_server(
     root: Path, host: str = "127.0.0.1", port: int = 8765, dist_dir: Path | None = None
 ) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), _make_handler(WorkspaceService(root), dist_dir))
+    service = WorkspaceService(root)
+    server = ThreadingHTTPServer((host, port), _make_handler(service, dist_dir))
+    # Stash the service so serve_server can pre-warm the (slow-to-build) search
+    # index in the background, once, after the port is actually bound.
+    server._horizon_service = service  # type: ignore[attr-defined]
+    return server
 
 
-def serve(root: Path, host: str = "127.0.0.1", port: int = 8765, dist_dir: Path | None = None) -> None:
-    server = create_server(root, host, port, dist_dir)
+def create_server_with_fallback(
+    root: Path,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    dist_dir: Path | None = None,
+    *,
+    tries: int = 26,
+) -> ThreadingHTTPServer:
+    """Bind ``port`` or the next available port in the following range.
+
+    ``tries=26`` means the requested port plus the next 25 ports. Port ``0``
+    remains the OS-assigned ephemeral-port mode and is tried only once.
+    """
+    if port == 0:
+        return create_server(root, host, port, dist_dir)
+    last: OSError | None = None
+    for candidate in range(port, port + max(tries, 1)):
+        try:
+            return create_server(root, host, candidate, dist_dir)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            last = exc
+    raise last or OSError(f"could not bind {host}:{port}")
+
+
+def serve_server(
+    server: ThreadingHTTPServer,
+    *,
+    root: Path,
+    host: str,
+    requested_port: int,
+    dist_dir: Path | None = None,
+) -> None:
     mode = "SPA" if dist_dir else "Python-rendered"
+    actual_port = server.server_address[1]
+    if requested_port != 0 and actual_port != requested_port:
+        log.warn(f"Port {requested_port} was busy; serving dashboard on {actual_port}.")
     log.header("Archon Horizon Dashboard")
     log.key_value({
         "Mode": mode,
-        "URL": f"http://{host}:{server.server_address[1]}",
+        "URL": f"http://{host}:{actual_port}",
         "Workspace": str(root),
     })
+    service = getattr(server, "_horizon_service", None)
+    if service is not None:
+        # Build the search index ahead of the first query so search is snappy.
+        threading.Thread(target=service.warm_search_index, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+
+
+def serve(root: Path, host: str = "127.0.0.1", port: int = 8765, dist_dir: Path | None = None) -> None:
+    server = create_server_with_fallback(root, host, port, dist_dir)
+    serve_server(server, root=root, host=host, requested_port=port, dist_dir=dist_dir)

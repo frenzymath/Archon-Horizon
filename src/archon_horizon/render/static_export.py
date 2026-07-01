@@ -25,6 +25,75 @@ from archon_horizon.server.service import WorkspaceService
 from .dashboard import render_dashboard
 
 
+# The exported dashboard is committed to the workspace repo; this Action just
+# uploads that already-built directory and deploys it to GitHub Pages. It does
+# NOT rebuild in CI, so it needs no Python/Node toolchain and never depends on
+# the (gitignored) SPA build being present in a fresh checkout.
+PAGES_WORKFLOW_FILENAME = "horizon-dashboard-pages.yml"
+
+_PAGES_WORKFLOW = """name: Deploy Horizon dashboard
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload dashboard
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: __UPLOAD_PATH__
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+"""
+
+
+def write_pages_workflow(
+    repo_root: Path, out_dir: Path, *, force: bool = False
+) -> tuple[Path, str]:
+    """Write the GitHub Pages deploy workflow into ``repo_root/.github/workflows``.
+
+    The workflow uploads ``out_dir`` (the exported, committed dashboard) verbatim
+    and deploys it. Returns ``(path, status)`` where status is ``"written"``,
+    ``"exists"`` (left untouched), or ``"outside"`` (out_dir not under the repo,
+    so nothing was written and the returned path is the offending out_dir).
+    """
+    try:
+        upload_path = out_dir.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return out_dir, "outside"
+    workflow_path = repo_root / ".github" / "workflows" / PAGES_WORKFLOW_FILENAME
+    if workflow_path.exists() and not force:
+        return workflow_path, "exists"
+    workflow_path.parent.mkdir(parents=True, exist_ok=True)
+    workflow_path.write_text(_PAGES_WORKFLOW.replace("__UPLOAD_PATH__", json.dumps(upload_path)), "utf-8")
+    return workflow_path, "written"
+
+
 def endpoint_key(path: str) -> str:
     """sha256 hex of the API path — must match staticMode.ts."""
     return hashlib.sha256(path.encode("utf-8")).hexdigest()
@@ -48,6 +117,9 @@ def export_static(service: WorkspaceService, out_dir: Path, *, dist_dir: Path | 
         (data_dir / f"{endpoint_key(path)}.json").write_text(
             json.dumps(service.serve_endpoint(path)), "utf-8"
         )
+    reports_src = service.workspace.state_path / "reports"
+    if reports_src.exists():
+        shutil.copytree(reports_src, out_dir / "reports", dirs_exist_ok=True)
 
     marker = {"generatedAt": "", "endpointCount": len(paths)}
 

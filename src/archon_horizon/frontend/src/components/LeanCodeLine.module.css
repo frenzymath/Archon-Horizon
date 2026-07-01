@@ -1,0 +1,22 @@
+.kw {
+  color: #7c3aed;
+  font-weight: 500;
+}
+
+.decl {
+  color: #005cc5;
+  font-weight: 700;
+}
+
+.sorry {
+  color: #b31d28;
+  background: rgba(203, 36, 49, 0.08);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 700;
+}
+
+.comment {
+  color: #6a737d;
+  font-style: italic;
+}

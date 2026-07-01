@@ -1,0 +1,267 @@
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.toc {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 10px 8px;
+  background: var(--bg-secondary);
+}
+.tocHead {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); padding: 2px 6px 8px;
+}
+.tocEmpty { padding: 4px 6px; color: var(--text-muted); font-size: 12px; }
+.tocNum { color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.tocTitle { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-align: left; }
+
+.tocChapRow { display: flex; align-items: flex-start; }
+.tocCaret {
+  flex-shrink: 0; width: 16px; padding: 4px 0; border: none; background: none;
+  color: var(--text-muted); cursor: pointer; font-size: 10px; line-height: 1.4;
+}
+.tocChap {
+  flex: 1; display: flex; gap: 6px; align-items: flex-start; min-width: 0;
+  padding: 4px 6px; font-size: 12px; color: var(--text-secondary);
+  background: none; border: none; cursor: pointer; border-radius: 4px; text-align: left;
+}
+.tocChap:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.tocActive { color: var(--blue); font-weight: 600; }
+.tocSec {
+  display: flex; gap: 6px; width: 100%; min-width: 0;
+  padding: 2px 6px; font-size: 11.5px; color: var(--text-muted);
+  background: none; border: none; cursor: pointer; border-radius: 4px;
+}
+.tocSec:hover { background: var(--bg-tertiary); color: var(--text-secondary); }
+
+.declPanel {
+  width: 280px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+}
+.declHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 12px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.declTotal {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.declStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 1px 10px 10px;
+}
+.declStats span {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 10.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-primary);
+}
+.statLean { color: var(--green); }
+.statMathlib { color: var(--blue); }
+.statNone { color: var(--text-muted); }
+.declScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px 12px;
+}
+.declRow {
+  /* Same recipe as the reading-view theorem boxes: a detached colored bar,
+     a small gap, then a pale same-hue fill. */
+  --kind: var(--kind-neutral);
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 9px;
+  margin: 0 0 6px 8px;
+  /* Square on the bar side, rounded on the outer edge — lines up with the bar. */
+  border-radius: 0 5px 5px 0;
+  border: none;
+  background: color-mix(in srgb, var(--kind) 8%, var(--bg-primary));
+}
+.declRow::before {
+  content: '';
+  position: absolute;
+  left: -8px; top: 2px; bottom: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--kind);
+}
+.declRow:hover { background: color-mix(in srgb, var(--kind) 15%, var(--bg-primary)); }
+.declKind_definition { --kind: var(--kind-definition); }
+.declKind_theorem, .declKind_proposition, .declKind_corollary { --kind: var(--kind-theorem); }
+.declKind_lemma { --kind: var(--kind-lemma); }
+.declKind_remark, .declKind_notation, .declKind_convention, .declKind_example { --kind: var(--kind-remark); }
+.declKind_conjecture { --kind: var(--kind-conjecture); }
+.declJump {
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+.declJump:hover .declTitle { color: var(--text-primary); }
+/* Header line — mirrors the reading-view .envLabel: a bold "Kind N.", then
+   the italic human title and the \label code, with the status badge moved
+   into the right-hand action column above the lean / graph buttons. */
+.declKind {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.declStatus {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.status_leanok { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.status_mathlibok { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, transparent); }
+.status_none { color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 14%, transparent); }
+.declTitle {
+  display: block;
+  margin-top: 4px;
+  font-style: italic;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.declLabel {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Right column: status badge on top, then the lean / graph buttons. */
+.declActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.declActions .declStatus { margin-bottom: 2px; }
+.declActions button {
+  height: 20px;
+  padding: 0 5px;
+  /* Borderless at rest so the buttons don't read as little boxes when the
+     row darkens on hover; the outline only appears on direct hover. */
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+.declActions button:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+.declActions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.declActions button:disabled:hover {
+  color: var(--text-muted);
+  border-color: transparent;
+}
+
+.bigToc { max-width: 860px; margin: 0 auto; }
+.bigTocHead { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 6px 0 12px; }
+.bigTocHint { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.bigTocChap { margin: 6px 0 12px; }
+.bigTocChapLink {
+  display: block; width: 100%; text-align: left; font-size: 15px; font-weight: 700;
+  color: var(--text-primary); background: none; border: none; cursor: pointer; padding: 2px 0;
+}
+.bigTocChapLink:hover { color: var(--blue); }
+.bigTocSecs { margin: 2px 0 0 18px; }
+.bigTocSec {
+  display: block; width: 100%; text-align: left; font-size: 12.5px;
+  color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 1px 0;
+}
+.bigTocSec:hover { color: var(--blue); }
+
+.openChapter { position: relative; }
+
+.reading {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 28px;
+  min-width: 0;
+}
+.muted { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+
+.titlePage {
+  max-width: 860px;
+  margin: 12px auto 32px;
+  text-align: center;
+  padding: 24px 0 28px;
+  border-bottom: 1px solid var(--border);
+}
+.docTitle { font-size: 26px; font-weight: 800; color: var(--text-primary); margin: 0 0 10px; line-height: 1.25; }
+.docAuthor { font-size: 15px; color: var(--text-secondary); margin-bottom: 8px; }
+.docMeta { font-size: 12px; color: var(--text-muted); }
+
+@media (max-width: 1100px) {
+  .body { flex-direction: column; }
+  .toc {
+    width: auto;
+    max-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .declPanel {
+    width: auto;
+    max-height: 240px;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "archon-horizon-dashboard",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,8 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "katex": "^0.17.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^6.30.4",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "vis-data": "^7.1.10",
+    "vis-network": "^9.1.13"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

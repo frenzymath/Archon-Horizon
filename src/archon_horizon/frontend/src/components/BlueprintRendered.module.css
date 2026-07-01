@@ -1,0 +1,156 @@
+.root {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.root p { margin: 4px 0; }
+.root p:first-child { margin-top: 0; }
+.root p:last-child { margin-bottom: 0; }
+
+/* Environment boxes ------------------------------------------------- */
+.env {
+  border-left: 3px solid var(--blue);
+  background: var(--bg-secondary);
+  padding: 6px 10px 6px 12px;
+  margin: 6px 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.env-definition { border-left-color: var(--kind-definition); }
+.env-theorem { border-left-color: var(--kind-theorem); }
+.env-lemma { border-left-color: var(--kind-lemma); }
+.env-proposition { border-left-color: var(--kind-theorem); }
+.env-corollary { border-left-color: var(--kind-theorem); }
+.env-remark { border-left-color: var(--kind-remark); }
+.env-example { border-left-color: var(--kind-remark); background: color-mix(in srgb, var(--kind-remark) 4%, var(--bg-secondary)); }
+.env-proof {
+  border-left-color: var(--border);
+  background: transparent;
+  padding-left: 10px;
+}
+
+.envHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+.envLabel {
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
+.badgeOk {
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(40, 167, 69, 0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.badgeNotReady {
+  color: #e36209;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(227, 98, 9, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.badgeLean {
+  color: var(--blue);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(3, 102, 214, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.uses {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.envBody { font-size: 12.5px; }
+.envBody p { margin: 3px 0; }
+
+/* Inline bits ------------------------------------------------------- */
+.texttt {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-tertiary);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.ref {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--blue);
+  background: rgba(3, 102, 214, 0.05);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.inlineMath { display: inline-block; }
+.displayMath {
+  display: block;
+  margin: 6px 0;
+  text-align: center;
+  overflow-x: auto;
+}
+/* KaTeX itself sets its own sizing; constrain to our container. */
+.root :global(.katex) { font-size: 1em; }
+.root :global(.katex-display) { margin: 6px 0; }
+
+/* Comment annotations (source pointers, quotes, notes) -------------- */
+.commentWrap {
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 2px;
+}
+.commentToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 0 5px;
+  border-radius: 10px;
+}
+.commentToggle:hover { color: var(--text-primary); border-color: var(--blue); }
+.commentOpen { color: var(--blue); border-color: var(--blue); }
+.quoteIcon {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.commentLabel { text-transform: lowercase; letter-spacing: 0.02em; }
+
+.commentBody {
+  display: block;
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+}
+.commentEntry { display: block; margin: 3px 0; }
+.commentTag {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.commentText { color: var(--text-secondary); }
+.commentPara { display: block; margin: 2px 0; }

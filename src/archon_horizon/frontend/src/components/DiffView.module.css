@@ -1,0 +1,97 @@
+.diffView {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.diffHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.diffStats {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.diffAdded { color: var(--green); }
+.diffRemoved { color: var(--red); }
+
+.diffBody {
+  overflow-x: auto;
+}
+
+.diffTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.diffLine {
+  vertical-align: top;
+}
+
+.diffLine:hover {
+  filter: brightness(0.97);
+}
+
+.lineActive {
+  outline: 2px solid rgba(3, 102, 214, 0.45);
+  outline-offset: -2px;
+}
+
+.lineNum {
+  width: 1px;
+  padding: 0 8px;
+  text-align: right;
+  color: var(--text-muted);
+  user-select: none;
+  font-size: 11px;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+}
+
+.lineContent {
+  padding: 0 12px;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.lineKeep { background: transparent; }
+
+.lineAdd {
+  background: rgba(40, 167, 69, 0.10);
+}
+.lineAdd .lineContent { color: var(--text-primary); }
+.lineAdd .lineNum { background: rgba(40, 167, 69, 0.06); color: var(--green); }
+
+.lineRemove {
+  background: rgba(203, 36, 49, 0.08);
+}
+.lineRemove .lineContent { color: var(--text-primary); }
+.lineRemove .lineNum { background: rgba(203, 36, 49, 0.06); color: var(--red); }
+
+.hunkSep {
+  background: rgba(3, 102, 214, 0.06);
+  color: var(--blue);
+  padding: 4px 12px;
+  font-size: 11px;
+}
+
+.emptyDiff {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+}

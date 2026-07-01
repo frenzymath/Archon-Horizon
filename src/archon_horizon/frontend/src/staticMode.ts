@@ -29,7 +29,16 @@ export function installStaticFetch(): void {
       const url = new URL(raw, window.location.href);
       if (url.pathname.startsWith('/api/')) {
         const key = await sha256Hex(url.pathname + url.search);
-        return orig(`./data/api/${key}.json`, init);
+        // Resolve the exported files against the page's *directory*. On GitHub
+        // Pages the app is served from a subpath (…/Archon-Horizon/), and the
+        // entry URL may be the directory itself (…/) or an explicit …/index.html.
+        // Strip everything after the last '/' so both resolve to the same base;
+        // just appending '/' would turn '…/index.html' into '…/index.html/' and
+        // 404 every fetch. (Static mode uses HashRouter, so in-app routes live in
+        // the hash and never change the pathname.)
+        const p = window.location.pathname;
+        const basePath = p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1);
+        return orig(`${basePath}data/api/${key}.json`, init);
       }
     } catch {
       /* fall through */
