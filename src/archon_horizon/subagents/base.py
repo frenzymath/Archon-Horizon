@@ -29,6 +29,12 @@ class SubagentDescriptor:
     write_domain: str | None = None
     read_only: bool = False
     default_enabled: bool = True
+    # Engine-agnostic model selection for the compiled native subagent.
+    # ``model`` is an explicit override (passed through literally); ``tier`` is a
+    # symbolic size (small/medium/big) resolved per-harness. Neither set → the
+    # native subagent omits ``model`` and inherits the parent session.
+    tier: str | None = None
+    model: str | None = None
     source_path: Path | None = None
 
 
@@ -76,7 +82,9 @@ class DescriptorSubagent(Subagent):
         log_dir = context.log_dir
         report_path = log_dir / "report.md" if log_dir is not None else None
         read_only = (
-            "\nYou are read-only on workspace/project source files. Write only the report path.\n"
+            "\nYou are read-only on Lean/blueprint/reference SOURCE files — do not "
+            "edit them. You may still write your report, and use the `horizon inbox` "
+            "CLI to file issues/memory; those are how you act.\n"
             if self.descriptor.read_only else ""
         )
         domain = "\n".join(f"- {d}" for d in write_domain) or self.descriptor.write_domain or "(unspecified)"
@@ -91,14 +99,31 @@ class DescriptorSubagent(Subagent):
             Declared write domain:
             {domain}
             {read_only}
+            # Local tools & layout
+            You are launched at the workspace root (your cwd). Per-project files —
+            the Lean source and `blueprint/` — live under the directory of the
+            project you are assigned (named in your directive or write domain),
+            not at the workspace root; resolve those relative paths there.
+            `references/` is shared and lives at the WORKSPACE ROOT (one library
+            for all projects), indexed by `references/manifest.yaml`. The
+            blueprint dependency DAG for a project is the generated JSON
+            at `.archon-horizon/blueprints/<project>.json`. Tool and format know-how
+            is documented as skills under `.claude/skills/` (e.g. `leandag`,
+            `blueprint-conventions`, `lean-check`, `leansearch`, `horizon-inbox`,
+            `project-git`); read the relevant skill instead of guessing how a tool
+            or format works. In particular, a project has NO `.git` at its root —
+            read the `project-git` skill before running `git diff`/`git log`.
+
             # Subagent instructions
             {self.descriptor.prompt_body.strip()}
 
             # Directive
             {directive.strip()}
 
-            Write a concise Markdown report to the report path if one is provided.
-            Also return the report as your final response.
+            Report back concisely in whatever structure best fits — lead with the
+            outcome, keep it short, and file inbox items for anything the Ground
+            agent must act on. Write the report to the report path if one is
+            provided, and also return it as your final response.
         """)
 
     def run(self, context: SubagentContext) -> SubagentResult:

@@ -4,7 +4,7 @@ Discovery mirrors Archon's model, adapted to Horizon's workspace state:
 
 * built-in deterministic subagents remain available by name;
 * workspace descriptors live under ``.archon-horizon/subagents/<name>.md``;
-* a descriptor names a harness, or falls back to the informal harness.
+* a descriptor names a harness, or falls back to the Ground harness.
 """
 
 from __future__ import annotations
@@ -56,6 +56,8 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
         write_domain=str(raw["write_domain"]) if raw.get("write_domain") else None,
         read_only=bool(raw.get("read_only", False)),
         default_enabled=bool(raw.get("default_enabled", True)),
+        tier=str(raw["tier"]) if raw.get("tier") else None,
+        model=str(raw["model"]) if raw.get("model") else None,
         prompt_body=text[match.end():],
         source_path=path,
     )
@@ -125,8 +127,14 @@ def descriptor_summary(descriptor_dir: Path) -> str:
         return "(no descriptor subagents installed)"
     lines: list[str] = []
     for descriptor in descriptors.values():
-        harness = descriptor.harness or "informal-agent harness"
-        domain = descriptor.write_domain or "(caller declares)"
+        tags: list[str] = []
+        if descriptor.model:
+            tags.append(f"model={descriptor.model}")
+        elif descriptor.tier:
+            tags.append(f"tier={descriptor.tier}")
+        if descriptor.read_only:
+            tags.append("read-only")
+        tag = f" [{', '.join(tags)}]" if tags else ""
         desc = descriptor.description.strip() or "no description"
-        lines.append(f"- {descriptor.name} [{harness}] write: {domain} - {desc}")
+        lines.append(f"- {descriptor.name}{tag} — {desc}")
     return "\n".join(lines)

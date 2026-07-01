@@ -1,15 +1,15 @@
 """Agent contracts and the concrete, engine-agnostic implementations."""
 
-from .base import HorizonAgent, HorizonContext, InformalAgent, InformalContext, InformalUpdate
-from .harness_agents import HarnessHorizonAgent, HarnessInformalAgent
+from .base import HorizonAgent, HorizonContext, GroundAgent, GroundContext, GroundUpdate
+from .harness_agents import HarnessHorizonAgent, HarnessGroundAgent
 
 __all__ = [
     "HarnessHorizonAgent",
-    "HarnessInformalAgent",
+    "HarnessGroundAgent",
     "HorizonAgent",
     "HorizonContext",
-    "InformalAgent",
-    "InformalContext",
-    "InformalUpdate",
+    "GroundAgent",
+    "GroundContext",
+    "GroundUpdate",
 ]
 

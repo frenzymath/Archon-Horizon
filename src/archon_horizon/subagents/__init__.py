@@ -1,4 +1,4 @@
-"""Lightweight subagents the informal agent dispatches."""
+"""Lightweight subagents the Ground agent dispatches."""
 
 from __future__ import annotations
 
