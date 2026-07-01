@@ -3,8 +3,8 @@
 The orchestrator depends only on these interfaces, never on the filesystem.
 Inboxes are deliberately absent: they have their own provider abstraction
 (:mod:`archon_horizon.inboxes`). These stores cover the runtime state the
-roadmap puts under ``.archon-horizon/``: events, tasks, proposals, the
-structured roadmap, and the memory file.
+roadmap puts under ``.archon-horizon/``: events, tasks, the structured roadmap,
+and the memory file.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from archon_horizon.core.events import Event
 from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.sessions import RunRecord
-from archon_horizon.core.tasks import HorizonTask, Proposal
+from archon_horizon.core.tasks import HorizonTask
 
 
 class EventLog(ABC):
@@ -39,19 +39,14 @@ class TaskStore(ABC):
     def put(self, task: HorizonTask) -> HorizonTask:
         """Persist a task, minting an id when it is empty. Returns the stored task."""
 
-
-class ProposalStore(ABC):
     @abstractmethod
-    def allocate_id(self) -> str: ...
+    def delete(self, task_id: str) -> None: ...
 
-    @abstractmethod
-    def get(self, proposal_id: str) -> Proposal: ...
+    def add_comment(self, task_id: str, body: str, author: str | None = None) -> None:
+        raise NotImplementedError("this task store does not support comments")
 
-    @abstractmethod
-    def list(self) -> list[Proposal]: ...
-
-    @abstractmethod
-    def put(self, proposal: Proposal) -> Proposal: ...
+    def append_history(self, task_id: str, entry: dict) -> None:
+        raise NotImplementedError("this task store does not support history")
 
 
 class RoadmapStore(ABC):
@@ -60,6 +55,12 @@ class RoadmapStore(ABC):
 
     @abstractmethod
     def save(self, roadmap: Roadmap) -> None: ...
+
+    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
+        raise NotImplementedError("this roadmap store does not support comments")
+
+    def append_history(self, item_id: str, entry: dict) -> None:
+        raise NotImplementedError("this roadmap store does not support history")
 
 
 class MemoryStore(ABC):

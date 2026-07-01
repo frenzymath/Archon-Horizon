@@ -11,8 +11,8 @@ from .types import Metadata
 
 
 class SyncBoundary(StrEnum):
-    BEFORE_INFORMAL = "before-informal"
-    AFTER_INFORMAL = "after-informal"
+    BEFORE_GROUND = "before-ground"
+    AFTER_GROUND = "after-ground"
     BEFORE_HORIZON = "before-horizon"
     AFTER_HORIZON = "after-horizon"
     ON_BUILD_FAILURE = "on-build-failure"
@@ -20,8 +20,8 @@ class SyncBoundary(StrEnum):
 
 
 FIXED_SYNC_BOUNDARIES: tuple[SyncBoundary, ...] = (
-    SyncBoundary.BEFORE_INFORMAL,
-    SyncBoundary.AFTER_INFORMAL,
+    SyncBoundary.BEFORE_GROUND,
+    SyncBoundary.AFTER_GROUND,
     SyncBoundary.BEFORE_HORIZON,
     SyncBoundary.AFTER_HORIZON,
     SyncBoundary.ON_BUILD_FAILURE,
@@ -33,7 +33,7 @@ FIXED_SYNC_BOUNDARIES: tuple[SyncBoundary, ...] = (
 class Focus:
     projects: tuple[str, ...] = ()
     task: str | None = None
-    proposal: str | None = None
+    tasks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,4 +43,3 @@ class RunRecord:
     rounds_requested: int = 1
     created_at: datetime = field(default_factory=utc_now)
     metadata: Metadata = field(default_factory=dict)
-

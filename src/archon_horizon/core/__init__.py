@@ -3,13 +3,12 @@
 from .events import Event
 from .inbox import InboxDraft, InboxFilter, InboxItem, InboxKind, InboxScope, InboxStatus
 from .roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus
+from .scope import ItemScope, ScopeAccess, ScopeEntry
 from .sessions import Focus, RunRecord, SyncBoundary
 from .tasks import (
     AgentName,
     HorizonResult,
     HorizonTask,
-    Proposal,
-    ProposalStatus,
     TaskStatus,
     WriteSet,
 )
@@ -27,18 +26,18 @@ __all__ = [
     "InboxKind",
     "InboxScope",
     "InboxStatus",
+    "ItemScope",
     "Project",
     "ProjectVcs",
-    "Proposal",
-    "ProposalStatus",
     "Roadmap",
     "RoadmapItem",
     "RoadmapKind",
     "RoadmapStatus",
     "RunRecord",
+    "ScopeAccess",
+    "ScopeEntry",
     "SyncBoundary",
     "TaskStatus",
     "Workspace",
     "WriteSet",
 ]
-

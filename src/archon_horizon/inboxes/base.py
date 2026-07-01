@@ -24,14 +24,23 @@ class InboxProvider(ABC):
     def create_item(self, item: InboxDraft) -> InboxItem:
         raise NotImplementedError(f"{self.name} does not support creating inbox items")
 
-    def update_labels(self, item_id: str, labels: list[str]) -> None:
+    def update_labels(self, item_id: str, labels: list[str], actor: str | None = None) -> None:
         raise NotImplementedError(f"{self.name} does not support label edits")
 
-    def update_status(self, item_id: str, status: InboxStatus) -> None:
+    def update_status(self, item_id: str, status: InboxStatus, actor: str | None = None) -> None:
         raise NotImplementedError(f"{self.name} does not support status edits")
 
-    def add_comment(self, item_id: str, body: str) -> None:
+    def update_kind(self, item_id: str, kind: object, actor: str | None = None) -> None:
+        raise NotImplementedError(f"{self.name} does not support kind edits")
+
+    def update_body(self, item_id: str, body: str, actor: str | None = None) -> None:
+        raise NotImplementedError(f"{self.name} does not support body edits")
+
+    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
         raise NotImplementedError(f"{self.name} does not support comments")
+
+    def update_comment(self, item_id: str, index: int, body: str, author: str | None = None) -> None:
+        raise NotImplementedError(f"{self.name} does not support comment edits")
 
     def delete_item(self, item_id: str) -> None:
         raise NotImplementedError(f"{self.name} does not support deletion")
@@ -39,4 +48,3 @@ class InboxProvider(ABC):
     @abstractmethod
     def sync(self) -> SyncResult:
         """Synchronize provider state and return an import/update summary."""
-

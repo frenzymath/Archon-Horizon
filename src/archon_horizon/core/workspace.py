@@ -28,6 +28,10 @@ class Project:
     vcs: ProjectVcs = field(default_factory=ProjectVcs)
     blueprint_path: Path | None = None
     build_command: str | None = None
+    depends_on: tuple[str, ...] = ()
+    # Extra workspace-relative globs an agent may write for this project, on top
+    # of the project tree itself (see :mod:`archon_horizon.core.permissions`).
+    write_paths: tuple[str, ...] = ()
     metadata: Metadata = field(default_factory=dict)
 
 
@@ -57,4 +61,3 @@ class Workspace:
     def artifact_dir(self, *parts: str) -> Path:
         """A path under ``.archon-horizon/artifacts`` for run/task outputs."""
         return self.state_path.joinpath("artifacts", *parts)
-

@@ -52,12 +52,12 @@ class InMemoryInboxProvider(InboxProvider):
         self._items[created.id] = created
         return created
 
-    def update_labels(self, item_id: str, labels: list[str]) -> None:
+    def update_labels(self, item_id: str, labels: list[str], actor: str | None = None) -> None:
         self._items[item_id] = dataclasses.replace(
             self._items[item_id], labels=tuple(labels), updated_at=utc_now()
         )
 
-    def update_status(self, item_id: str, status: InboxStatus) -> None:
+    def update_status(self, item_id: str, status: InboxStatus, actor: str | None = None) -> None:
         self._items[item_id] = dataclasses.replace(
             self._items[item_id], status=status, updated_at=utc_now()
         )

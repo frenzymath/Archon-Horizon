@@ -2,7 +2,7 @@
 
 Encoding is generic (any frozen dataclass -> jsonable dict). Decoding is
 explicit per type: it is the one place that knows a stored dict is a
-``HorizonTask`` versus a ``Proposal``, so the core dataclasses stay pure
+``HorizonTask`` versus a ``RoadmapItem``, so the core dataclasses stay pure
 contracts with no awareness of disk format. Keeping serde out of ``core``
 preserves the dependency rule: ``core`` imports nothing outward.
 """
@@ -16,19 +16,20 @@ from pathlib import Path
 from typing import Any
 
 from archon_horizon.core.events import Event
-from archon_horizon.core.inbox import InboxItem, InboxKind, InboxScope, InboxStatus
+from archon_horizon.core.inbox import InboxItem, InboxKind, InboxStatus
 from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus
+from archon_horizon.core.scope import ItemScope, compact_scope, scope_from_dict
 from archon_horizon.core.sessions import Focus, RunRecord
 from archon_horizon.core.tasks import (
     HorizonTask,
-    Proposal,
-    ProposalStatus,
     TaskStatus,
     WriteSet,
 )
 
 
 def to_jsonable(obj: Any) -> Any:
+    if isinstance(obj, ItemScope):
+        return {k: to_jsonable(v) for k, v in compact_scope(obj).items()}
     if is_dataclass(obj) and not isinstance(obj, type):
         return {f.name: to_jsonable(getattr(obj, f.name)) for f in fields(obj)}
     if isinstance(obj, Enum):
@@ -62,17 +63,27 @@ def write_set_from_dict(data: dict[str, Any]) -> WriteSet:
     return WriteSet(
         files=tuple(data.get("files", ())),
         projects=tuple(data.get("projects", ())),
+        declarations=tuple(data.get("declarations", ())),
+        blueprint_nodes=tuple(data.get("blueprint_nodes", ())),
         workspace=bool(data.get("workspace", False)),
     )
 
 
 def task_from_dict(data: dict[str, Any]) -> HorizonTask:
+    objective = data.get("objective", data.get("explanation", data.get("title", "")))
+    write_set = write_set_from_dict(data.get("write_set", {}))
+    scope = scope_from_dict(data.get("scope") or {})
     return HorizonTask(
         id=data["id"],
         project=data["project"],
-        objective=data["objective"],
+        objective=objective,
+        title=data.get("title", ""),
+        explanation=data.get("explanation", ""),
+        projects=tuple(data.get("projects", ())),
+        priority=data.get("priority", "normal"),
         status=TaskStatus(data.get("status", TaskStatus.QUEUED)),
-        write_set=write_set_from_dict(data.get("write_set", {})),
+        write_set=write_set,
+        scope=scope,
         roadmap_refs=tuple(data.get("roadmap_refs", ())),
         inbox_refs=tuple(data.get("inbox_refs", ())),
         artifact_refs=tuple(data.get("artifact_refs", ())),
@@ -82,22 +93,8 @@ def task_from_dict(data: dict[str, Any]) -> HorizonTask:
     )
 
 
-def proposal_from_dict(data: dict[str, Any]) -> Proposal:
-    return Proposal(
-        id=data["id"],
-        title=data["title"],
-        body=data["body"],
-        status=ProposalStatus(data.get("status", ProposalStatus.DRAFT)),
-        project=data.get("project"),
-        inbox_refs=tuple(data.get("inbox_refs", ())),
-        artifact_refs=tuple(data.get("artifact_refs", ())),
-        created_at=_dt(data["created_at"]),
-        updated_at=_dt(data["updated_at"]),
-        metadata=dict(data.get("metadata", {})),
-    )
-
-
 def roadmap_item_from_dict(data: dict[str, Any]) -> RoadmapItem:
+    scope = scope_from_dict(data.get("scope") or {})
     return RoadmapItem(
         id=data["id"],
         title=data["title"],
@@ -109,24 +106,41 @@ def roadmap_item_from_dict(data: dict[str, Any]) -> RoadmapItem:
         depends_on=tuple(data.get("depends_on", ())),
         inbox_refs=tuple(data.get("inbox_refs", ())),
         task_refs=tuple(data.get("task_refs", ())),
+        scope=scope,
         metadata=dict(data.get("metadata", {})),
     )
 
 
+def _inbox_status(value: Any) -> InboxStatus:
+    # Forward-compatible: an unrecognized status maps to closed (only "open" is
+    # open), so a status a future version adds can't break older readers.
+    try:
+        return InboxStatus(value)
+    except ValueError:
+        return InboxStatus.OPEN if str(value) == "open" else InboxStatus.CLOSED
+
+
+def _inbox_kind(value: Any) -> InboxKind:
+    # Forward-compatible: an unknown kind falls back to a plain hint so a single
+    # item written by a newer version can't take down the whole dashboard.
+    try:
+        return InboxKind(value)
+    except ValueError:
+        return InboxKind.HINT
+
+
 def inbox_item_from_dict(data: dict[str, Any]) -> InboxItem:
-    scope = data.get("scope") or {}
+    scope = scope_from_dict(data.get("scope") or {})
     return InboxItem(
         id=data["id"],
         provider=data["provider"],
-        kind=InboxKind(data["kind"]),
+        kind=_inbox_kind(data["kind"]),
         body=data["body"],
         labels=tuple(data.get("labels", ())),
-        status=InboxStatus(data.get("status", InboxStatus.OPEN)),
-        scope=InboxScope(
-            project=scope.get("project"),
-            file=scope.get("file"),
-            declaration=scope.get("declaration"),
-        ),
+        status=_inbox_status(data.get("status", InboxStatus.OPEN)),
+        scope=scope,
+        audience=data.get("audience", ""),
+        author=data.get("author", ""),
         source_ref=data.get("source_ref"),
         created_at=_dt(data["created_at"]),
         updated_at=_dt(data["updated_at"]),
@@ -149,7 +163,7 @@ def run_record_from_dict(data: dict[str, Any]) -> RunRecord:
         focus=Focus(
             projects=tuple(focus.get("projects", ())),
             task=focus.get("task"),
-            proposal=focus.get("proposal"),
+            tasks=tuple(focus.get("tasks", ())),
         ),
         rounds_requested=int(data.get("rounds_requested", 1)),
         created_at=_dt(data["created_at"]),

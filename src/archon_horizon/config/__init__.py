@@ -13,6 +13,7 @@ from .loader import (
     load_config,
 )
 from .schema import (
+    ExternalLibrary,
     GithubConfig,
     HarnessConfig,
     ProjectConfig,
@@ -22,6 +23,7 @@ from .schema import (
 
 __all__ = [
     "CONFIG_FILENAME",
+    "ExternalLibrary",
     "GithubConfig",
     "HarnessBuilder",
     "HarnessConfig",

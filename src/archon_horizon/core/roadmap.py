@@ -7,6 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from .clock import utc_now
+from .scope import ItemScope
 from .types import Metadata
 
 
@@ -38,6 +39,7 @@ class RoadmapItem:
     depends_on: tuple[str, ...] = ()
     inbox_refs: tuple[str, ...] = ()
     task_refs: tuple[str, ...] = ()
+    scope: ItemScope = field(default_factory=ItemScope)
     metadata: Metadata = field(default_factory=dict)
 
 
@@ -61,4 +63,3 @@ class Roadmap:
             updated_at=self.updated_at,
             items=tuple(item for item in self.items if item.id in wanted),
         )
-

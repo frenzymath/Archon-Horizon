@@ -1,9 +1,11 @@
 """Structural workspace operations.
 
 Per the roadmap, the project set changes only through explicit operations that
-update ``config.yaml`` and record events — never as an implicit side effect.
-The informal agent proposes these (as inbox proposals); a human or the CLI
-executes them here.
+update ``config.yaml`` and record events — never as an implicit side effect. A
+human or an agent invokes them via the ``horizon project`` CLI; an agent that
+restructures projects must keep the rest consistent (config, and any
+inbox/roadmap/tasks referencing a renamed or removed project) and inform the
+user (e.g. an ``info`` inbox item).
 
 Note: these round-trip ``config.yaml`` through ``yaml.safe_load``/``safe_dump``,
 so hand-written comments are not preserved. Keep prose docs elsewhere.
@@ -20,7 +22,7 @@ import yaml
 
 from archon_horizon.core.events import Event
 from archon_horizon.store.base import EventLog
-from archon_horizon.vcs.git import GitError, ProjectGit, git_available
+from archon_horizon.vcs.git import GitError, ProjectGit, git_available, neutralize_nested_git
 
 from .loader import CONFIG_FILENAME
 
@@ -68,7 +70,14 @@ def add_project(
     vcs_error = None
     if git_available():
         try:
-            ProjectGit(git_dir=root / git_dir, work_tree=project_dir).init()
+            # If the project was cloned with its own in-tree .git, rename it aside
+            # so its files (not a submodule gitlink) are tracked, then give the
+            # project repo a baseline commit so its tree is tracked from
+            # registration — not left on an empty branch with "no commits yet".
+            disabled = neutralize_nested_git(project_dir)
+            if disabled:
+                _emit(event_log, "workspace.project.nested_git_disabled", project=name, path=disabled)
+            ProjectGit(git_dir=root / git_dir, work_tree=project_dir).ensure_initial_commit()
         except GitError as exc:
             vcs_error = str(exc)
     _emit(event_log, "workspace.project.added", project=name, path=path)
