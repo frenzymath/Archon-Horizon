@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from archon_horizon.core.inbox import InboxItem
 from archon_horizon.core.roadmap import Roadmap
@@ -29,6 +30,9 @@ class GroundContext:
     log_dir: Path | None = None
     # When resuming, the native engine session id of the interrupted Ground run.
     resume_session_id: str | None = None
+    # True for the opening Ground of a run: it plans BEFORE any Horizon has run,
+    # so there is no prior diff to review — the prompt adapts accordingly.
+    is_opening: bool = False
     metadata: Metadata = field(default_factory=dict)
 
 
@@ -61,6 +65,8 @@ class HorizonContext:
     log_dir: Path | None = None
     # When resuming, the native engine session id of the interrupted Horizon run.
     resume_session_id: str | None = None
+    # Optional cooperative cancellation token supplied by the orchestrator.
+    cancel: Any | None = None
     metadata: Metadata = field(default_factory=dict)
 
 

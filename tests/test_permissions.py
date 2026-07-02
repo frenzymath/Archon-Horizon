@@ -12,8 +12,8 @@ from archon_horizon.core.permissions import (
     horizon_write_domain,
     ground_write_domain,
 )
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
-from archon_horizon.core.sessions import RunRecord
+from archon_horizon.core.sessions import Focus, RunRecord
+from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import HarnessResult
 from archon_horizon.harnesses.null import NullHarness
@@ -119,11 +119,12 @@ def test_orchestrator_flags_out_of_scope_horizon_writes(tmp_path: Path) -> None:
     orch = build_orchestrator(
         root, harnesses={"inf": NullHarness(""), "hor": NullHarness(sneaky)}, inbox_providers=[local]
     )
-    orch.roadmap_store.save(
-        Roadmap(items=(RoadmapItem(id="R-1", title="x", projects=("ag-main",), status=RoadmapStatus.ACTIVE),))
-    )
+    orch.task_store.put(HorizonTask(
+        id="R-1", project="ag-main", objective="x", title="x",
+        projects=("ag-main",), status=TaskStatus.QUEUED, write_set=WriteSet(projects=("ag-main",)),
+    ))
 
-    orch.run(RunRecord(id="", rounds_requested=1))
+    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
 
     assert local.list_items() == []
     event = next(e for e in orch.event_log.read_all() if e.type == "write_domain.violation")

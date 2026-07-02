@@ -44,6 +44,7 @@ _POLL_S = 0.2
 # run (retrying in-process can't clear a billing window), so we label it and stop.
 # Ordered so a usage/billing limit wins over a bare rate-limit match.
 _FAILURE_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("auth_error", re.compile(r"not logged in|please run /login|unauthenticated|authentication required|invalid api key|incorrect api key|unauthorized|auth error", re.I)),
     ("usage_limit", re.compile(r"usage limit|insufficient[_ ]quota|quota exceeded|credit balance|billing|payment required", re.I)),
     ("rate_limit", re.compile(r"rate[ _-]?limit|too many requests|\b429\b|resource[_ ]?exhausted", re.I)),
     ("overloaded", re.compile(r"overloaded|\b529\b", re.I)),
@@ -216,8 +217,10 @@ class CommandHarness(Harness):
             if request.cancel is not None and request.cancel.is_cancelled():
                 break
             delay = self.retry_base_seconds * (2 ** (attempt - 1))
+            # A NOTICE, not an ERROR: this is a transient wait-and-retry, so a run
+            # that is merely backing off must not be rendered as failed.
             sink.emit(TranscriptEvent(
-                TranscriptKind.ERROR,
+                TranscriptKind.NOTICE,
                 text=f"{self.name}: transient API error ({reason}); retrying in {delay:.0f}s "
                      f"(attempt {attempt + 1}/{self.retry_max + 1}).",
             ))

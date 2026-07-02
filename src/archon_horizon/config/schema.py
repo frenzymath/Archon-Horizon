@@ -114,14 +114,18 @@ class ReferenceTranscriptionConfig:
 class GithubConfig:
     enabled: bool = False
     repo: str | None = None
-    import_policy: str = "labeled-only"
+    # Import ALL issues/PRs by default so a freshly-opened, unlabelled issue is
+    # visible in the dashboard for a human to triage/label — otherwise
+    # "labeled-only" hides exactly the items that still need a label
+    # (chicken-and-egg). Set import_policy explicitly to restrict.
+    import_policy: str = "all"
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "GithubConfig":
         return cls(
             enabled=bool(data.get("enabled", False)),
             repo=data.get("repo"),
-            import_policy=data.get("import_policy", "labeled-only"),
+            import_policy=data.get("import_policy", "all"),
         )
 
 

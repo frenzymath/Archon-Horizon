@@ -42,13 +42,25 @@ GROUND_CONTINUE = (
 def _agent_env(role: str, context: HorizonContext | GroundContext) -> dict[str, str]:
     """Env stamped on an agent invocation so its CLI writes carry provenance:
     the role plus the run id and session directory (read back by the `horizon`
-    CLI to tag inbox/roadmap/task items with which run/session authored them)."""
+    CLI to tag inbox/roadmap/task items with which run/session authored them).
+
+    Also carries ``ARCHON_HORIZON_ROOT`` so a `horizon` sub-invocation resolves
+    the workspace even when the agent's shell cwd is a project subdirectory (the
+    Horizon agent runs from its project dir), and the task/projects so a
+    ``horizon commit`` the agent makes carries full provenance trailers."""
     env = {"ARCHON_HORIZON_AGENT_ROLE": role}
+    env["ARCHON_HORIZON_ROOT"] = str(context.workspace.root.resolve())
     run_id = getattr(context.run, "id", "") or ""
     if run_id:
         env["ARCHON_HORIZON_RUN"] = run_id
     if context.log_dir is not None:
         env["ARCHON_HORIZON_SESSION"] = context.log_dir.name
+    task = getattr(context, "task", None)
+    if task is not None:
+        env["ARCHON_HORIZON_TASK"] = getattr(task, "id", "") or ""
+        projects = getattr(task, "projects", None) or ((task.project,) if getattr(task, "project", None) else ())
+        if projects:
+            env["ARCHON_HORIZON_PROJECTS"] = ",".join(projects)
     return env
 
 
@@ -58,18 +70,29 @@ def _supports_resume(harness: Harness) -> bool:
 
 def _result_metadata(result: HarnessResult) -> dict[str, object]:
     """Usage telemetry plus the engine's native session id (when the harness
-    captured one), so the orchestrator can record it for a later --resume."""
+    captured one), so the orchestrator can record it for a later --resume.
+
+    Also carries the engine's exit disposition (``ok`` and, on failure, its
+    ``returncode`` / ``failure_reason``) so a crashed session is surfaced rather
+    than silently recorded as healthy — the Ground path in particular parses the
+    (possibly stub) report text and would otherwise lose the exit-1 signal."""
     meta: dict[str, object] = {
+        "ok": result.ok,
         "usage": {
             "tokens_in": result.usage.tokens_in,
             "tokens_out": result.usage.tokens_out,
             "cost_usd": result.usage.cost_usd,
-        }
+        },
     }
     session_id = result.metadata.get("session_id")
     if session_id:
         meta["session_id"] = session_id
-    for key in ("harness_name", "harness_kind", "model"):
+    if not result.ok:
+        for key in ("returncode", "failure_reason", "timed_out"):
+            value = result.metadata.get(key)
+            if value is not None:
+                meta[key] = value
+    for key in ("harness_name", "harness_kind", "model", "config_dir", "auth"):
         value = result.metadata.get(key)
         if value:
             meta[key] = value
@@ -81,12 +104,18 @@ def _harness_metadata(harness: Harness) -> dict[str, object]:
     name = getattr(harness, "horizon_harness_name", None) or getattr(harness, "name", None)
     kind = getattr(harness, "horizon_harness_kind", None)
     model = getattr(harness, "horizon_model", None)
+    config_dir = getattr(harness, "horizon_config_dir", None)
+    auth = getattr(harness, "horizon_auth", None)
     if name:
         meta["harness_name"] = name
     if kind:
         meta["harness_kind"] = kind
     if model:
         meta["model"] = model
+    if config_dir:
+        meta["config_dir"] = config_dir
+    if auth:
+        meta["auth"] = auth
     return meta
 
 
@@ -117,6 +146,7 @@ class HarnessHorizonAgent(HorizonAgent):
             context_refs=context.previous_report_refs,
             artifact_dir=context.log_dir,
             resume_session_id=resume,
+            cancel=context.cancel,
             metadata={"env": _agent_env("horizon", context)},
         )
         result = self._harness.run(request)

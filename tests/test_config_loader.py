@@ -11,9 +11,16 @@ from archon_horizon.config.harnesses import HarnessRegistry, UnknownHarnessKind
 from archon_horizon.config.env import load_env_file
 from archon_horizon.config.loader import build_orchestrator, build_workspace, load_config
 from archon_horizon.config.schema import HarnessConfig
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
-from archon_horizon.core.sessions import RunRecord
-from archon_horizon.core.tasks import TaskStatus
+from archon_horizon.core.sessions import Focus, RunRecord
+from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
+
+
+def _queue_task(orch, task_id: str = "R-1", project: str = "ag-main") -> None:
+    """Seed a human-created queued task (the roadmap no longer auto-creates one)."""
+    orch.task_store.put(HorizonTask(
+        id=task_id, project=project, objective="x", title="x",
+        projects=(project,), status=TaskStatus.QUEUED, write_set=WriteSet(projects=(project,)),
+    ))
 from archon_horizon.harnesses.base import HarnessResult
 from archon_horizon.harnesses.command import CommandHarness
 from archon_horizon.harnesses.null import NullHarness
@@ -297,11 +304,8 @@ def test_build_orchestrator_runs_with_harness_overrides(tmp_path: Path) -> None:
         "horizon-default": NullHarness(lambda req: HarnessResult(ok=True, text="done")),
     }
     orch = build_orchestrator(tmp_path, harnesses=overrides)
-    # The recommendation: an active roadmap item the orchestrator turns into work.
-    orch.roadmap_store.save(
-        Roadmap(items=(RoadmapItem(id="R-1", title="x", projects=("ag-main",), status=RoadmapStatus.ACTIVE),))
-    )
-    reports = orch.run(RunRecord(id="", rounds_requested=1))
+    _queue_task(orch)
+    reports = orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
 
     assert reports[0].tasks_run == ("R-1",)
     assert orch.task_store.get("R-1").status is TaskStatus.DONE
@@ -336,12 +340,10 @@ def test_resume_skips_finished_rounds_and_reruns_the_interrupted_one(tmp_path: P
         "horizon-default": NullHarness(lambda req: HarnessResult(ok=False, text="boom")),
     }
     orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.roadmap_store.save(
-        Roadmap(items=(RoadmapItem(id="R-1", title="x", projects=("ag-main",), status=RoadmapStatus.ACTIVE),))
-    )
-    # Two rounds. Each agent step is followed by its own system session, so the
-    # alternation is symmetric: [Ground, system, Horizon, system, Ground, system, …].
-    orch.run(RunRecord(id="", rounds_requested=2))
+    _queue_task(orch)
+    # Two rounds on a focused task (re-run each round). Each agent step is followed
+    # by its own system session: [Ground, system, Horizon, system, Ground, system, …].
+    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=2))
     sessions_dir = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions"
     sessions = sorted(sessions_dir.iterdir())
     assert [s.name for s in sessions[:5]] == [
@@ -376,10 +378,8 @@ def test_recover_horizon_result_reads_the_horizon_not_system_session(tmp_path: P
         "horizon-default": NullHarness(lambda req: HarnessResult(ok=False, text="boom")),
     }
     orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.roadmap_store.save(
-        Roadmap(items=(RoadmapItem(id="R-1", title="x", projects=("ag-main",), status=RoadmapStatus.ACTIVE),))
-    )
-    orch.run(RunRecord(id="", rounds_requested=1))
+    _queue_task(orch)
+    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
     runlog = orch.run_logs.get("0001")
 
     recovered = orch._recover_horizon_result(runlog, 0)

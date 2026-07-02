@@ -72,6 +72,29 @@ def _config_dir(cfg: HarnessConfig) -> str | None:
     return cfg.config_dir
 
 
+# Provider API-key env vars per engine kind: if one is set (in the harness's own
+# ``env`` or the ambient environment) the CLI authenticates by API key (metered
+# billing); otherwise it uses the stored subscription/OAuth credentials in its
+# config dir. Best-effort — enough to show "api-key" vs "subscription" in the UI.
+_AUTH_KEY_VARS: dict[str, tuple[str, ...]] = {
+    "claude-code": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
+    "codex": ("OPENAI_API_KEY",),
+}
+
+
+def _auth_mode(cfg: HarnessConfig) -> str | None:
+    """Best-effort auth mode for a harness: ``api-key`` when a provider key is in
+    scope, else ``subscription``; ``None`` for kinds we don't recognise."""
+    import os
+
+    key_vars = _AUTH_KEY_VARS.get(cfg.kind)
+    if not key_vars:
+        return None
+    env = _env_overrides(cfg)
+    present = any(env.get(v) or os.environ.get(v) for v in key_vars)
+    return "api-key" if present else "subscription"
+
+
 @functools.lru_cache(maxsize=1)
 def _claude_p_help() -> str:
     try:
@@ -246,6 +269,10 @@ class HarnessRegistry:
         setattr(harness, "horizon_harness_name", cfg.name)
         setattr(harness, "horizon_harness_kind", cfg.kind)
         setattr(harness, "horizon_model", getattr(harness, "horizon_model", cfg.model))
+        # Provenance for the Logs view: which engine config-home the session used
+        # and how it authenticated (api-key vs subscription).
+        setattr(harness, "horizon_config_dir", _config_dir(cfg))
+        setattr(harness, "horizon_auth", _auth_mode(cfg))
         # Optional per-harness retry tuning for transient API errors.
         if "max_retries" in cfg.options:
             try:

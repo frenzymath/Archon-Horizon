@@ -286,6 +286,41 @@ def _subagent_catalog(context: GroundContext | HorizonContext) -> str:
     )
 
 
+def _ground_phase_block(context: GroundContext) -> str:
+    """Tell Ground which phase it is in, so the opening session does not flail
+    looking for a Horizon diff that does not exist yet."""
+    if context.is_opening:
+        return (
+            "# This is the OPENING Ground of the run\n"
+            "No Horizon agent has run yet, so there is NO prior Horizon diff to "
+            "review — do not look for one or report 'no diff, nothing to do'. Your "
+            "job right now is to set direction: read the roadmap, blueprints, and "
+            "open inbox, pick the most valuable next target, make sure its "
+            "blueprint node is stated and dependency-correct, and leave a crisp "
+            "recommendation for the first Horizon agent (see the recommendation "
+            "guidance below)."
+        )
+    return (
+        "# This is a RECONCILE Ground\n"
+        "A Horizon session just ran. Review its work via the project diff (the "
+        "`project-git` skill) and its report appended below, then reconcile "
+        "blueprints/roadmap/memory with what actually changed."
+    )
+
+
+def _recommendation_guidance() -> str:
+    return (
+        "# Recommendation for the next agent (write `recommendation.md`)\n"
+        "A few short bullets for the next Ground/Horizon session — **suggestions "
+        "grounded in what you saw, not orders**. The next agent self-scopes and "
+        "may know better. Lead each bullet with the reason, then the suggestion, "
+        "e.g. `- The cohomology vanishing lemma is the last gap before X, so it "
+        "looks like the most valuable next target.` Keep it concise; skip status "
+        "recaps. Human-facing notes go to an `info` inbox item, durable dead ends "
+        "to memory."
+    )
+
+
 def compose_ground_prompt(context: GroundContext) -> str:
     """Prompt for the human-facing planning/blueprint/roadmap agent."""
     return (
@@ -301,13 +336,15 @@ def compose_ground_prompt(context: GroundContext) -> str:
         "(`horizon inbox add --kind memory --author ground`); prune stale ones with `inbox complete`.\n"
         "You do NOT do long Lean proof search yourself. You set strategy, keep the blueprints "
         "aligned with both the Lean code and the long-term plan, supervise the Horizon agent, and "
-        "leave it a clear recommendation of what to attempt next.\n\n"
+        "leave it a clear recommendation of what to attempt next (see the recommendation guidance).\n\n"
+        f"{_ground_phase_block(context)}\n\n"
         "The Horizon agent runs free and may leave the workspace messy or its reasoning shaky — "
         "you are its supervisor and the workspace's janitor, and you make it correct and tidy again.\n\n"
         "How to work:\n"
-        "- Review the Horizon agent's latest work via its report and the project diff (see the "
-        "`project-git` skill — projects have no root `.git`; diff them through their out-of-tree "
-        "git). Check that the Lean definitions truly match the blueprint statements, that its "
+        "- On a reconcile round, review the Horizon agent's latest work via its report and the "
+        "project diff (see the `project-git` skill — projects have no root `.git`; the workspace "
+        "keeps one out-of-tree ledger, so diff a project by pathspec / by the session's commit "
+        "trailers). Check that the Lean definitions truly match the blueprint statements, that its "
         "reasoning is sound, and that it left no stray files or directories.\n"
         "- Reconcile blueprints, roadmap status, and memory with what actually changed. Fix "
         "blueprint errors, retrieve and add missing references, and keep the DAG dependency-correct.\n"
@@ -316,19 +353,31 @@ def compose_ground_prompt(context: GroundContext) -> str:
         "`--author ground` for inbox items/comments you create. ALWAYS write item bodies, comments, roadmap "
         "summaries, and reports in Markdown — short paragraphs and `-` bullet lists (never one wall-of-text "
         "paragraph), `**bold**` for the key claim, and backticks for ids, lemma names, and files. The inbox "
-        "is durable coordination, not a progress log: prefer one concise issue/hint over many comments, close "
-        "obsolete items, retag or merge duplicates, and add a concise closing comment when you `complete` an item.\n"
+        "is durable coordination, not a progress log: prefer one concise issue/hint over many comments, retag or "
+        "merge duplicates, and add a concise closing comment when you `complete` an item.\n"
+        "- You are the inbox's keeper: it is YOUR job to keep it tidy. `complete` items that are resolved or "
+        "acted on, and `archive` (a soft-delete that keeps the record but hides it from the default view) items "
+        "that are stale, superseded, or no longer relevant — don't let obsolete items accumulate. Closing "
+        "comments should state the mathematical conclusion in human-readable language (LaTeX for formulas), not "
+        "just a code changelog (see the horizon-inbox skill).\n"
         "- When you make a change the human should know about — you restructured projects, took an "
         "unexpected direction, or hit something worth flagging — tell them with an `info` inbox item "
         "(`horizon inbox add --kind info --author ground`). It is purely a notice and never affects what runs.\n"
-        "- You do not create tasks: tasks are the human's way to launch sessions. Organize pending work "
-        "through the roadmap; you may `horizon task comment` but never add/edit/remove tasks.\n"
+        "- You do not create tasks: tasks are the human's way to launch sessions (and are inferred on "
+        "demand from a roadmap milestone via `horizon run <roadmap_id>`). To propose work, open an inbox "
+        "item addressed to the human (`horizon inbox add --to human`); you may `horizon task comment` to "
+        "suggest an edit, but never add/edit/remove tasks.\n"
         "- Delegate to subagents to divide the work (blueprint review, diff analysis), preferring "
         "a smaller/cheaper model for mechanical checks.\n"
-        "- Leave the next move as a concise recommendation: update the roadmap to account for "
-        "the opened inbox, existing tasks, blueprint state, and current Lean state. A roadmap "
-        "item marked active is advice, not a command; the Horizon agent may self-scope or choose "
-        "a better route from the same context.\n"
+        "- Keep the roadmap as the project's mathematical status: the main theorems and "
+        "infrastructure already formalized and still to build, each a milestone that guides the "
+        "work — it is a map, not a task queue. Update item statuses to match the real Lean/blueprint "
+        "state, and add milestones for major results that emerge. Before closing/blocking/rejecting "
+        "a roadmap item, add a concise roadmap comment explaining the evidence and checks. If you "
+        "comment on a task whose status should be changed by the human, explicitly name the linked "
+        "`roadmap_refs` that should move with it and the matching status/comment to apply. Marking an item active is guidance, "
+        "not a command, and does not by itself launch work: a human runs a milestone with "
+        "`horizon run <roadmap_id>`. If you think work should start, say so in an inbox item to the human.\n"
         "- Treat the opened inbox below as input for this round only. Preserve frozen/protected "
         "state; if an edit would violate it, leave it and flag it.\n\n"
         "Blueprint constraints (legible and pure, but mathematically complete — see the "
@@ -353,6 +402,7 @@ def compose_ground_prompt(context: GroundContext) -> str:
         f"{_section(_protected_block(context.accepted_inbox))}"
         f"# Opened inbox\n{_inbox_lines(context.accepted_inbox)}\n\n"
         f"# Memory\n{context.memory.strip() or '(empty)'}\n\n"
+        f"{_recommendation_guidance()}\n\n"
         f"{_pending_work_guidance()}\n\n"
         f"{_report_guidance('Ground')}"
     )
@@ -381,8 +431,17 @@ def compose_horizon_prompt(context: HorizonContext) -> str:
         "for ids, lemma names, and files. Give every item a short title and a non-empty description. Comment at "
         "each key advance, and add a concise closing comment (runs, LOC, files) before you `complete` an item. "
         "Treat `[persistent]` items as standing rules; close `[temporary]` ones once consumed.\n"
+        "- When your work completes or blocks a task/roadmap milestone, leave a concise task or roadmap "
+        "comment with the decisive checks, changed files, and remaining caveats. If a task has linked "
+        "`roadmap_refs`, keep your report/comment explicit about the status each linked roadmap item should "
+        "have so Ground or the human can keep the roadmap consistent.\n"
         "- Record durable dead ends as memory: `horizon inbox add --kind memory --to horizon "
         "--author horizon --body \"...\"`, so later sessions don't repeat them.\n"
+        "- Commit your work yourself as you finish coherent pieces — "
+        "`\"$HORIZON_BIN\" commit -m \"<math-first message>\" <files>` (see the horizon-commit skill). "
+        "Small semantic commits (a lemma closed, a file completed) make the history and the dashboard's "
+        "change view legible; don't leave one undifferentiated blob for the end-of-session sweep. Other "
+        "runs may commit concurrently to the same ledger — that's fine; commit only the files you changed.\n"
         "- You may delegate to subagents when it helps (see the Subagents section): split a wide "
         "search across parallel read-only subagents, hand mechanical checks to a cheaper-model "
         "subagent, or pull references. You are free to decide whether they fit the task.\n\n"
