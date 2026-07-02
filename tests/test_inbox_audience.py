@@ -6,8 +6,8 @@ from pathlib import Path
 
 from archon_horizon.cli import main
 from archon_horizon.core.inbox import InboxItem, InboxKind, InboxScope, reaches_horizon
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
-from archon_horizon.core.sessions import RunRecord
+from archon_horizon.core.sessions import Focus, RunRecord
+from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.config.loader import build_orchestrator
 from archon_horizon.harnesses.base import HarnessRequest, HarnessResult
 from archon_horizon.harnesses.null import NullHarness
@@ -76,10 +76,11 @@ def test_horizon_only_sees_addressed_items(tmp_path: Path) -> None:
     main(["--root", str(ws), "inbox", "add", "--body", "FOR_OTHER\n\naddressed to other", "--to", "project:other"])
 
     orch = build_orchestrator(ws, harnesses={"inf": NullHarness(""), "hor": NullHarness(record)}, inbox_providers=[local])
-    orch.roadmap_store.save(
-        Roadmap(items=(RoadmapItem(id="R-1", title="x", projects=("ag-main",), status=RoadmapStatus.ACTIVE),))
-    )
-    orch.run(RunRecord(id="", rounds_requested=1))
+    orch.task_store.put(HorizonTask(
+        id="R-1", project="ag-main", objective="x", title="x",
+        projects=("ag-main",), status=TaskStatus.QUEUED, write_set=WriteSet(projects=("ag-main",)),
+    ))
+    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
 
     assert "FOR_HORIZON" in seen["prompt"]
     assert "FOR_OTHER" not in seen["prompt"]  # addressed to another project

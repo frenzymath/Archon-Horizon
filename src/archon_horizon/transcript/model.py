@@ -27,6 +27,10 @@ class TranscriptKind(StrEnum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     USAGE = "usage"
+    # A transient, non-fatal notice (e.g. "retrying after a 529") — surfaced in
+    # the transcript but NEVER counted as a session failure. Distinct from ERROR
+    # precisely so a run that is merely waiting to retry does not show as failed.
+    NOTICE = "notice"
     ERROR = "error"
     SESSION_END = "session_end"
 

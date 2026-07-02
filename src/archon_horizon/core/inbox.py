@@ -15,6 +15,9 @@ from .types import Metadata
 class InboxStatus(StrEnum):
     OPEN = "open"
     CLOSED = "closed"
+    # Soft-delete: kept for the record but hidden from the dashboard by default
+    # (the user can opt to show archived items). Like delete, but non-destructive.
+    ARCHIVED = "archived"
 
 
 class InboxKind(StrEnum):
@@ -92,6 +95,8 @@ class InboxFilter:
     status: InboxStatus | None = None
     kinds: tuple[InboxKind, ...] = ()
     project: str | None = None
+    audience: str | None = None
+    query: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,4 +122,36 @@ def matches_filter(item: InboxItem, filters: "InboxFilter | None") -> bool:
         return False
     if filters.project is not None and filters.project not in item.scope.targets("projects"):
         return False
+    if filters.audience is not None and item.audience != filters.audience:
+        return False
+    query = filters.query.strip().lower()
+    if query:
+        scope_text = " ".join(
+            value
+            for key in ("projects", "files", "declarations")
+            for value in item.scope.targets(key)
+        )
+        comments_text = " ".join(
+            str(comment.get("body") or "")
+            for comment in item.metadata.get("comments", [])
+            if isinstance(comment, dict)
+        )
+        haystack = " ".join(
+            str(value)
+            for value in (
+                item.id,
+                item.provider,
+                item.kind.value,
+                item.status.value,
+                item.body,
+                " ".join(item.labels),
+                item.audience,
+                item.author,
+                item.source_ref or "",
+                scope_text,
+                comments_text,
+            )
+        ).lower()
+        if query not in haystack:
+            return False
     return True

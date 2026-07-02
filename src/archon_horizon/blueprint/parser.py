@@ -31,7 +31,9 @@ _BEGIN_RE = re.compile(r"\\begin\{(" + "|".join(KNOWN_ENVS) + r")\}")
 # No ``^`` anchor: this is matched with ``match(src, pos)``, which already
 # anchors at ``pos`` — a ``^`` would (without MULTILINE) only fire at index 0.
 _TITLE_RE = re.compile(r"\s*\[([^\]]*)\]")
-_LEAN_RE = re.compile(r"\\lean\s*\{([^{}]*)\}")
+# Allow one level of nested braces so universe-polymorphic names like
+# ``\lean{Foo.bar.{u}}`` still link instead of being reported as "no \lean link".
+_LEAN_RE = re.compile(r"\\lean\s*\{((?:[^{}]|\{[^{}]*\})*)\}")
 _LABEL_RE = re.compile(r"\\label\s*\{([^{}]*)\}")
 _USES_RE = re.compile(r"\\uses\s*\{([^{}]*)\}")
 _SOURCE_RE = re.compile(r"\\source\s*\{([^{}]*)\}")

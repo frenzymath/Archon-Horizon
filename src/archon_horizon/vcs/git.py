@@ -1,15 +1,21 @@
-"""Git wrappers for the workspace manifest and out-of-tree project VCS.
+"""The workspace's single out-of-tree git — the one source of truth for history.
 
-The roadmap's git model:
+The git model:
 
-* The workspace has its own repo and acts as a *manifest* — it records the
-  set of project revisions (like a lockfile), not a copy of every project
-  commit.
+* The workspace has ONE repository, kept out-of-tree at
+  ``.archon-horizon/vcs/workspace.git`` and driven via explicit ``--git-dir`` /
+  ``--work-tree`` flags so it never creates a root ``.git`` that would collide
+  with the user's own repo. It records a full snapshot per session: shared
+  Horizon state plus the scoped project worktrees (not a manifest/lockfile —
+  the actual files). There is no separate per-project repository; a project's
+  history is just this repo filtered by pathspec (``git log -- <project>``).
 * A project never carries a real ``.git/`` at its root (nested repos confuse
-  parent-git). If a project needs history, its git directory lives at
-  ``.archon-horizon/vcs/<project>.git`` and is driven via explicit
-  ``--git-dir`` / ``--work-tree`` flags, leaving the project tree an ordinary
-  embedded directory.
+  parent-git). A project cloned with its own ``.git`` is neutralized (renamed
+  aside) so its files, not a submodule gitlink, are committed.
+* Structured provenance (run / round / role / session / task / projects) rides
+  each commit as **git trailers**, so agents and the dashboard can query it
+  deterministically instead of parsing prose. Computed metrics attach as **git
+  notes**, which can be written/edited after the commit.
 
 Everything here shells out to ``git`` and degrades gracefully when ``git`` is
 absent (``git_available()`` is False; constructors still build).
@@ -192,6 +198,18 @@ def _prune_ignored_from_index(git_dir: Path, work_tree: Path) -> None:
         )
 
 
+def _files_in_commit(git_dir: Path, work_tree: Path, sha: str) -> tuple[str, ...]:
+    """The paths a commit touched — for a human-readable "what was committed" log.
+
+    ``--root`` makes the initial commit (which has no parent) list its files too,
+    rather than producing nothing. Best-effort: a lookup failure returns ``()``."""
+    out = _run(
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha],
+        git_dir=git_dir, work_tree=work_tree, check=False,
+    )
+    return tuple(line.strip() for line in out.splitlines() if line.strip())
+
+
 def _git_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Archon Horizon")
@@ -237,12 +255,22 @@ class WorkspaceGit:
         paths: Sequence[str] | None = None,
         *,
         author: tuple[str, str] | None = None,
+        trailers: dict[str, str] | None = None,
     ) -> str | None:
         """Stage and commit. Returns the new SHA, or None if nothing changed.
 
         ``author`` is an optional ``(name, email)`` that attributes the commit to
         the acting agent (Ground/Horizon) while the committer stays the system
-        identity, so ``git log --author`` and blame distinguish the two."""
+        identity, so ``git log --author`` and blame distinguish the two.
+
+        ``trailers`` are appended as machine-queryable ``Key: value`` lines at the
+        end of the message (git-trailer convention), so provenance can be read
+        back with ``git log --format=%(trailers:key=...)`` rather than parsed
+        from prose. Empty values are dropped."""
+        if trailers:
+            message = message.rstrip() + "\n\n" + "".join(
+                f"{key}: {value}\n" for key, value in trailers.items() if value
+            )
         if paths is None:
             self._run(["add", "-A"])
         else:
@@ -269,6 +297,9 @@ class WorkspaceGit:
         sha = self._run(["rev-parse", "--verify", "--quiet", "HEAD"], check=False)
         return sha or None
 
+    def files_in_commit(self, sha: str) -> tuple[str, ...]:
+        return _files_in_commit(self.git_dir, self.root, sha)
+
     def unstage_gitlink(self, path: str) -> bool:
         """If ``path`` is staged as a submodule gitlink (mode 160000) but is now a
         plain directory on disk, drop the gitlink so a normal ``add`` re-tracks its
@@ -289,6 +320,132 @@ class WorkspaceGit:
         status = self._run(["status", "--porcelain", "-uall"], check=False) or ""
         return _parse_porcelain(status)
 
+    # ── diffing (backs the per-session change view) ──────────────────────
+    #
+    # ``base`` is the parent commit; pass None to diff against the empty tree
+    # (a root commit). All are scoped by ``paths`` (workspace-relative), so a
+    # session's change view covers exactly the projects the run could write.
+
+    _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's canonical empty tree
+
+    def parent_sha(self, sha: str) -> str | None:
+        """The first parent of ``sha``, or None if it is a root commit."""
+        if not self.is_repo():
+            return None
+        out = self._run(["rev-parse", "--verify", "--quiet", f"{sha}^"], check=False)
+        return out or None
+
+    def session_commits(self, run_id: str, session: str) -> list[tuple[str, str]]:
+        """``(sha, subject)`` for every commit tagged with BOTH ``Archon-Run`` =
+        ``run_id`` and ``Archon-Session`` = ``session``, oldest-first. This is how
+        a session maps to the (possibly several) commits made during it — the
+        agent's own semantic commits plus the orchestrator's shared-state
+        integration commit. Both trailers are needed because session names (e.g.
+        ``0001-ground``) repeat across runs."""
+        if not self.is_repo() or not run_id or not session:
+            return []
+        out = self._run(
+            ["log", "--format=%H%x1f%s%x1f"
+             "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
+             "%(trailers:key=Archon-Session,valueonly,separator=%x1e)"],
+            check=False,
+        ) or ""
+        matched: list[tuple[str, str]] = []
+        for line in out.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) != 4:
+                continue
+            sha, subject, run_trailer, session_trailer = parts
+            runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
+            sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
+            if run_id in runs and session in sessions:
+                matched.append((sha, subject))
+        matched.reverse()  # oldest-first
+        return matched
+
+    def numstat(self, base: str | None, sha: str | None, paths: Sequence[str] = ()) -> list[tuple[int, int, str]]:
+        """``(added, deleted, path)`` per changed file. A ``-`` count (binary) reads as 0.
+
+        ``sha=None`` diffs against the current **working tree** (uncommitted
+        state) — used for the live view of a running session that has not
+        committed yet. ``-uall`` includes new untracked files individually."""
+        if not self.is_repo():
+            return []
+        head = [base or self._EMPTY_TREE] + ([sha] if sha is not None else [])
+        args = ["diff", "--numstat", *head]
+        if sha is None:
+            args = ["diff", "--numstat", base or self._EMPTY_TREE]
+        if paths:
+            args += ["--", *paths]
+        rows: list[tuple[int, int, str]] = []
+        # Include untracked files when diffing the working tree, so a brand-new
+        # file the running session just created still shows up.
+        untracked = self._worktree_untracked(paths) if sha is None else []
+        for line in (self._run(args, check=False) or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            add = int(parts[0]) if parts[0].isdigit() else 0
+            dele = int(parts[1]) if parts[1].isdigit() else 0
+            rows.append((add, dele, parts[2].strip()))
+        seen = {r[2] for r in rows}
+        for path in untracked:
+            if path not in seen:
+                loc = len((self.root / path).read_text("utf-8", errors="ignore").splitlines()) if (self.root / path).is_file() else 0
+                rows.append((loc, 0, path))
+        return rows
+
+    def _worktree_untracked(self, paths: Sequence[str] = ()) -> list[str]:
+        args = ["ls-files", "--others", "--exclude-standard"]
+        if paths:
+            args += ["--", *paths]
+        return [p for p in (self._run(args, check=False) or "").splitlines() if p]
+
+    def diff(self, base: str | None, sha: str | None, paths: Sequence[str] = ()) -> str:
+        """Unified diff text for ``base..sha`` scoped to ``paths`` (``sha=None`` →
+        working tree). Untracked files are included when diffing the work tree."""
+        if not self.is_repo():
+            return ""
+        if sha is None:
+            args = ["diff", "--no-color", base or self._EMPTY_TREE]
+        else:
+            args = ["diff", "--no-color", base or self._EMPTY_TREE, sha]
+        if paths:
+            args += ["--", *paths]
+        text = self._run(args, check=False) or ""
+        if sha is None:  # append untracked files as full additions
+            for path in self._worktree_untracked(paths):
+                extra = self._run(["diff", "--no-color", "--no-index", "/dev/null", path], check=False)
+                if extra:
+                    text += ("\n" if text else "") + extra
+        return text
+
+    def file_at(self, sha: str | None, path: str) -> str | None:
+        """Content of ``path`` at ``sha`` (``sha=None`` → current working tree),
+        or None if it did not exist there."""
+        if not self.is_repo():
+            return None
+        if sha is None:
+            fp = self.root / path
+            return fp.read_text("utf-8", errors="ignore") if fp.is_file() else None
+        out = self._run(["show", f"{sha}:{path}"], check=False)
+        # `git show` on a missing path prints nothing and exits non-zero; check=False
+        # swallows the error, so an empty string is ambiguous. Confirm existence.
+        listed = self._run(["ls-tree", "-r", "--name-only", sha, "--", path], check=False)
+        return out if listed.strip() else None
+
+    def add_note(self, sha: str, text: str) -> None:
+        """Attach (overwrite) a git note on ``sha`` — a place for computed metrics
+        that can be written after the commit without rewriting history."""
+        if self.is_repo():
+            self._run(["notes", "add", "-f", "-m", text, sha], check=False)
+
+    def read_note(self, sha: str) -> str | None:
+        if not self.is_repo():
+            return None
+        out = self._run(["notes", "show", sha], check=False)
+        return out or None
+
 
 def _parse_porcelain(status: str) -> tuple[str, ...]:
     paths: list[str] = []
@@ -303,7 +460,12 @@ def _parse_porcelain(status: str) -> tuple[str, ...]:
 
 
 class ProjectGit:
-    """A project's out-of-tree git, driven via --git-dir / --work-tree."""
+    """Compatibility wrapper for project-scoped git operations.
+
+    Newer workspace runs commit project files into the workspace repository, but
+    setup and older callers still use this small wrapper when registering a
+    VCS-enabled project.
+    """
 
     def __init__(self, git_dir: Path, work_tree: Path) -> None:
         self.git_dir = git_dir
@@ -316,11 +478,7 @@ class ProjectGit:
         if not self.is_repo():
             self.git_dir.parent.mkdir(parents=True, exist_ok=True)
             _init_bare(self.git_dir)
-        # A nested in-tree .git would be stored as a submodule gitlink; rename it
-        # aside so the project's files are committed instead.
         neutralize_nested_git(self.work_tree)
-        # Always refresh excludes + secret hook (self-heals existing repos), then
-        # drop any now-ignored paths a prior checkpoint had tracked (.lake, etc.).
         _ensure_repo_hygiene(self.git_dir)
         _prune_ignored_from_index(self.git_dir, self.work_tree)
 
@@ -333,9 +491,6 @@ class ProjectGit:
         return self.current_sha()
 
     def ensure_initial_commit(self, message: str = "project: baseline (registered)") -> str | None:
-        """Give a freshly-initialized project repo a first commit so its tree is
-        tracked from registration — not stuck on an empty branch with no HEAD
-        (the "no commits yet on main" state). No-op if history already exists."""
         self.init()
         if self.current_sha():
             return None
@@ -344,11 +499,11 @@ class ProjectGit:
         return self.current_sha()
 
     def current_sha(self) -> str | None:
-        # --verify --quiet: prints nothing (instead of echoing "HEAD") and exits
-        # non-zero when the branch is unborn, so an empty repo reads as None.
         sha = _run(
             ["rev-parse", "--verify", "--quiet", "HEAD"],
-            git_dir=self.git_dir, work_tree=self.work_tree, check=False,
+            git_dir=self.git_dir,
+            work_tree=self.work_tree,
+            check=False,
         )
         return sha or None
 
@@ -365,7 +520,7 @@ def project_git_for(workspace: Workspace, name: str) -> ProjectGit | None:
 
 
 def collect_revisions(workspace: Workspace) -> dict[str, str | None]:
-    """Map each VCS-enabled project to its current SHA — the manifest payload."""
+    """Map each VCS-enabled project to its current SHA."""
     revisions: dict[str, str | None] = {}
     for name in workspace.projects:
         git = project_git_for(workspace, name)

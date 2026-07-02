@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
 from archon_horizon.vcs import collect_revisions, git_available, project_git_for
 from archon_horizon.vcs.git import ProjectGit, WorkspaceGit
+from archon_horizon.vcs.integration import _workspace_commit_queue
 
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
 
@@ -33,6 +36,52 @@ def test_workspace_git_commits(tmp_path: Path) -> None:
     sha = git.commit("initial")
     assert sha and len(sha) >= 7
     assert git.commit("no changes") is None  # nothing to commit
+
+
+def test_workspace_commit_queue_waits_for_current_holder(tmp_path: Path) -> None:
+    workspace = Workspace(name="ws", root=tmp_path)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+
+    def first() -> None:
+        with _workspace_commit_queue(workspace):
+            first_entered.set()
+            assert release_first.wait(timeout=2.0)
+
+    def second() -> None:
+        assert first_entered.wait(timeout=2.0)
+        with _workspace_commit_queue(workspace):
+            second_entered.set()
+
+    t1 = threading.Thread(target=first)
+    t2 = threading.Thread(target=second)
+    t1.start()
+    t2.start()
+    assert first_entered.wait(timeout=2.0)
+    time.sleep(0.1)
+    assert not second_entered.is_set()
+    release_first.set()
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+    assert second_entered.is_set()
+    assert not (workspace.state_path / "locks" / "commit.lock").exists()
+
+
+def test_files_in_commit_lists_touched_paths(tmp_path: Path) -> None:
+    # The system log's "what was committed" line reads the commit's file list —
+    # including the very first commit (no parent), which needs --root.
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    (tmp_path / "config.yaml").write_text("x\n", "utf-8")
+    (tmp_path / "dashboard").mkdir()
+    (tmp_path / "dashboard" / "index.html").write_text("<html>", "utf-8")
+    sha = git.commit("initial", paths=["config.yaml", "dashboard"])
+    assert sha
+    files = git.files_in_commit(sha)
+    assert "config.yaml" in files
+    assert "dashboard/index.html" in files
 
 
 def test_workspace_git_is_out_of_tree(tmp_path: Path) -> None:

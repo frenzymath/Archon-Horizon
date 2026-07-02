@@ -1,4 +1,4 @@
-"""Version control: the workspace manifest repo and per-project VCS wrappers."""
+"""Version control: the workspace's single out-of-tree ledger repository."""
 
 from __future__ import annotations
 
@@ -10,7 +10,13 @@ from .git import (
     git_available,
     project_git_for,
 )
-from .integration import CommitOutcome, SessionIntegration, integrate_workspace_run, integrate_workspace_session, project_checkpoint
+from .integration import (
+    CommitOutcome,
+    SessionIntegration,
+    author_for,
+    integrate_workspace_run,
+    integrate_workspace_session,
+)
 
 __all__ = [
     "CommitOutcome",
@@ -18,10 +24,10 @@ __all__ = [
     "ProjectGit",
     "SessionIntegration",
     "WorkspaceGit",
+    "author_for",
     "collect_revisions",
     "git_available",
     "integrate_workspace_run",
     "integrate_workspace_session",
     "project_git_for",
-    "project_checkpoint",
 ]

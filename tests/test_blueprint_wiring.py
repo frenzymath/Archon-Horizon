@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archon_horizon.blueprint.checks import blueprint_lint_issues, dag_consistency_issues
+from archon_horizon.blueprint.checks import blueprint_coverage, blueprint_lint_issues, dag_consistency_issues
 from archon_horizon.blueprint.workspace import project_dag, project_rich_dag, workspace_dags
 from archon_horizon.core.workspace import Project, Workspace
 
@@ -58,8 +58,19 @@ def test_dag_consistency_finds_cycle(tmp_path: Path) -> None:
     assert any("cycle" in i.lower() for i in issues)
 
 
-def test_blueprint_lint_flags_missing_lean_and_leanok_dep(tmp_path: Path) -> None:
+def test_blueprint_lint_flags_leanok_dep_but_not_missing_lean(tmp_path: Path) -> None:
     dag = project_dag(_workspace(tmp_path), "ag-main")
     bodies = " ".join(blueprint_lint_issues(dag))
-    assert "no \\lean link" in bodies          # c (theorem) has no \lean
+    # A leanok node depending on a not-leanok node is a real soundness defect.
     assert "leanok" in bodies                   # a is leanok but depends on not-leanok c
+    # "no \lean link" is coverage (work remaining), NOT a defect: it must not
+    # appear in the lint issues that get reported to agents as problems.
+    assert "no \\lean link" not in bodies
+
+
+def test_blueprint_coverage_counts_unlinked_nodes(tmp_path: Path) -> None:
+    dag = project_dag(_workspace(tmp_path), "ag-main")
+    cov = blueprint_coverage(dag)
+    assert cov["total"] >= 1
+    assert cov["unlinked"] >= 1                  # c (theorem) has no \lean link
+    assert 0 <= cov["leanok"] <= cov["total"]

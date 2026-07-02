@@ -1,21 +1,32 @@
 """Session-level VCS integration policy.
 
-Project repositories are detailed work journals: checkpoint them at completed
-Horizon steps. The workspace repository is the shareable integration ledger: one
-commit per completed *session*, recording shared state plus the scoped project
-files as they stand at that boundary. Committing per session (rather than only
-at run end) means a run that crashes or is interrupted still leaves every
-finished session durably recorded.
+The workspace repository is the one integration ledger: one commit per completed
+*session*, recording shared Horizon state plus the session's scoped project
+worktrees as they stand at that boundary. Committing per session (rather than
+only at run end) means a run that crashes or is interrupted still leaves every
+finished session durably recorded. There is no separate per-project repository —
+a project's history is this repo filtered by pathspec.
+
+Structured provenance rides each commit as git trailers (``Archon-Run``,
+``Archon-Round``, ``Archon-Role``, ``Archon-Session``, ``Archon-Task``,
+``Archon-Projects``), so the dashboard and agents can map a session to its
+commit and read what it touched without parsing prose.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import socket
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from archon_horizon.core.workspace import Workspace
 
-from .git import GitError, WorkspaceGit, git_available, neutralize_nested_git, project_git_for
+from .git import GitError, WorkspaceGit, git_available, neutralize_nested_git
 
 
 # Commit author per acting agent, so `git log --author` / blame separate the two.
@@ -29,10 +40,75 @@ _ROLE_AUTHORS: dict[str, tuple[str, str]] = {
 def author_for(role: str | None) -> tuple[str, str] | None:
     return _ROLE_AUTHORS.get((role or "").strip().lower())
 
-# Serializes workspace commits across parallel sessions in one process so they
-# do not race on the git index. Cross-process runs are guarded by git's own
-# ``index.lock``; a losing commit surfaces as ``workspace_commit_error``.
+# Serializes workspace commits across parallel sessions. The in-process lock
+# keeps threads ordered; the filesystem queue below keeps separate Horizon
+# processes from racing on Git's index.
 _WORKSPACE_COMMIT_LOCK = threading.Lock()
+_COMMIT_QUEUE_POLL_S = 0.25
+
+
+def _process_alive(pid: int, host: str) -> bool:
+    if host != socket.gethostname():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_lock(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text("utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+@contextmanager
+def _workspace_commit_queue(workspace: Workspace):
+    """Cross-process queue for workspace integration commits.
+
+    Git has its own ``index.lock``, but failing on that lock makes concurrent
+    sessions lose commits. This lock waits instead. A dead holder is reclaimed
+    using the same pid/host check as the run lock.
+    """
+    path = workspace.state_path / "locks" / "commit.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "workspace": workspace.name,
+        "created_at": time.time(),
+    }
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            holder = _read_lock(path)
+            if holder is not None and _process_alive(
+                int(holder.get("pid") or 0), str(holder.get("host") or "")
+            ):
+                time.sleep(_COMMIT_QUEUE_POLL_S)
+                continue
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w") as handle:
+            json.dump(payload, handle)
+        break
+    try:
+        yield
+    finally:
+        holder = _read_lock(path)
+        if holder is not None and int(holder.get("pid") or 0) == os.getpid():
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +117,7 @@ class CommitOutcome:
     sha: str | None = None
     error: str | None = None
     changed: bool = False
+    files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,54 +127,17 @@ class SessionIntegration:
     role: str
     project: str | None = None
     task_id: str | None = None
-    project_commits: dict[str, str | None] = field(default_factory=dict)
-    project_commit_errors: dict[str, str] = field(default_factory=dict)
+    projects: tuple[str, ...] = ()
     workspace_commit: str | None = None
     workspace_commit_error: str | None = None
-
-
-def project_checkpoint(
-    workspace: Workspace,
-    project: str,
-    *,
-    message: str,
-    author: tuple[str, str] | None = None,
-) -> CommitOutcome:
-    """Commit one project's worktree when VCS is enabled and changed."""
-    if not git_available():
-        return CommitOutcome(attempted=False, error="git not available")
-    git = project_git_for(workspace, project)
-    if git is None:
-        return CommitOutcome(attempted=False)
-    try:
-        git.init()
-        sha = git.commit(message, author=author)
-        return CommitOutcome(attempted=True, sha=sha, changed=sha is not None)
-    except GitError as exc:
-        return CommitOutcome(attempted=True, error=str(exc))
-
-
-def ensure_project_baseline(workspace: Workspace, project: str) -> CommitOutcome:
-    """Ensure a registered project's repo has an initial commit, so its tree is
-    tracked from the moment it is added rather than sitting on an empty branch
-    (the "no commits yet" state seen when a project is never scheduled)."""
-    if not git_available():
-        return CommitOutcome(attempted=False, error="git not available")
-    git = project_git_for(workspace, project)
-    if git is None:
-        return CommitOutcome(attempted=False)
-    try:
-        sha = git.ensure_initial_commit()
-        return CommitOutcome(attempted=True, sha=sha, changed=sha is not None)
-    except GitError as exc:
-        return CommitOutcome(attempted=True, error=str(exc))
+    workspace_files: tuple[str, ...] = ()
 
 
 def _workspace_commit_paths(workspace: Workspace, projects: tuple[str, ...] = ()) -> list[str]:
     """Paths staged by the workspace integration commit.
 
     Stage shared Horizon state plus the scoped project worktrees. Do not stage
-    ``.archon-horizon/vcs`` (project git dirs) or ``.archon-horizon/locks``
+    ``.archon-horizon/vcs`` (the git dir) or ``.archon-horizon/locks``
     (ephemeral leases).
     """
     candidates = [
@@ -120,6 +160,26 @@ def _workspace_commit_paths(workspace: Workspace, projects: tuple[str, ...] = ()
     return sorted(dict.fromkeys(paths))
 
 
+def _commit_trailers(
+    *,
+    run_id: str,
+    session: str,
+    role: str,
+    round_index: int | None,
+    task_id: str | None,
+    projects: tuple[str, ...],
+) -> dict[str, str]:
+    """Machine-queryable provenance appended to the commit message."""
+    return {
+        "Archon-Run": run_id,
+        "Archon-Round": "" if round_index is None else str(round_index),
+        "Archon-Role": role,
+        "Archon-Session": session,
+        "Archon-Task": task_id or "",
+        "Archon-Projects": ",".join(projects),
+    }
+
+
 def integrate_workspace_run(
     workspace: Workspace,
     *,
@@ -127,8 +187,9 @@ def integrate_workspace_run(
     projects: tuple[str, ...] = (),
     message: str | None = None,
     author: tuple[str, str] | None = None,
+    trailers: dict[str, str] | None = None,
 ) -> CommitOutcome:
-    """Commit root workspace state for a completed run or session."""
+    """Commit root workspace state (shared state + scoped project worktrees)."""
     if not git_available():
         return CommitOutcome(attempted=False, error="git not available")
     try:
@@ -139,49 +200,45 @@ def integrate_workspace_run(
             if name in workspace.projects:
                 neutralize_nested_git(workspace.project_path(name))
         with _WORKSPACE_COMMIT_LOCK:
-            git = WorkspaceGit(workspace.root)
-            git.init()
-            # Drop any stale submodule gitlink left from before a project's nested
-            # .git was neutralized, so the commit below re-tracks its files.
-            for name in projects:
-                if name in workspace.projects:
-                    git.unstage_gitlink(workspace.project_path(name).relative_to(workspace.root).as_posix())
-            sha = git.commit(
-                message or f"workspace: integrate run {run_id}",
-                paths=_workspace_commit_paths(workspace, projects),
-                author=author,
-            )
-        return CommitOutcome(attempted=True, sha=sha, changed=sha is not None)
+            with _workspace_commit_queue(workspace):
+                git = WorkspaceGit(workspace.root)
+                git.init()
+                # Drop any stale submodule gitlink left from before a project's nested
+                # .git was neutralized, so the commit below re-tracks its files.
+                for name in projects:
+                    if name in workspace.projects:
+                        git.unstage_gitlink(workspace.project_path(name).relative_to(workspace.root).as_posix())
+                sha = git.commit(
+                    message or f"workspace: integrate run {run_id}",
+                    paths=_workspace_commit_paths(workspace, projects),
+                    author=author,
+                    trailers=trailers,
+                )
+                files = git.files_in_commit(sha) if sha else ()
+        return CommitOutcome(attempted=True, sha=sha, changed=sha is not None, files=files)
     except GitError as exc:
         return CommitOutcome(attempted=True, error=str(exc))
 
 
-def _format_workspace_message(
+def project_checkpoint(
+    workspace: Workspace,
+    project: str,
     *,
-    run_id: str,
-    session: str,
-    role: str,
-    round_index: int | None,
-    task_id: str | None,
-    project_commits: dict[str, str | None],
-) -> str:
-    """Structured ledger message: a scannable subject encoding which step this
-    was (run / round / role / task), plus a body with the per-project shas."""
-    round_tag = f" r{round_index}" if round_index is not None else ""
-    task_tag = f" {task_id}" if task_id else ""
-    subject = f"workspace[{run_id}{round_tag}] {role}{task_tag}: integrate {session}"
-    body = [
-        f"Run: {run_id}",
-        f"Round: {round_index if round_index is not None else '—'}",
-        f"Role: {role}",
-        f"Session: {session}",
-        f"Task: {task_id or '—'}",
-    ]
-    committed = {proj: sha for proj, sha in project_commits.items() if sha}
-    if committed:
-        body.append("Project commits:")
-        body.extend(f"  {proj}: {sha[:10]}" for proj, sha in committed.items())
-    return subject + "\n\n" + "\n".join(body)
+    message: str | None = None,
+    author: tuple[str, str] | None = None,
+) -> CommitOutcome:
+    """Compatibility wrapper for callers that still checkpoint one project.
+
+    The current VCS model has a single workspace ledger, so a "project
+    checkpoint" is just a workspace commit scoped to that project's worktree.
+    """
+    return integrate_workspace_run(
+        workspace,
+        run_id="checkpoint",
+        projects=(project,),
+        message=message or f"project[{project}]: checkpoint",
+        author=author,
+    )
 
 
 def integrate_workspace_session(
@@ -193,42 +250,44 @@ def integrate_workspace_session(
     round_index: int | None = None,
     project: str | None = None,
     task_id: str | None = None,
-    project_commits: dict[str, str | None] | None = None,
-    project_commit_errors: dict[str, str] | None = None,
+    projects: tuple[str, ...] = (),
     commit_workspace: bool = True,
 ) -> SessionIntegration:
     """Integrate one completed session into the workspace ledger.
 
     Commits the shared Horizon state plus the session's scoped project worktrees
-    so a run that never reaches its end still leaves each finished session
-    durably recorded. Pass ``commit_workspace=False`` to skip the commit (e.g. a
-    dry run); the returned outcome then carries no workspace sha.
+    (``projects``) so a run that never reaches its end still leaves each finished
+    session durably recorded, with provenance in git trailers. Pass
+    ``commit_workspace=False`` to skip the commit (e.g. a dry run); the returned
+    outcome then carries no workspace sha.
     """
-    project_commits = project_commits or {}
-    project_commit_errors = project_commit_errors or {}
+    scoped = tuple(dict.fromkeys([*projects, *( (project,) if project else () )]))
 
     workspace_sha = None
     workspace_error = None
+    workspace_files: tuple[str, ...] = ()
     if commit_workspace:
-        scoped_project_names = list(project_commits)
-        if project:
-            scoped_project_names.append(project)
+        round_tag = f" r{round_index}" if round_index is not None else ""
+        task_tag = f" {task_id}" if task_id else ""
+        subject = f"workspace[{run_id}{round_tag}] {role}{task_tag}: integrate {session}"
         workspace_commit = integrate_workspace_run(
             workspace,
             run_id=run_id,
-            projects=tuple(dict.fromkeys(scoped_project_names)),
-            message=_format_workspace_message(
+            projects=scoped,
+            message=subject,
+            author=author_for(role),
+            trailers=_commit_trailers(
                 run_id=run_id,
                 session=session,
                 role=role,
                 round_index=round_index,
                 task_id=task_id,
-                project_commits=project_commits,
+                projects=scoped,
             ),
-            author=author_for(role),
         )
         workspace_sha = workspace_commit.sha
         workspace_error = workspace_commit.error
+        workspace_files = workspace_commit.files
 
     return SessionIntegration(
         run_id=run_id,
@@ -236,8 +295,8 @@ def integrate_workspace_session(
         role=role,
         project=project,
         task_id=task_id,
-        project_commits=project_commits,
-        project_commit_errors=project_commit_errors,
+        projects=scoped,
         workspace_commit=workspace_sha,
         workspace_commit_error=workspace_error,
+        workspace_files=workspace_files,
     )

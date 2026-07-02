@@ -27,51 +27,37 @@ def _identity() -> None:
     os.environ.setdefault("GIT_COMMITTER_EMAIL", "test@example.com")
 
 
-def test_add_project_enables_and_initializes_project_vcs(tmp_path: Path) -> None:
+def test_add_project_records_project_in_workspace_ledger(tmp_path: Path) -> None:
     _identity()
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\nprojects: {}\n", "utf-8")
 
     operations.add_project(tmp_path, "p", "projects/p")
 
     cfg = load_config(tmp_path)
-    workspace = build_workspace(cfg, tmp_path)
-    assert workspace.project("p").vcs.enabled
-    assert workspace.project("p").vcs.git_dir == Path(".archon-horizon/vcs/p.git")
-    git_dir = tmp_path / ".archon-horizon" / "vcs" / "p.git"
-    assert git_dir.exists()
-    # A registered project gets a baseline commit immediately, so it is never
-    # stuck on an empty branch with "no commits yet" if it is never scheduled.
+    build_workspace(cfg, tmp_path)  # config still loads
+    # There is no per-project git any more: the single workspace ledger records
+    # the registration commit instead.
+    assert not (tmp_path / ".archon-horizon" / "vcs" / "p.git").exists()
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+    assert ws_git_dir.exists()
     head = subprocess.run(
-        ["git", "--git-dir", str(git_dir), "rev-parse", "HEAD"],
+        ["git", "--git-dir", str(ws_git_dir), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=False,
     )
     assert head.returncode == 0 and head.stdout.strip()
 
 
-def test_project_checkpoint_and_workspace_session_integration(tmp_path: Path) -> None:
+def test_workspace_session_integration_commits_project_with_trailers(tmp_path: Path) -> None:
     _identity()
     project_dir = tmp_path / "projects" / "p"
     project_dir.mkdir(parents=True)
     workspace = Workspace(
         name="ws",
         root=tmp_path,
-        projects={
-            "p": Project(
-                name="p",
-                path=Path("projects/p"),
-                vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/p.git")),
-            )
-        },
+        projects={"p": Project(name="p", path=Path("projects/p"))},
     )
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
     (project_dir / "Foo.lean").write_text("def foo := 1\n", "utf-8")
-
-    from archon_horizon.vcs.integration import author_for
-
-    checkpoint = project_checkpoint(
-        workspace, "p", message="checkpoint", author=author_for("horizon")
-    )
-    assert checkpoint.changed and checkpoint.sha
 
     integration = integrate_workspace_session(
         workspace,
@@ -81,45 +67,47 @@ def test_project_checkpoint_and_workspace_session_integration(tmp_path: Path) ->
         round_index=1,
         project="p",
         task_id="T-1",
-        project_commits={"p": checkpoint.sha},
+        projects=("p",),
     )
 
-    # No manifest artifacts are written; the session is committed straight into
-    # the workspace ledger instead.
-    assert not (tmp_path / ".archon-horizon" / "manifests").exists()
+    # The session is committed straight into the single workspace ledger.
     assert integration.workspace_commit and integration.workspace_commit_error is None
     ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
     tracked = subprocess.run(
         ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
          "ls-files", "projects/p/Foo.lean"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
+        cwd=tmp_path, capture_output=True, text=True, check=True,
     ).stdout
     assert "projects/p/Foo.lean" in tracked
     assert not (tmp_path / "projects" / "p" / ".git").exists()
     assert not (tmp_path / ".git").exists()  # workspace git is out-of-tree
+    assert not (tmp_path / ".archon-horizon" / "vcs" / "p.git").exists()  # no per-project git
 
-    # The ledger commit subject encodes the step, the body carries the per-project
-    # sha, and the commit is authored as the acting agent (committer stays system).
+    # The commit subject encodes the step, provenance rides as git trailers (so
+    # a session maps to its commit deterministically), and the author is the
+    # acting agent (committer stays the system identity).
     show = subprocess.run(
         ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
-         "show", "-s", "--format=%an%n%s%n%b", "HEAD"],
+         "show", "-s", "--format=%an%n%s", "HEAD"],
         cwd=tmp_path, capture_output=True, text=True, check=True,
     ).stdout
-    author_line, subject, body = show.split("\n", 2)
+    author_line, subject = show.split("\n", 1)
     assert author_line == "Archon Horizon (Horizon)"
-    assert subject == "workspace[0001 r1] horizon T-1: integrate 0001-horizon-T-1"
-    assert f"p: {checkpoint.sha[:10]}" in body
+    assert subject.strip() == "workspace[0001 r1] horizon T-1: integrate 0001-horizon-T-1"
 
-    # The project checkpoint is likewise authored as Horizon.
-    proj_author = subprocess.run(
-        ["git", "--git-dir", str(tmp_path / ".archon-horizon" / "vcs" / "p.git"),
-         "show", "-s", "--format=%an", "HEAD"],
-        cwd=tmp_path, capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    assert proj_author == "Archon Horizon (Horizon)"
+    def _trailer(key: str) -> str:
+        return subprocess.run(
+            ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
+             "show", "-s", f"--format=%(trailers:key={key},valueonly)", "HEAD"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    assert _trailer("Archon-Run") == "0001"
+    assert _trailer("Archon-Round") == "1"
+    assert _trailer("Archon-Role") == "horizon"
+    assert _trailer("Archon-Session") == "0001-horizon-T-1"
+    assert _trailer("Archon-Task") == "T-1"
+    assert _trailer("Archon-Projects") == "p"
 
 
 def test_workspace_integration_excludes_build_and_nested_git_artifacts(tmp_path: Path) -> None:

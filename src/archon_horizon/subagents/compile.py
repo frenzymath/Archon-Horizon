@@ -130,6 +130,24 @@ def _enabled(descriptors: Iterable[SubagentDescriptor]) -> list[SubagentDescript
     return [d for d in descriptors if d.default_enabled]
 
 
+def _prune_ours(dest_dir: Path, keep: Iterable[str], suffix: str) -> None:
+    """Delete our previously-generated native agents that are no longer in the
+    roster, so a removed/renamed descriptor doesn't leave a stale agent the
+    engine still discovers. Only touches files carrying our marker; a
+    hand-authored native agent (no marker) is never deleted."""
+    if not dest_dir.is_dir():
+        return
+    keep_set = set(keep)
+    for path in dest_dir.glob(f"*{suffix}"):
+        if path.stem in keep_set:
+            continue
+        try:
+            if _MARKER in path.read_text("utf-8"):
+                path.unlink()
+        except OSError:
+            continue
+
+
 def compile_for_claude(
     descriptors: Iterable[SubagentDescriptor], harness: HarnessConfig, dest_dir: Path
 ) -> list[str]:
@@ -137,6 +155,7 @@ def compile_for_claude(
     for d in _enabled(descriptors):
         if _write_if_ours(dest_dir / f"{d.name}.md", render_claude_agent(d, harness)):
             written.append(d.name)
+    _prune_ours(dest_dir, {d.name for d in _enabled(descriptors)}, ".md")
     return written
 
 
@@ -148,6 +167,7 @@ def compile_for_codex(
     for d in _enabled(descriptors):
         if _write_if_ours(dest_dir / f"{d.name}.toml", render_codex_agent(d, harness, skills_appendix)):
             written.append(d.name)
+    _prune_ours(dest_dir, {d.name for d in _enabled(descriptors)}, ".toml")
     return written
 
 

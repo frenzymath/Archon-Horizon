@@ -11,6 +11,19 @@ from __future__ import annotations
 
 from typing import Any
 
+# Blueprint environments that represent a formalisation obligation — a statement
+# that should get a ``\lean`` link and eventually a proof. Prose environments
+# (remark, example, notation, convention) carry no obligation, so they must not
+# count toward coverage/"todo" totals nor be offered a Lean/DAG link.
+COUNTABLE_KINDS: frozenset[str] = frozenset(
+    {"theorem", "lemma", "proposition", "corollary", "definition"}
+)
+
+
+def is_countable(node: dict[str, Any]) -> bool:
+    """True when a node is a formalisation obligation (not prose like a remark)."""
+    return str(node.get("kind", "")).lower() in COUNTABLE_KINDS
+
 
 def find_cycle(dag: dict[str, Any]) -> list[str] | None:
     """Return one dependency cycle as an id path (``a -> b -> a``), or None.
@@ -64,15 +77,34 @@ def dag_consistency_issues(dag: dict[str, Any]) -> list[str]:
 
 
 def blueprint_lint_issues(dag: dict[str, Any]) -> list[str]:
-    """Statement-level lint: missing ``\\lean`` links and leanok inconsistencies."""
+    """Statement-level *defects*: soundness problems worth flagging to agents.
+
+    A ``leanok`` node that depends on a not-``leanok`` node is a real
+    inconsistency (a formalised result resting on an unformalised one). Missing
+    ``\\lean`` links are NOT defects — in an in-progress blueprint most nodes are
+    legitimately not yet formalised, so they are reported as coverage (see
+    :func:`blueprint_coverage`) rather than flooding the issue count with
+    hundreds of "no \\lean link" lines that mislead agents into thinking the
+    blueprint is broken."""
     by_id = {n["id"]: n for n in dag.get("nodes", [])}
     issues: list[str] = []
     for node in dag.get("nodes", []):
-        if not node.get("lean"):
-            issues.append(f"{node['id']}: no \\lean link")
         if node.get("leanok"):
             for used in node.get("uses", []):
                 dep = by_id.get(used)
                 if dep is not None and not dep.get("leanok"):
                     issues.append(f"{node['id']}: leanok but depends on not-leanok {used}")
     return issues
+
+
+def blueprint_coverage(dag: dict[str, Any]) -> dict[str, int]:
+    """Formalisation coverage, reported as progress — never as defects.
+
+    Counts only *countable* nodes (theorems/lemmas/defs, …); prose environments
+    like remarks are excluded. ``unlinked`` counts nodes with no ``\\lean`` link
+    (work remaining, not a bug); ``leanok`` counts formalised nodes; ``total``
+    is the countable node count."""
+    nodes = [n for n in dag.get("nodes", []) if is_countable(n)]
+    unlinked = sum(1 for n in nodes if not n.get("lean"))
+    leanok = sum(1 for n in nodes if n.get("leanok"))
+    return {"total": len(nodes), "unlinked": unlinked, "leanok": leanok}

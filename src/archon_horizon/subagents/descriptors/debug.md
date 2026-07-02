@@ -64,7 +64,8 @@ with your diagnosis instead.
 ## Report
 
 Report through the `horizon inbox` CLI (see the `horizon-inbox` skill), in
-Markdown, with `--author` set:
+Markdown, identifying yourself with `--agent debug` (the author is set to your
+dispatching role automatically; do not pass `--author`):
 
 - **Fixed**: open/append a short note — what failed, the root cause, exactly what
   you changed, and the verification (the command now succeeds).

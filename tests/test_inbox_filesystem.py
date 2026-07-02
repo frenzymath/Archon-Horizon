@@ -39,6 +39,31 @@ def test_ids_increment_and_filter_by_kind_and_project(tmp_path: Path) -> None:
     assert provider.list_items(InboxFilter(project="a"))[0].id == "I-0001"
 
 
+def test_filter_by_audience_and_query(tmp_path: Path) -> None:
+    provider = _provider(tmp_path)
+    provider.create_item(
+        InboxDraft(
+            kind=InboxKind.HINT,
+            body="Horizon merge\n\nUse the pullback route.",
+            audience="horizon",
+            scope=InboxScope(projects=("p",)),
+        )
+    )
+    provider.create_item(
+        InboxDraft(
+            kind=InboxKind.INFO,
+            body="Human notice\n\nThe merge was reported.",
+            audience="human",
+        )
+    )
+
+    provider.add_comment("I-0001", "The existing thread already mentions tensoring.")
+
+    filtered = provider.list_items(InboxFilter(audience="horizon", query="tensoring", project="p"))
+
+    assert [item.id for item in filtered] == ["I-0001"]
+
+
 def test_relabel_pending_makes_it_unaccepted(tmp_path: Path) -> None:
     provider = _provider(tmp_path)
     item = provider.create_item(InboxDraft(kind=InboxKind.ISSUE, body="x"))
