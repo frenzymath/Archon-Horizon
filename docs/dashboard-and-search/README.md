@@ -23,6 +23,21 @@ To launch the live dashboard server, run:
 horizon dashboard --host 127.0.0.1 --port 8765
 ```
 
+On a remote server, container, or port-forwarded environment where loopback
+forwarding is unreliable, use:
+
+```bash
+horizon dashboard --public --port 8765
+```
+
+`--public` binds the server to `0.0.0.0` (all IPv4 interfaces). Open the
+dashboard through your tunnel as `http://localhost:8765/`, or directly as
+`http://<server-host>:8765/` when the network and firewall allow it.
+
+`horizon run` starts the same live dashboard by default while a run is active.
+Pass `--host`, `--port`, or `--public` to `horizon run` to control that server,
+or `--no-dashboard` to run without the UI.
+
 The server is implemented in [`server/app.py`](../../src/archon_horizon/server/app.py) (with data assembled by [`server/service.py`](../../src/archon_horizon/server/service.py) and Git/source endpoints in [`server/git_api.py`](../../src/archon_horizon/server/git_api.py) and [`server/source_api.py`](../../src/archon_horizon/server/source_api.py)); the CLI entry point is [`commands/dashboard.py`](../../src/archon_horizon/commands/dashboard.py), and the SPA source lives under [`frontend/`](../../src/archon_horizon/frontend). It provides real-time visualization and management features:
 - **Interactive DAG Viewer**: Explore blueprint dependency graphs rendered with KaTeX and interactive node selection.
 - **Roadmap & Task Tracker**: Monitor ongoing execution runs, inspect step-by-step run logs, and view milestone progress.

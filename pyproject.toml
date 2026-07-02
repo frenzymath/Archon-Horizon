@@ -26,6 +26,9 @@ classifiers = [
 dependencies = [
     "PyYAML>=6",
     "typer>=0.12",
+    # Imported directly by the CLI (custom help formatter, exception handling);
+    # declared explicitly rather than relied on as a Typer transitive dep.
+    "click>=8.1",
     "rich>=13",
     "pyfiglet>=1.0",
 ]
