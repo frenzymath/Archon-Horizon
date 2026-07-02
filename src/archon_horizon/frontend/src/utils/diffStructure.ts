@@ -11,12 +11,15 @@ export interface DiffRenderableLine {
 
 export interface DiffStructureItem {
   id: string;
-  kind: LeanStructureKind | 'hunk';
+  kind: LeanStructureKind | 'hunk' | 'proposition' | 'corollary' | 'definition' | 'conjecture' | 'remark' | 'notation' | 'convention';
   label: string;
   lineLabel: string;
+  rawIndex?: number;
 }
 
 const DECL_RE = /^\s*(lemma|theorem|example|def|instance|class|structure|inductive|abbrev)\s+([^\s:(\[{]+)/;
+const BP_ENV_RE = /\\begin\s*\{(theorem|lemma|proposition|corollary|definition|conjecture|remark|example|notation|convention)\}(?:\s*\[([^\]]+)\])?/;
+const BP_LABEL_RE = /\\label\s*\{([^{}]+)\}/;
 
 export function parseDiffWithStructure(diff: string): {
   lines: DiffRenderableLine[];
@@ -31,7 +34,7 @@ export function parseDiffWithStructure(diff: string): {
   let sorryCount = 0;
   const sorryScannerState = createSorryScannerState();
 
-  for (const line of raw) {
+  for (const [rawIndex, line] of raw.entries()) {
     if (line.startsWith('@@')) {
       const match = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
       if (match) {
@@ -41,7 +44,7 @@ export function parseDiffWithStructure(diff: string): {
       hunkCount += 1;
       const id = `hunk-${hunkCount}`;
       lines.push({ id, type: 'hunk', content: line });
-      items.push({ id, kind: 'hunk', label: `change block ${hunkCount}`, lineLabel: line });
+      items.push({ id, kind: 'hunk', label: `change block ${hunkCount}`, lineLabel: line, rawIndex });
       continue;
     }
     if (line.startsWith('---') || line.startsWith('+++')) continue;
@@ -79,12 +82,19 @@ export function parseDiffWithStructure(diff: string): {
       const name = decl[2];
       const id = `${declKind}-${kind}-${lineNo}-${name}`;
       render.id = id;
-      items.push({ id, kind: declKind, label: name, lineLabel: `${kind} line ${lineNo}` });
+      items.push({ id, kind: declKind, label: name, lineLabel: `${kind} line ${lineNo}`, rawIndex });
+    } else if (analyzable.match(BP_ENV_RE)) {
+      const bpEnv = analyzable.match(BP_ENV_RE);
+      const envKind = bpEnv![1] as DiffStructureItem['kind'];
+      const label = analyzable.match(BP_LABEL_RE)?.[1] ?? bpEnv![2] ?? envKind;
+      const id = `${envKind}-${kind}-${lineNo}-${label}`;
+      render.id = id;
+      items.push({ id, kind: envKind, label, lineLabel: `${kind} line ${lineNo}`, rawIndex });
     } else if (hasSorry) {
       sorryCount += 1;
       const id = `sorry-${kind}-${lineNo}-${sorryCount}`;
       render.id = id;
-      items.push({ id, kind: 'sorry', label: `sorry @ line ${lineNo}`, lineLabel: `${kind} line ${lineNo}` });
+      items.push({ id, kind: 'sorry', label: `sorry @ line ${lineNo}`, lineLabel: `${kind} line ${lineNo}`, rawIndex });
     }
 
     lines.push(render);

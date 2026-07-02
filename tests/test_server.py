@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 
 from archon_horizon.cli import main
+from archon_horizon.commands.dashboard import resolve_dashboard_host
+from archon_horizon.commands.run import RunCommand
 from archon_horizon.runlog import RunLogTree
-from archon_horizon.server.app import create_server, create_server_with_fallback
+from archon_horizon.server.app import create_server, create_server_with_fallback, dashboard_url
 from archon_horizon.server.service import WorkspaceService
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 from archon_horizon.transcript.sink import JsonlTranscriptSink
@@ -83,6 +85,39 @@ def test_service_state_and_inbox_edit(tmp_path: Path) -> None:
     assert {"created", "status"} <= fields
 
 
+def test_task_done_records_history_and_syncs_roadmap(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    service = WorkspaceService(ws)
+
+    service.edit_roadmap("add", id="R-sync", title="Sync target", projects=["ag-main"], author="ground")
+    service.edit_task(
+        "add",
+        id="sync-task",
+        title="Sync task",
+        explanation="Close the linked roadmap item.",
+        projects=["ag-main"],
+        roadmap_refs=["R-sync"],
+        author="human",
+    )
+
+    service.edit_task("status", id="sync-task", status="running", author="human")
+    service.edit_task("status", id="sync-task", status="done", author="human")
+
+    task = next(t for t in service.state()["tasks"] if t["id"] == "sync-task")
+    assert any(
+        h["field"] == "status" and h["from"] == "running" and h["to"] == "done"
+        for h in task["metadata"]["history"]
+    )
+
+    item = next(i for i in service.state()["roadmap"]["items"] if i["id"] == "R-sync")
+    assert item["status"] == "done"
+    assert any(
+        h["field"] == "status" and h["from"] == "active" and h["to"] == "done"
+        for h in item["metadata"]["history"]
+    )
+    assert any("sync-task" in c["body"] and "`done`" in c["body"] for c in item["metadata"]["comments"])
+
+
 def test_http_endpoints(tmp_path: Path) -> None:
     ws = _workspace(tmp_path)
     server = create_server(ws, "127.0.0.1", 0)
@@ -105,6 +140,11 @@ def test_http_endpoints(tmp_path: Path) -> None:
         assert resp.status == 200
         assert json.loads(resp.read())["created"] == "I-0001"
 
+        conn.request("POST", "/api/blueprint/sync", "{}", {"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        assert resp.status == 200
+        assert json.loads(resp.read())["ok"] is True
+
         conn.request("GET", "/")
         resp = conn.getresponse()
         assert resp.status == 200
@@ -112,6 +152,62 @@ def test_http_endpoints(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_dashboard_public_host_resolution() -> None:
+    assert resolve_dashboard_host("127.0.0.1") == "127.0.0.1"
+    assert resolve_dashboard_host("0.0.0.0") == "0.0.0.0"
+    assert resolve_dashboard_host("127.0.0.1", public=True) == "0.0.0.0"
+    assert resolve_dashboard_host("0.0.0.0", public=True) == "0.0.0.0"
+    with pytest.raises(ValueError):
+        resolve_dashboard_host("192.168.1.10", public=True)
+
+
+def test_dashboard_url_uses_browser_reachable_hosts() -> None:
+    assert dashboard_url("127.0.0.1", 8765) == "http://127.0.0.1:8765"
+    assert dashboard_url("0.0.0.0", 8765) == "http://localhost:8765"
+    assert dashboard_url("::", 8765) == "http://[::1]:8765"
+    assert dashboard_url("::1", 8765) == "http://[::1]:8765"
+
+
+def test_run_command_starts_dashboard_server_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 8770)
+
+        def shutdown(self) -> None:
+            calls.append(("shutdown", None))
+
+    def fake_create(root: Path, host: str, port: int, dist_dir: Path | None):
+        calls.append(("create", (root, host, port, dist_dir)))
+        return FakeServer()
+
+    def fake_serve_server(**kwargs: object) -> None:
+        calls.append(("serve", kwargs))
+
+    monkeypatch.setattr("archon_horizon.server.app.create_server_with_fallback", fake_create)
+    monkeypatch.setattr("archon_horizon.server.app.serve_server", fake_serve_server)
+
+    command = RunCommand(tmp_path, dashboard_host="0.0.0.0", dashboard_port=8770)
+    with command._dashboard_server():
+        pass
+
+    assert calls[0][0] == "create"
+    assert calls[0][1][:3] == (tmp_path, "0.0.0.0", 8770)
+    assert any(kind == "serve" for kind, _ in calls)
+    assert ("shutdown", None) in calls
+
+
+def test_run_command_can_disable_dashboard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_create(*args: object, **kwargs: object):
+        raise AssertionError("dashboard should not start")
+
+    monkeypatch.setattr("archon_horizon.server.app.create_server_with_fallback", fail_create)
+
+    command = RunCommand(tmp_path, dashboard=False)
+    with command._dashboard_server():
+        pass
 
 
 def test_server_tries_next_port_when_requested_port_is_busy(tmp_path: Path) -> None:
@@ -157,6 +253,20 @@ def test_service_backfills_inline_subagents_into_session_tree(tmp_path: Path) ->
     assert child["session"] == "0001-general-purpose"
     assert child["meta"]["role"] == "subagent"
     assert child["meta"]["name"] == "general-purpose"
+
+
+def test_service_report_returns_report_and_recommendation(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    run = RunLogTree(ws / ".archon-horizon" / "runs").allocate()
+    session = run.new_session("ground")
+    (session.path / "report.md").write_text("# Report\n\nFinal report.\n", "utf-8")
+    (session.path / "recommendation.md").write_text("# Recommendation\n\nNext agent plan.\n", "utf-8")
+    ref = session.transcript_path.relative_to(ws).as_posix()
+
+    payload = WorkspaceService(ws).report(ref)
+
+    assert payload["markdown"] == "# Report\n\nFinal report.\n"
+    assert payload["recommendation"] == "# Recommendation\n\nNext agent plan.\n"
 
 
 def test_stale_running_session_reads_interrupted_and_surfaces_model(tmp_path: Path) -> None:
@@ -219,3 +329,46 @@ def test_stopped_run_marks_recent_running_session_interrupted(tmp_path: Path) ->
     run_state = WorkspaceService(ws).state()["runs"][0]
     assert run_state["status"] == "interrupted"
     assert run_state["sessions"][0]["status"] == "interrupted"
+
+
+def test_run_status_follows_latest_agentic_session_after_resume(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    run = RunLogTree(ws / ".archon-horizon" / "runs").allocate()
+
+    failed = run.new_session("horizon-R-1")
+    sink = JsonlTranscriptSink(failed.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"role": "horizon"}))
+    sink.emit(TranscriptEvent(TranscriptKind.ERROR, text="first attempt failed"))
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": False}))
+
+    resumed = run.new_session("horizon-R-1")
+    sink = JsonlTranscriptSink(resumed.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"role": "horizon"}))
+    sink.emit(TranscriptEvent(TranscriptKind.TEXT, text="resume fixed it"))
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": True}))
+
+    run_state = WorkspaceService(ws).state()["runs"][0]
+
+    assert [session["status"] for session in run_state["sessions"]] == ["failed", "completed"]
+    assert run_state["status"] == "completed"
+
+
+def test_run_status_ignores_trailing_system_session(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    run = RunLogTree(ws / ".archon-horizon" / "runs").allocate()
+
+    failed = run.new_session("horizon-R-1")
+    sink = JsonlTranscriptSink(failed.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"role": "horizon"}))
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": False}))
+
+    system = run.new_session("system")
+    system.write_meta({"role": "system"})
+    sink = JsonlTranscriptSink(system.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"role": "system"}))
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": True}))
+
+    run_state = WorkspaceService(ws).state()["runs"][0]
+
+    assert [session["status"] for session in run_state["sessions"]] == ["failed", "completed"]
+    assert run_state["status"] == "failed"

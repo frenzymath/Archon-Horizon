@@ -738,6 +738,10 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
   }
   // env
   const isProof = b.name === 'proof';
+  // Prose environments (remark, notation, …) are not formalisation obligations:
+  // they carry no DAG node worth focusing, so a "graph" chip on them just lands
+  // on the DAG page with nothing selected. Suppress the graph/diff chips for them.
+  const isProse = ['remark', 'notation', 'convention', 'example', 'note'].includes(b.name);
   const labelText = ENV_LABELS[b.name] ?? (b.name[0]?.toUpperCase() + b.name.slice(1));
   const klass = `${styles.env} ${styles[`env_${b.name}`] ?? ''} ${isProof ? styles.envProof : ''}`;
   return (
@@ -750,11 +754,11 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
         {b.meta.leanok && <span className={styles.badgeOk} title="\leanok">✓ leanok</span>}
         {b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
         {b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
-        {b.meta.label && ctx.onOpenInGraph && (
+        {b.meta.label && ctx.onOpenInGraph && !isProse && (
           <button className={styles.graphChip} title="Show this node on the DAG page"
             onClick={() => ctx.onOpenInGraph!(b.meta.label!)}>⬡ graph</button>
         )}
-        {b.meta.label && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
+        {b.meta.label && !isProse && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
           <button className={styles.graphChip} title="Open this declaration's Lean file on the Diffs page"
             onClick={() => ctx.onOpenInDiffs!(ctx.diffSlugFor!(b.meta.label!)!)}>± diff</button>
         )}

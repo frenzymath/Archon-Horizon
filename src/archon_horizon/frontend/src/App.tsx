@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getProjects, getReport, getTranscript, getTranscripts, searchDeclarations, getBlueprintChapters, type ProjectStat } from './api';
+import { editInbox, editRoadmap, editTask, getState, getProjects, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, searchDeclarations, getBlueprintChapters, type ProjectStat, type SessionChange, type SessionChangeFile, type RunChanges, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
@@ -17,9 +17,19 @@ const ARCHON_ACCEPT = 'agent-ready';
 const ARCHON_PENDING = 'not-ready';
 const ARCHON_REJECTED = 'rejected';
 const INBOX_KIND_OPTIONS = ['hint', 'issue', 'protection', 'info', 'memory'];
+const INBOX_PROVIDER_OPTIONS = ['local', 'github'];
+const INBOX_STATUS_OPTIONS = ['open', 'completed', 'archived'];
+// Archived items are soft-deleted: hidden until the user selects the filter.
+const INBOX_STATUS_DEFAULT = ['open', 'completed'];
+const INBOX_GATE_OPTIONS = ['accept', 'pending', 'reject', 'clear'];
+const TASK_STATUS_OPTIONS = ['queued', 'running', 'blocked', 'done', 'failed', 'cancelled'];
+const TASK_PRIORITY_OPTIONS = ['urgent', 'high', 'normal', 'low'];
+const ROADMAP_STATUS_OPTIONS = ['active', 'pending', 'blocked', 'done', 'rejected'];
 
 type HorizonState = {
   workspace: string;
+  workspace_root?: string;
+  config_dir?: string;
   projects?: string[];
   roadmap?: { items?: any[] };
   tasks?: any[];
@@ -69,7 +79,7 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
   if (STATIC || !isError) return null;
   return (
     <div className="connection-banner">
-      Cannot reach server - check that <code>horizon serve</code> is running on the current port.
+      Cannot reach server - check that <code>horizon dashboard</code> is running on the current port.
     </div>
   );
 }
@@ -109,7 +119,12 @@ export function App() {
       <header className="header">
         <h1>Archon Horizon</h1>
         <span className="version-badge" title={`Horizon dashboard v${APP_VERSION}`}>v{APP_VERSION}</span>
-        <span className="project-badge" title={state.workspace}>{state.workspace}</span>
+        <span className="project-badge" title={state.workspace_root || state.workspace}>{state.workspace}</span>
+        {state.config_dir && (
+          <span className="project-badge config-badge" title={`Config / state directory: ${state.config_dir}`}>
+            {state.config_dir}
+          </span>
+        )}
         {STATIC && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
         <nav className="header-nav" aria-label="Dashboard">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
@@ -132,7 +147,7 @@ export function App() {
           <Route path="/tasks" element={<TasksPage state={state} reload={reload} />} />
           <Route path="/search" element={<SearchPage state={state} />} />
           <Route path="/blueprint" element={<BlueprintPage state={state} />} />
-          <Route path="/dag" element={<DagPage state={state} />} />
+          <Route path="/dag" element={<DagPage state={state} reload={reload} />} />
           <Route path="/logs" element={<Transcripts state={state} />} />
           <Route path="/transcripts" element={<Navigate to="/logs" replace />} />
           <Route path="/lean" element={<LeanPage state={state} />} />
@@ -153,6 +168,7 @@ function Overview({ state }: PageProps) {
   const githubInbox = state.github_inbox ?? [];
   const activeRoadmap = roadmapItems.filter((item: any) => ['active', 'blocked'].includes(item.status));
   const activeTasks = tasks.filter((task: any) => ['queued', 'running', 'blocked'].includes(task.status));
+  const recentRuns = [...runs].sort(compareRuns).slice(0, 5);
 
   return (
     <div className="page page-narrow">
@@ -169,8 +185,8 @@ function Overview({ state }: PageProps) {
 
       <ProjectsPanel />
 
-      <Panel title="Recent Runs" subtitle="Run logs, rounds, sessions, and transcript links">
-        <RunList runs={runs} />
+      <Panel title="Recent Runs" subtitle="Run logs, rounds, sessions, and transcript links" to="/logs">
+        <RunList runs={recentRuns} />
       </Panel>
 
       <div className="overview-grid">
@@ -253,6 +269,7 @@ function statusColor(status: string) {
     case 'blocked': return 'var(--red)';
     case 'done': return 'var(--green)';
     case 'failed': case 'rejected': case 'cancelled': return 'var(--red)';
+    case 'timed_out': case 'throttled': return 'var(--orange)';
     default: return 'var(--text-muted)';
   }
 }
@@ -288,9 +305,23 @@ function MultiProjectSelect({ value, onChange, projects }: { value: string[]; on
 
 function TasksPage({ state, reload }: PageProps) {
   const tasks = state.tasks ?? [];
+  const [searchParams] = useSearchParams();
+  const focusedTaskId = searchParams.get('task') ?? '';
   const roadmapIds = (state.roadmap?.items ?? []).map((item: any) => item.id);
   const projects = state.projects ?? [];
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  const taskProjectOptions = useMemo(() => {
+    const all = new Set<string>(projects);
+    for (const task of tasks) {
+      for (const project of task.projects ?? task.write_set?.projects ?? (task.project ? [task.project] : [])) {
+        if (project) all.add(project);
+      }
+    }
+    return [...all].sort();
+  }, [projects, tasks]);
+  const [statusFilter, toggleStatusFilter] = useFilterSelection(TASK_STATUS_OPTIONS);
+  const [priorityFilter, togglePriorityFilter] = useFilterSelection(TASK_PRIORITY_OPTIONS);
+  const [projectFilter, toggleProjectFilter] = useFilterSelection(taskProjectOptions);
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -307,9 +338,25 @@ function TasksPage({ state, reload }: PageProps) {
       });
   };
 
+  const focusedTask = focusedTaskId ? tasks.find((task: any) => task.id === focusedTaskId) : null;
+  const filteredTasksBase = tasks
+    .filter((task: any) => statusFilter.has(task.status || 'queued'))
+    .filter((task: any) => priorityFilter.has(task.priority || 'normal'))
+    .filter((task: any) => {
+      if (taskProjectOptions.length === 0) return true;
+      const taskProjects: string[] = task.projects ?? task.write_set?.projects ?? (task.project ? [task.project] : []);
+      return taskProjects.some((project) => projectFilter.has(project));
+    });
+  const filteredTasks = (
+    focusedTask && !filteredTasksBase.some((task: any) => task.id === focusedTaskId)
+      ? [focusedTask, ...filteredTasksBase]
+      : filteredTasksBase
+  ).sort(compareTasks);
+  const taskGroups = groupByDay(filteredTasks, taskActivityAt);
+
   return (
     <div className="page">
-      <Panel title="Tasks" subtitle={`${tasks.length} task${tasks.length === 1 ? '' : 's'}`}>
+      <Panel title="Tasks" subtitle={`${filteredTasks.length}/${tasks.length} task${tasks.length === 1 ? '' : 's'}`}>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
         {!STATIC && (
           <details className="local-create">
@@ -317,11 +364,29 @@ function TasksPage({ state, reload }: PageProps) {
             <TaskComposer runAction={runAction} projects={projects} roadmapIds={roadmapIds} />
           </details>
         )}
+        <div className="filter-stack">
+          <div className="search-facet-group"><span className="search-facet-label">Status</span>
+            <ChipMultiSelect options={TASK_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Task status filter" />
+          </div>
+          <div className="search-facet-group"><span className="search-facet-label">Priority</span>
+            <ChipMultiSelect options={TASK_PRIORITY_OPTIONS} selected={priorityFilter} onToggle={togglePriorityFilter} label="Task priority filter" />
+          </div>
+          {taskProjectOptions.length > 0 && (
+            <div className="search-facet-group"><span className="search-facet-label">Projects</span>
+              <ChipMultiSelect options={taskProjectOptions} selected={projectFilter} onToggle={toggleProjectFilter} label="Task project filter" />
+            </div>
+          )}
+        </div>
         <div className="task-list">
-          {tasks.map((task: any) => (
-            <TaskCard key={task.id} task={task} runAction={runAction} projects={projects} roadmapIds={roadmapIds} />
+          {taskGroups.map((group) => (
+            <section key={group.key} className="day-group">
+              <div className="day-heading"><h3>{group.label}</h3><span>{group.items.length}</span></div>
+              {group.items.map((task: any) => (
+                <TaskCard key={task.id} task={task} runAction={runAction} projects={projects} roadmapIds={roadmapIds} focused={task.id === focusedTaskId} />
+              ))}
+            </section>
           ))}
-          {tasks.length === 0 && <p className="empty">No tasks.</p>}
+          {filteredTasks.length === 0 && <p className="empty">No tasks match the current filters.</p>}
         </div>
       </Panel>
     </div>
@@ -330,6 +395,68 @@ function TasksPage({ state, reload }: PageProps) {
 
 function splitList(value: string) {
   return value.split(',').map((part) => part.trim()).filter(Boolean);
+}
+
+function useFilterSelection(options: string[], initialSelected?: string[]) {
+  const sig = options.join('\0');
+  const previousOptions = useRef<string[]>(options);
+  // Default to all options selected, unless an explicit initial subset is given
+  // (e.g. inbox: hide 'archived' by default until the user opts in).
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(initialSelected ?? options));
+
+  useEffect(() => {
+    setSelected((prev) => {
+      const oldOptions = previousOptions.current;
+      const oldSet = new Set(oldOptions);
+      const allowed = new Set(options);
+      const wasAllSelected = oldOptions.length === 0 || oldOptions.every((option) => prev.has(option));
+      const next = new Set([...prev].filter((option) => allowed.has(option)));
+      for (const option of options) {
+        if (!oldSet.has(option) || wasAllSelected) next.add(option);
+      }
+      previousOptions.current = options;
+      return next;
+    });
+  }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggle = (value: string) => setSelected((prev) => {
+    const next = new Set(prev);
+    next.has(value) ? next.delete(value) : next.add(value);
+    return next;
+  });
+
+  return [selected, toggle] as const;
+}
+
+function dayStamp(value: string | undefined) {
+  if (!value) return { key: 'undated', label: 'Undated' };
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return { key: 'undated', label: 'Undated' };
+  const key = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  return {
+    key,
+    label: date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }),
+  };
+}
+
+function groupByDay<T>(items: T[], getDate: (item: T) => string | undefined) {
+  const groups: { key: string; label: string; items: T[] }[] = [];
+  const byKey = new Map<string, { key: string; label: string; items: T[] }>();
+  for (const item of items) {
+    const stamp = dayStamp(getDate(item));
+    let group = byKey.get(stamp.key);
+    if (!group) {
+      group = { ...stamp, items: [] };
+      byKey.set(stamp.key, group);
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  return groups;
 }
 
 function TaskComposer({ runAction, projects, roadmapIds }: { runAction: any; projects: string[]; roadmapIds: string[] }) {
@@ -391,7 +518,7 @@ function TaskComposer({ runAction, projects, roadmapIds }: { runAction: any; pro
   );
 }
 
-function TaskCard({ task, runAction, projects = [], roadmapIds = [] }: { task: any; runAction?: any; projects?: string[]; roadmapIds?: string[] }) {
+function TaskCard({ task, runAction, projects = [], roadmapIds = [], focused = false }: { task: any; runAction?: any; projects?: string[]; roadmapIds?: string[]; focused?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title || task.objective || task.id);
   const [explanation, setExplanation] = useState(task.explanation || task.objective || '');
@@ -449,7 +576,7 @@ function TaskCard({ task, runAction, projects = [], roadmapIds = [] }: { task: a
   };
 
   return (
-    <details className="task-card" open={editing}>
+    <details className={`task-card${focused ? ' focused' : ''}`} open={editing || focused}>
       <summary style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <div className="task-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
           {!STATIC && runAction ? (
@@ -608,7 +735,7 @@ function ChipMultiSelect({ options, selected, onToggle, label }: { options: stri
   return (
     <div className="search-facet" aria-label={label}>
       {options.map((opt) => (
-        <button key={opt} type="button" className={`search-facet-chip ${selected.has(opt) ? 'on' : ''}`} onClick={() => onToggle(opt)}>{opt}</button>
+        <button key={opt} type="button" className={`search-facet-chip ${selected.has(opt) ? 'on' : ''}`} onClick={() => onToggle(opt)}>{filterLabel(opt)}</button>
       ))}
     </div>
   );
@@ -726,8 +853,15 @@ function RoadmapPage({ state, reload }: PageProps) {
   const items = state.roadmap?.items ?? [];
   const allProjects = state.projects || [];
 
-  const [projectFilter, setProjectFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const roadmapProjectOptions = useMemo(() => {
+    const all = new Set<string>(allProjects);
+    for (const item of items) {
+      for (const project of (item.projects?.length ? item.projects : ['Uncategorized'])) all.add(project);
+    }
+    return [...all].sort();
+  }, [allProjects, items]);
+  const [projectFilter, toggleProjectFilter] = useFilterSelection(roadmapProjectOptions);
+  const [statusFilter, toggleStatusFilter] = useFilterSelection(ROADMAP_STATUS_OPTIONS);
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -748,8 +882,8 @@ function RoadmapPage({ state, reload }: PageProps) {
 
   const itemProjects = (i: any): string[] => (i.projects?.length ? i.projects : ['Uncategorized']);
   const filteredItems = items.filter((i: any) => {
-    if (projectFilter !== 'all' && !itemProjects(i).includes(projectFilter)) return false;
-    if (statusFilter !== 'all' && i.status !== statusFilter) return false;
+    if (!itemProjects(i).some((project) => projectFilter.has(project))) return false;
+    if (!statusFilter.has(i.status || 'active')) return false;
     return true;
   });
   // An item shared across projects appears under each of its project groups.
@@ -764,19 +898,15 @@ function RoadmapPage({ state, reload }: PageProps) {
             <RoadmapComposer runAction={runAction} projects={allProjects} />
           </details>
         )}
-        <div className="filters">
-          <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}>
-            <option value="all">All projects</option>
-            {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="all">All statuses</option>
-            <option value="active">Active</option>
-            <option value="pending">Pending</option>
-            <option value="blocked">Blocked</option>
-            <option value="done">Done</option>
-            <option value="rejected">Rejected</option>
-          </select>
+        <div className="filter-stack">
+          {roadmapProjectOptions.length > 0 && (
+            <div className="search-facet-group"><span className="search-facet-label">Projects</span>
+              <ChipMultiSelect options={roadmapProjectOptions} selected={projectFilter} onToggle={toggleProjectFilter} label="Roadmap project filter" />
+            </div>
+          )}
+          <div className="search-facet-group"><span className="search-facet-label">Status</span>
+            <ChipMultiSelect options={ROADMAP_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Roadmap status filter" />
+          </div>
         </div>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
         <div className="roadmap-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -841,15 +971,22 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
 function InboxPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [query, setQuery] = useState('');
-  const [providerFilter, setProviderFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [gateFilter, setGateFilter] = useState('all');
+  const [providerFilter, toggleProviderFilter] = useFilterSelection(INBOX_PROVIDER_OPTIONS);
+  const [statusFilter, toggleStatusFilter] = useFilterSelection(INBOX_STATUS_OPTIONS, INBOX_STATUS_DEFAULT);
+  const [gateFilter, toggleGateFilter] = useFilterSelection(INBOX_GATE_OPTIONS);
+  const [kindFilter, toggleKindFilter] = useFilterSelection(INBOX_KIND_OPTIONS);
   const providers = state.inbox_providers ?? {};
   const github = providers.github;
   const allItems = [...(state.local_inbox ?? []), ...(state.github_inbox ?? [])];
+  const audienceOptions = useMemo(() => {
+    const values = new Set(allItems.map((item) => String(item.audience || 'general')));
+    return ['general', ...[...values].filter((value) => value !== 'general').sort()];
+  }, [allItems]);
+  const [audienceFilter, toggleAudienceFilter] = useFilterSelection(audienceOptions);
   const items = allItems
-    .filter((item) => matchesInboxFilters(item, { query, providerFilter, statusFilter, gateFilter }))
+    .filter((item) => matchesInboxFilters(item, { query, providerFilter, statusFilter, gateFilter, kinds: kindFilter, audienceFilter }))
     .sort(compareInboxItems);
+  const itemGroups = groupByDay(items, inboxActivityAt);
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -875,24 +1012,23 @@ function InboxPage({ state, reload }: PageProps) {
         <div className="inbox-topbar">
           <div className="inbox-searchbar">
             <input value={query} placeholder="Search inbox..." onChange={(event) => setQuery(event.target.value)} />
-            <select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} aria-label="Provider filter">
-              <option value="all">All sources</option>
-              <option value="local">Local</option>
-              <option value="github">GitHub</option>
-            </select>
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Status filter">
-              <option value="all">All states</option>
-              <option value="open">Open</option>
-              <option value="completed">Closed</option>
-              <option value="archived">Archived</option>
-            </select>
-            <select value={gateFilter} onChange={(event) => setGateFilter(event.target.value)} aria-label="Agent label filter">
-              <option value="all">All labels</option>
-              <option value="accept">Agent-ready</option>
-              <option value="pending">Not-ready</option>
-              <option value="reject">Rejected</option>
-              <option value="clear">Unlabeled</option>
-            </select>
+          </div>
+          <div className="inbox-filterbar">
+            <div className="search-facet-group"><span className="search-facet-label">Sources</span>
+              <ChipMultiSelect options={INBOX_PROVIDER_OPTIONS} selected={providerFilter} onToggle={toggleProviderFilter} label="Inbox source filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">State</span>
+              <ChipMultiSelect options={INBOX_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Inbox state filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">Labels</span>
+              <ChipMultiSelect options={INBOX_GATE_OPTIONS} selected={gateFilter} onToggle={toggleGateFilter} label="Inbox label filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">To</span>
+              <ChipMultiSelect options={audienceOptions} selected={audienceFilter} onToggle={toggleAudienceFilter} label="Inbox audience filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">Type</span>
+              <ChipMultiSelect options={INBOX_KIND_OPTIONS} selected={kindFilter} onToggle={toggleKindFilter} label="Inbox type filter" />
+            </div>
           </div>
           <button
             onClick={() => runAction({ action: 'sync', provider: 'github' }, 'GitHub inbox synced.')}
@@ -914,13 +1050,18 @@ function InboxPage({ state, reload }: PageProps) {
           </div>
         )}
         <div className="inbox-list">
-          {items.map((item) => (
-            <InboxCard
-              key={`${item.provider}-${item.id}`}
-              item={item}
-              providers={providers}
-              runAction={runAction}
-            />
+          {itemGroups.map((group) => (
+            <section key={group.key} className="day-group inbox-day-group">
+              <div className="day-heading"><h3>{group.label}</h3><span>{group.items.length}</span></div>
+              {group.items.map((item) => (
+                <InboxCard
+                  key={`${item.provider}-${item.id}`}
+                  item={item}
+                  providers={providers}
+                  runAction={runAction}
+                />
+              ))}
+            </section>
           ))}
           {items.length === 0 && <p className="empty inbox-empty">No inbox items match the current filters.</p>}
         </div>
@@ -996,6 +1137,7 @@ function InboxCard({
   const { title, body } = inboxTitleAndBody(item);
   const itemNumber = item.metadata?.number ? `#${item.metadata.number}` : item.id;
   const author = inboxAuthor(item);
+  const agent = inboxAgent(item);
   const itemStatus = (item.status === 'archived' || item.status === 'closed') ? 'completed' : item.status;
   const [visibleKind, setVisibleKind] = useState(item.kind);
   const [visibleStatus, setVisibleStatus] = useState(itemStatus);
@@ -1012,6 +1154,14 @@ function InboxCard({
   const deleteLocal = () => {
     if (!window.confirm(`Delete local inbox item ${item.id}? This cannot be undone.`)) return;
     runAction({ action: 'delete', provider: 'local', id: item.id }, 'Local inbox item deleted.');
+  };
+
+  const isArchived = item.status === 'archived';
+  const toggleArchive = () => {
+    runAction(
+      { action: isArchived ? 'unarchive' : 'archive', provider: item.provider, id: item.id },
+      isArchived ? 'Inbox item unarchived.' : 'Inbox item archived (hidden by default).',
+    );
   };
 
   const updateKind = (nextKind: string) => {
@@ -1073,7 +1223,7 @@ function InboxCard({
                 <option className="state-open" value="open">open</option>
                 <option className="state-completed" value="completed">closed</option>
               </select>
-            ) : <Status value={item.status} />}
+            ) : <Status value={normalizedInboxStatus(item.status)} label={filterLabel(normalizedInboxStatus(item.status))} />}
             {editable && caps.has('label') ? (
               <select className={`chip-select gate ${visibleGate}`} value={visibleGate} onClick={stop} onChange={(event) => updateGate(event.target.value)} aria-label="Agent label">
                 <option className="gate-accept" value="accept">agent-ready</option>
@@ -1082,16 +1232,17 @@ function InboxCard({
                 <option className="gate-clear" value="clear">unlabeled</option>
               </select>
             ) : <Status value={gate} label={gateLabel(gate)} />}
-            {sourceUrl ? (
-              <a className="issue-title" href={sourceUrl} target="_blank" rel="noreferrer" onClick={stop}><InlineMarkdown content={title} /></a>
-            ) : (
-              <span className="issue-title"><InlineMarkdown content={title} /></span>
-            )}
-            {author && <span className="author-tag">by {author}</span>}
+            <span className="issue-title"><InlineMarkdown content={title} /></span>
+            {author && <span className="author-tag">by {author}{agent && <span className="agent-tag"> · {agent}</span>}</span>}
           </div>
           <div className="issue-title-actions">
             {comments.length > 0 && (
               <span className="comment-count" title={`${comments.length} comment${comments.length === 1 ? '' : 's'}`}>{comments.length}</span>
+            )}
+            {editable && (
+              <button className="text-action" onClick={(event) => { stop(event); toggleArchive(); }} title={isArchived ? 'Restore from archive' : 'Archive (soft-delete: kept but hidden by default)'}>
+                {isArchived ? 'Unarchive' : 'Archive'}
+              </button>
             )}
             {editable && item.provider === 'local' && (
               <button className="icon-danger" onClick={(event) => { stop(event); deleteLocal(); }} title="Delete local item" aria-label="Delete local item"><TrashIcon /></button>
@@ -1103,7 +1254,7 @@ function InboxCard({
           <div className="issue-body">
             <div className="issue-meta">
               <span>{itemNumber}</span>
-              {author && <span>by {author}</span>}
+              {author && <span>by {author}{agent ? ` · ${agent}` : ''}</span>}
               {item.audience && <span className="audience-chip" title="Who this item is addressed to">to {item.audience}</span>}
               <ProvenanceChip provenance={item.metadata?.provenance} />
               <span>opened {formatDate(item.created_at)}</span>
@@ -1466,13 +1617,56 @@ function ProvenanceChip({ provenance }: { provenance: any }) {
 function Transcripts({ state }: { state?: any }) {
   const runs = state?.runs ?? [];
   // Newest run first, so an in-progress run is at the top of the sidebar.
-  const orderedRuns = [...runs].reverse();
+  const orderedRuns = [...runs].sort(compareRuns);
   const [events, setEvents] = useState<any[] | null>(null);
   const [report, setReport] = useState<string>('');
+  const [recommendation, setRecommendation] = useState<string>('');
   const [selected, setSelected] = useState<string>('');
+  const [changes, setChanges] = useState<RunChanges | null>(null);
+  const [workingChange, setWorkingChange] = useState<SessionChange | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const selectedSession = useMemo(() => findSessionByRef(runs, selected), [runs, selected]);
   const selectedRun = useMemo(() => findRunBySessionRef(runs, selected), [runs, selected]);
   const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Load the deterministic per-session change view for the selected run (diff +
+  // sorry delta computed server-side from the ledger). Refetched when the run
+  // changes; the payload is small and static-mode reads it from a precomputed file.
+  const selectedRunId = selectedRun?.id;
+  useEffect(() => {
+    if (!selectedRunId) { setChanges(null); return; }
+    let cancelled = false;
+    getRunChanges(selectedRunId)
+      .then((c) => { if (!cancelled) setChanges(c); })
+      .catch(() => { if (!cancelled) setChanges(null); });
+    return () => { cancelled = true; };
+  }, [selectedRunId]);
+  const committedChange = useMemo(
+    () => changes?.sessions.find((s) => s.session === selectedSession?.session),
+    [changes, selectedSession],
+  );
+  // A running session hasn't committed yet: show the live working-tree diff
+  // (current uncommitted state vs the run's last committed session) instead,
+  // polled while it stays running.
+  const sessionRunning = selectedSession?.status === 'running';
+  useEffect(() => {
+    if (!selectedRunId || !sessionRunning) { setWorkingChange(null); return; }
+    let cancelled = false;
+    const load = () => {
+      getWorkingChanges(selectedRunId)
+        .then((c) => { if (!cancelled) setWorkingChange({ ...c, session: selectedSession?.session }); })
+        .catch(() => { if (!cancelled) setWorkingChange(null); });
+    };
+    load();
+    const id = setInterval(load, 4000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [selectedRunId, sessionRunning, selectedSession?.session]);
+  const sessionChange = sessionRunning ? (workingChange ?? undefined) : committedChange;
 
   // Deep-link / selection: keep `selected` in sync with the URL.
   useEffect(() => {
@@ -1482,11 +1676,23 @@ function Transcripts({ state }: { state?: any }) {
   // Live-tail the open transcript + its report: fetch on select, then poll so
   // new events and the final report appear without a manual page refresh.
   useEffect(() => {
-    if (!selected) { setEvents(null); setReport(''); return; }
+    if (!selected) { setEvents(null); setReport(''); setRecommendation(''); return; }
     let cancelled = false;
     const load = () => {
       getTranscript(selected).then((e) => { if (!cancelled) setEvents(e); }).catch(() => { if (!cancelled) setEvents([]); });
-      getReport(selected).then((r) => { if (!cancelled) setReport(r?.markdown ?? ''); }).catch(() => { if (!cancelled) setReport(''); });
+      getReport(selected)
+        .then((r) => {
+          if (!cancelled) {
+            setReport(r?.markdown ?? '');
+            setRecommendation(r?.recommendation ?? '');
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setReport('');
+            setRecommendation('');
+          }
+        });
     };
     load();
     const id = setInterval(load, 3000);
@@ -1503,7 +1709,7 @@ function Transcripts({ state }: { state?: any }) {
             <RunGroup key={run.id} run={run} selected={selected} onSelect={(ref) => {
               setSelected(ref);
               setSearchParams({ ref });
-            }} />
+            }} now={now} />
           ))}
         </div>
       </aside>
@@ -1511,9 +1717,12 @@ function Transcripts({ state }: { state?: any }) {
         events={events}
         harnesses={state?.harnesses ?? {}}
         report={report}
+        recommendation={recommendation}
         run={selectedRun}
         selected={selected}
         session={selectedSession}
+        change={sessionChange}
+        changesRunId={selectedRunId}
       />
     </div>
   );
@@ -1537,6 +1746,37 @@ function subagentLabel(event: any): string {
 type LogGroup =
   | { sub: false; item: { event: any; idx: number } }
   | { sub: true; id: string; label: string; items: { event: any; idx: number }[] };
+
+function sumUsage(usages: any[]) {
+  let hasCost = false;
+  const total = usages.reduce((acc, usage) => {
+    if (!usage) return acc;
+    const values = usageNumbers(usage);
+    acc.tokens_in += values.tokensIn;
+    acc.tokens_out += values.tokensOut;
+    acc.cached_tokens_in += values.cachedIn;
+    acc.reasoning_tokens_out += values.reasoningOut;
+    if (values.cost !== null) {
+      acc.cost_usd += values.cost;
+      hasCost = true;
+    }
+    return acc;
+  }, {
+    tokens_in: 0,
+    tokens_out: 0,
+    cached_tokens_in: 0,
+    reasoning_tokens_out: 0,
+    cost_usd: 0,
+  });
+  return {
+    ...total,
+    cost_usd: hasCost ? total.cost_usd : null,
+  };
+}
+
+function subagentGroupUsage(items: { event: any; idx: number }[]) {
+  return sumUsage(items.map(({ event }) => event.usage ?? (event.kind === 'usage' ? event.data : null)));
+}
 
 function groupSubagents(ordered: { event: any; idx: number }[] | null | undefined): LogGroup[] {
   // Collect ALL events sharing a subagent id into one sublog placed at the id's
@@ -1566,20 +1806,310 @@ function groupSubagents(ordered: { event: any; idx: number }[] | null | undefine
   return groups;
 }
 
+// A signed count with a +/− sign, coloured green when it means progress.
+function Delta({ value, goodWhenNegative = false }: { value: number; goodWhenNegative?: boolean }) {
+  const good = goodWhenNegative ? value < 0 : value > 0;
+  const cls = value === 0 ? 'zero' : good ? 'good' : 'bad';
+  return <span className={`delta ${cls}`}>{value > 0 ? `+${value}` : value === 0 ? '±0' : `−${Math.abs(value)}`}</span>;
+}
+
+// An "after (Δ)" stat, e.g. 6 (+1) — the resulting value with its signed change.
+function AfterDelta({ after, delta, goodWhenNegative = false }: { after: number; delta: number; goodWhenNegative?: boolean }) {
+  return (
+    <span className="after-delta">
+      <strong>{after}</strong>
+      {delta !== 0 && <> (<Delta value={delta} goodWhenNegative={goodWhenNegative} />)</>}
+    </span>
+  );
+}
+
+const DECL_KIND_LABELS: Record<string, string> = {
+  theorem: 'thm',
+  proposition: 'prop',
+  corollary: 'cor',
+  definition: 'def',
+  lemma: 'lemma',
+  def: 'def',
+  abbrev: 'abbrev',
+  instance: 'inst',
+  structure: 'struct',
+  inductive: 'ind',
+  class: 'class',
+  example: 'ex',
+  conjecture: 'conj',
+  remark: 'rem',
+  notation: 'notn',
+  convention: 'conv',
+};
+
+const DECL_KIND_ORDER = [
+  'theorem', 'lemma', 'proposition', 'corollary', 'definition', 'def',
+  'abbrev', 'instance', 'structure', 'inductive', 'class', 'example',
+  'conjecture', 'remark', 'notation', 'convention',
+];
+
+function declEntries(delta?: Record<string, number>) {
+  if (!delta) return [];
+  return Object.entries(delta)
+    .filter(([, value]) => value !== 0)
+    .sort(([a], [b]) => {
+      const ai = DECL_KIND_ORDER.indexOf(a);
+      const bi = DECL_KIND_ORDER.indexOf(b);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      return a.localeCompare(b);
+    });
+}
+
+function DeclarationDelta({ delta, compact = false }: { delta?: Record<string, number>; compact?: boolean }) {
+  const entries = declEntries(delta);
+  if (!entries.length) return null;
+  return (
+    <span className={`decl-delta ${compact ? 'compact' : ''}`} title="Declaration/environment count changes">
+      {entries.map(([kind, value]) => (
+        <span key={kind} className="decl-delta-item">
+          <Delta value={value} /> {DECL_KIND_LABELS[kind] ?? kind}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function GitUnifiedDiff({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <pre className="change-diff"><code>{lines.map((line, i) => {
+      const cls = line.startsWith('+') && !line.startsWith('+++') ? 'add'
+        : line.startsWith('-') && !line.startsWith('---') ? 'del'
+        : line.startsWith('@@') ? 'hunk'
+        : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('+++') || line.startsWith('---') ? 'meta'
+        : '';
+      return <div key={i} className={`diff-line ${cls}`}>{line || ' '}</div>;
+    })}</code></pre>
+  );
+}
+
+// One file row: click the name to lazily load and expand its diff. Only the
+// base file name is shown (paths are often very long); hover reveals the path.
+function FileChangeRow({ runId, session, file, showComments, initial, worktree }: {
+  runId: string; session: string; file: SessionChangeFile; showComments: boolean; initial?: boolean; worktree?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [diff, setDiff] = useState<FileDiff | null>(null);
+  const before = showComments ? file.loc_before ?? 0 : file.loc_code_before ?? 0;
+  const after = showComments ? file.loc_after ?? 0 : file.loc_code_after ?? 0;
+  const name = file.path.split('/').pop() || file.path;
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && diff === null) {
+      getSessionFileDiff(runId, session, file.path, worktree).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
+    }
+  };
+  return (
+    <>
+      <tr className={open ? 'change-row open' : 'change-row'}>
+        <td className="change-file">
+          <button className="change-file-btn" onClick={toggle} title={file.path}>
+            <span className="change-caret">{open ? '▾' : '▸'}</span>
+            <span className="change-fname">{name}</span>
+            {/* Suppress "new" on the run's initial snapshot, where every file is trivially new. */}
+            {!initial && file.added && <span className="file-tag added">new</span>}
+            {file.deleted && <span className="file-tag deleted">del</span>}
+            <DeclarationDelta delta={file.decl_delta} compact />
+          </button>
+        </td>
+        {file.category === 'lean' && (
+          <td className="change-sorry">
+            <AfterDelta after={file.sorry_after ?? 0} delta={file.sorry_delta ?? 0} goodWhenNegative /> sorry
+          </td>
+        )}
+        <td className="change-loc"><AfterDelta after={after} delta={after - before} /> {showComments ? 'loc' : 'code'}</td>
+        <td className="change-churn muted" title="raw line churn (git)"><span className="delta good">+{file.add ?? 0}</span>/<span className="delta bad">−{file.del ?? 0}</span></td>
+      </tr>
+      {open && (
+        <tr className="change-diff-row">
+          <td colSpan={file.category === 'lean' ? 4 : 3}>
+            {diff === null ? <p className="empty">Loading diff…</p>
+              : !diff.available ? <p className="empty">Diff unavailable (no VCS history for this session).</p>
+              : <GitUnifiedDiff text={diff.diff} />}
+            {diff?.truncated && <p className="empty">Diff truncated (large file).</p>}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// Deterministic per-session change view: what the session's ledger commit
+// changed, per file (LOC before→after, sorries, clickable diff), read straight
+// from git — not an AI report. Lean and blueprint files get their own tabs.
+const EMPTY_CHANGE_ROLLUP = {
+  files: 0,
+  add: 0,
+  del: 0,
+  loc_after: 0,
+  loc_code_after: 0,
+  loc_delta: 0,
+  loc_code_delta: 0,
+  sorry_after: 0,
+  sorry_delta: 0,
+};
+
+function changeRollup(change: SessionChange, key: 'lean' | 'blueprint') {
+  const roll = (change as any)[key] ?? {};
+  const merged = { ...EMPTY_CHANGE_ROLLUP, ...roll };
+  if (key === 'lean') {
+    return {
+      ...merged,
+      files: roll.files ?? change.lean_files_changed ?? merged.files,
+      loc_delta: roll.loc_delta ?? change.loc_add ?? merged.loc_delta,
+      loc_code_delta: roll.loc_code_delta ?? change.loc_add ?? merged.loc_code_delta,
+      sorry_delta: roll.sorry_delta ?? change.sorry_delta ?? merged.sorry_delta,
+    };
+  }
+  return merged;
+}
+
+// One-line caveat about how faithfully the diff attributes files to this session.
+function attributionNote(change: SessionChange): string {
+  if (change.worktree) return 'Live working-tree view — current uncommitted changes vs the run\'s last committed session.';
+  // Committed sessions diff against the commit's git parent (the ledger state
+  // right before it) — exactly what that commit changed. Still approximate
+  // because the ledger commits the whole scoped tree.
+  return 'This is what the session\'s commit changed vs the previous ledger commit. Attribution is approximate: a session commits its whole scoped tree, so a file here isn\'t proof this session authored it (concurrent tasks, manual edits, or commit order can shift it).';
+}
+
+function SessionChanges({ change, runId }: {
+  change: SessionChange; runId: string;
+}) {
+  const [tab, setTab] = useState<'lean' | 'blueprint'>('lean');
+  const [showComments, setShowComments] = useState(true);
+  const scopeFiles = change.scope_files ?? [];
+  const [onlyScoped, setOnlyScoped] = useState(scopeFiles.length > 0);
+  const leanRoll = changeRollup(change, 'lean');
+  const blueprintRoll = changeRollup(change, 'blueprint');
+  const filesAll = change.files ?? [];
+  const otherCount = change.other_count ?? 0;
+  const initial = Boolean(change.initial);
+  const worktree = Boolean(change.worktree);
+  const inScope = (path: string) => scopeFiles.some((f) => path === f || path.endsWith(`/${f}`) || path.endsWith(f));
+  const hasBlueprint = blueprintRoll.files > 0;
+  const active = (!hasBlueprint || tab === 'lean') ? 'lean' : 'blueprint';
+  const roll = active === 'lean' ? leanRoll : blueprintRoll;
+  let files = filesAll.filter((f) => f.category === active);
+  if (onlyScoped && scopeFiles.length > 0) files = files.filter((f) => inScope(f.path));
+
+  return (
+    <details className="log-panel change-panel" open>
+      <summary>
+        {worktree ? 'Changes (live)' : 'Changes'}
+        <span className="change-scorecard-col">
+          <span className="change-scorecard">
+            {change.available ? (
+              <>
+                {active === 'lean' && (
+                  <span className="change-stat" title="Open sorries after this session (change)">
+                    <AfterDelta after={roll.sorry_after} delta={roll.sorry_delta} goodWhenNegative /> sorry
+                  </span>
+                )}
+                <span className="change-stat" title={showComments ? 'total lines after (change)' : 'code lines after (change)'}>
+                  <AfterDelta after={showComments ? roll.loc_after : roll.loc_code_after} delta={showComments ? roll.loc_delta : roll.loc_code_delta} /> {showComments ? 'loc' : 'code'}
+                </span>
+                <span className="change-stat muted" title="raw line churn (git)"><span className="delta good">+{roll.add}</span>/<span className="delta bad">−{roll.del}</span></span>
+                <span className="change-stat">{roll.files} file{roll.files === 1 ? '' : 's'}</span>
+              </>
+            ) : (change as any).reason === 'no-changes' ? (
+              <span className="change-stat muted">No file changes in this session.</span>
+            ) : (
+              <span className="change-stat muted">{filesAll.length} file{filesAll.length === 1 ? '' : 's'} changed · diff unavailable (no VCS history)</span>
+            )}
+          </span>
+          {change.available && <DeclarationDelta delta={roll.decl_delta} />}
+        </span>
+      </summary>
+
+      <div className="change-controls">
+        {hasBlueprint && (
+          <div className="change-tabs">
+            <button className={active === 'lean' ? 'on' : ''} onClick={() => setTab('lean')}>Lean ({leanRoll.files})</button>
+            <button className={active === 'blueprint' ? 'on' : ''} onClick={() => setTab('blueprint')}>Blueprint ({blueprintRoll.files})</button>
+          </div>
+        )}
+        <label className="change-toggle" title="Count comment/blank lines in the LOC figures (raw churn always includes them)">
+          <input type="checkbox" checked={showComments} onChange={(e) => setShowComments(e.target.checked)} /> count comments in LOC
+        </label>
+        {scopeFiles.length > 0 && (
+          <label className="change-toggle" title={`Show only the files the task declared it would write:\n${scopeFiles.join('\n')}`}>
+            <input type="checkbox" checked={onlyScoped} onChange={(e) => setOnlyScoped(e.target.checked)} /> only expected files
+          </label>
+        )}
+        {otherCount > 0 && (
+          <span className="change-other muted" title="Shared workspace state committed alongside the code (events log, roadmap, config…); excluded from the code stats">
+            +{otherCount} shared-state file{otherCount === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
+
+      {change.available && <p className="change-attr-note" title={attributionNote(change)}>ⓘ {attributionNote(change)}</p>}
+      {change.commits && change.commits.length > 0 && (
+        <div className="change-commits">
+          {change.commits.map((c) => (
+            <div key={c.sha} className="change-commit" title={c.sha}>
+              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
+              <span className="change-commit-msg">{c.subject}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {initial && (
+        <p className="change-initial-note">Initial snapshot — no prior commit to compare against, so these are the current contents.</p>
+      )}
+
+      {files.length === 0 ? (
+        <p className="empty">{change.available
+          ? (onlyScoped && scopeFiles.length > 0 ? `No expected ${active} files changed (toggle off "only expected files" to see all).` : `No ${active} files changed in this session.`)
+          : 'No diff to show.'}</p>
+      ) : (
+        <table className="change-table">
+          <tbody>
+            {files.map((f) => (
+              <FileChangeRow
+                key={f.path}
+                runId={runId}
+                session={change.session}
+                file={f}
+                showComments={showComments}
+                initial={initial}
+                worktree={worktree}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </details>
+  );
+}
+
 function TranscriptViewer({
   events,
   harnesses,
   report,
+  recommendation,
   run,
   selected,
   session,
+  change,
+  changesRunId,
 }: {
   events: any[] | null;
   harnesses?: Record<string, any>;
   report?: string;
+  recommendation?: string;
   run?: any;
   selected: string;
   session?: any;
+  change?: SessionChange;
+  changesRunId?: string;
 }) {
   const start = events?.find((event: any) => event.kind === 'session_start');
   const prompt = start?.data?.prompt ? stripAnsi(String(start.data.prompt)).trim() : '';
@@ -1611,6 +2141,7 @@ function TranscriptViewer({
   const kind = session?.meta?.harness_kind ?? harnessConfig?.kind;
   const round = session?.meta?.round;
   const sessionId = session?.meta?.session_id ?? session?.meta?.data?.session_id;
+  const fallbackReport = !report?.trim() ? latestReportFallback(events) : '';
   return (
     <section className={`transcript-viewer role-${role || 'none'}`}>
       <div className="panel-heading transcript-heading">
@@ -1633,10 +2164,17 @@ function TranscriptViewer({
           {selected && <p className="transcript-ref">{selected}</p>}
         </div>
       </div>
-      {report && report.trim() && (
+      {change && <SessionChanges change={change} runId={changesRunId ?? ''} />}
+      {recommendation && recommendation.trim() && (
         <details className="log-panel report-panel" open>
-          <summary>Report</summary>
-          <div className="log-md"><MarkdownBlock content={report} /></div>
+          <summary>Recommendation</summary>
+          <div className="log-md"><MarkdownBlock content={recommendation} /></div>
+        </details>
+      )}
+      {(report?.trim() || fallbackReport) && (
+        <details className="log-panel report-panel" open>
+          <summary>{report?.trim() ? 'Report' : 'Report fallback'}</summary>
+          <div className="log-md"><MarkdownBlock content={report?.trim() ? report : fallbackReport} /></div>
         </details>
       )}
       {events === null && <p className="empty transcript-empty">Select a session to inspect its events.</p>}
@@ -1657,6 +2195,7 @@ function TranscriptViewer({
                   const m = group.items.find(({ event }) => event?.data?.model)?.event?.data?.model;
                   return m ? <span className="subagent-model" title="Model used by this subagent">{m}</span> : null;
                 })()}
+                <UsageChips usage={subagentGroupUsage(group.items)} />
                 <span className="subagent-count">{group.items.length} events</span>
               </summary>
               <div className="log-lines sublog-lines">
@@ -1762,6 +2301,8 @@ function SessionParameters({
     ['Harness kind', session.meta?.harness_kind ?? harnessConfig?.kind],
     // Prefer the model the engine actually used over the configured one.
     ['Model', session.model ?? meta.model ?? meta.effective_model ?? harnessConfig?.model],
+    ['Auth', meta.auth],
+    ['Config dir', meta.config_dir ?? harnessConfig?.config_dir],
     ['Command', harnessConfig?.command],
     ['Args', formatArgList(harnessConfig?.args)],
     ['Options', summarizeHarnessOptions(harnessConfig?.options)],
@@ -1871,6 +2412,17 @@ function eventBody(event: any): string {
   if (d.command != null) return typeof d.command === 'string' ? d.command : JSON.stringify(d.command, null, 2);
   if (d.changes != null) return JSON.stringify(d.changes, null, 2);
   if (typeof d === 'object' && Object.keys(d).length) return JSON.stringify(d, null, 2);
+  return '';
+}
+
+function latestReportFallback(events: any[] | null): string {
+  if (!events) return '';
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.kind !== 'text') continue;
+    const text = stripAnsi(eventBody(event)).trim();
+    if (text) return text;
+  }
   return '';
 }
 
@@ -2107,33 +2659,113 @@ function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean 
 
 // A run row that collapses to just its id (e.g. "0001") by default; clicking
 // expands the whole session tree (all steps).
-function RunGroup({ run, selected, onSelect }: { run: any; selected: string; onSelect: (ref: string) => void }) {
+function TaskLinkChip({ taskId }: { taskId: string }) {
+  return (
+    <Link
+      className="meta-chip task-chip"
+      to={`/tasks?task=${encodeURIComponent(taskId)}`}
+      title={`Open task ${taskId}`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      task {taskId}
+    </Link>
+  );
+}
+
+function taskIdsForRun(run: any): string[] {
+  const ids = new Set<string>();
+  const focus = run.focus ?? {};
+  if (typeof focus.task === 'string' && focus.task) ids.add(focus.task);
+  for (const taskId of focus.tasks ?? []) {
+    if (taskId) ids.add(String(taskId));
+  }
+  for (const session of flattenSessions(run.sessions ?? [])) {
+    const taskId = session.meta?.task_id;
+    if (taskId) ids.add(String(taskId));
+  }
+  return [...ids];
+}
+
+function runStartAt(run: any): string | undefined {
+  const sessions = flattenSessions(run.sessions ?? []);
+  const sessionStarts = sessions.map((session: any) => session.started_at).filter(Boolean).sort();
+  return run.created_at ?? sessionStarts[0];
+}
+
+function displayRunName(runId: string | number | undefined): string {
+  const raw = String(runId ?? '');
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? `run n°${n}` : `run ${raw}`;
+}
+
+function RunGroup({ run, selected, onSelect, now }: { run: any; selected: string; onSelect: (ref: string) => void; now: number }) {
   const [open, setOpen] = useState(false);
   const sessions = run.sessions ?? [];
+  const taskIds = taskIdsForRun(run);
+  const runStart = runStartAt(run);
+  const runEnd = run.status === 'running' ? new Date(now).toISOString() : runActivityAt(run);
+  const toggle = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if ((event.target as HTMLElement).closest('a, button')) return;
+    setOpen((v) => !v);
+  };
   return (
     <div className="transcript-run-group">
-      <button className="run-header button-reset" onClick={() => setOpen((v) => !v)}>
+      <div
+        className="run-header"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle(event);
+          }
+        }}
+        aria-expanded={open}
+      >
         <span className="ev-caret">{open ? '▾' : '▸'}</span>
-        <strong>{run.id}</strong>
+        <strong>{displayRunName(run.id)}</strong>
         <StatusIcon value={run.status} />
+        {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
+        {runStart && <span className="meta-chip">{formatDuration(runStart, runEnd)}</span>}
         <span className="meta-chip">{run.session_count ?? 0} sessions</span>
         <UsageChips usage={run.usage} />
-      </button>
+      </div>
       {open && (
         <div className="run-sessions-tree">
-          <SelectableSessionTree sessions={sessions} selected={selected} onSelect={onSelect} />
+          <SelectableSessionTree sessions={sessions} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} />
         </div>
       )}
     </div>
   );
 }
 
-function SelectableSessionTree({ sessions, selected, onSelect }: { sessions: any[], selected: string, onSelect: (ref: string) => void }) {
+function SelectableSessionTree({
+  sessions,
+  selected,
+  onSelect,
+  now,
+  fallbackTaskIds = [],
+}: {
+  sessions: any[];
+  selected: string;
+  onSelect: (ref: string) => void;
+  now: number;
+  fallbackTaskIds?: string[];
+}) {
   if (sessions.length === 0) return null;
+  const orderedSessions = [...sessions].sort(compareSessions);
   return (
     <div className="selectable-tree">
-      {sessions.map((session) => (
-        <SessionNode key={`${session.parent}-${session.session}`} session={session} selected={selected} onSelect={onSelect} />
+      {orderedSessions.map((session) => (
+        <SessionNode
+          key={`${session.parent}-${session.session}`}
+          session={session}
+          selected={selected}
+          onSelect={onSelect}
+          now={now}
+          fallbackTaskIds={fallbackTaskIds}
+        />
       ))}
     </div>
   );
@@ -2183,7 +2815,19 @@ function RoleBadge({ role }: { role: string }) {
   return <span className={`role-badge role-${role}`} title={role}>{ROLE_LOGO[role] ?? role.charAt(0).toUpperCase()}</span>;
 }
 
-function SessionNode({ session, selected, onSelect }: { session: any; selected: string; onSelect: (ref: string) => void }) {
+function SessionNode({
+  session,
+  selected,
+  onSelect,
+  now,
+  fallbackTaskIds = [],
+}: {
+  session: any;
+  selected: string;
+  onSelect: (ref: string) => void;
+  now: number;
+  fallbackTaskIds?: string[];
+}) {
   const hasChildren = (session.children?.length ?? 0) > 0;
   const round = typeof session.meta?.round === 'number' ? `r${session.meta.round}` : '';
   const role = sessionRole(session);
@@ -2191,7 +2835,10 @@ function SessionNode({ session, selected, onSelect }: { session: any; selected: 
   const model = shortModel(session.model);
   // An interrupted session never wrote an end, so measure it to its last
   // activity instead of leaving the duration stuck on "running".
-  const durEnd = session.status === 'interrupted' ? session.last_at : session.ended_at;
+  const durEnd = session.status === 'running'
+    ? new Date(now).toISOString()
+    : session.status === 'interrupted' ? session.last_at : session.ended_at;
+  const taskIds = session.meta?.task_id ? [String(session.meta.task_id)] : fallbackTaskIds;
   return (
     <div className="session-node">
       <div className={`session-line role-${role || 'none'} ${selected === session.ref ? 'active' : ''}`}>
@@ -2209,10 +2856,11 @@ function SessionNode({ session, selected, onSelect }: { session: any; selected: 
             <UsageChips usage={session.usage} />
           </div>
         </button>
+        {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
       </div>
       {hasChildren && (
         <div className="session-children">
-          <SelectableSessionTree sessions={session.children} selected={selected} onSelect={onSelect} />
+          <SelectableSessionTree sessions={session.children} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} />
         </div>
       )}
     </div>
@@ -2230,7 +2878,7 @@ function RunList({ runs }: { runs: any[] }) {
           <details key={run.id} className="run-card">
             <summary>
               <div className="run-main">
-                <Badge>{run.id}</Badge>
+                <Badge>{displayRunName(run.id)}</Badge>
                 <Status value={run.status} />
                 <strong>{run.focus?.task || (run.focus?.tasks ?? []).join(', ') || (run.focus?.projects ?? []).join(', ') || 'Workspace run'}</strong>
               </div>
@@ -2568,14 +3216,18 @@ function InlineMarkdown({ content }: { content: string }) {
 }
 
 // Compact status as a glyph: ✓ done, ✕ failed, ◌ running (spins),
-// ⊘ interrupted (stopped early, not active), ○ otherwise.
+// Ⅱ interrupted/paused (stopped early, not active), ⏱ timed out, ⧖ throttled
+// (transient API backoff — not a crash), ○ otherwise.
 function StatusIcon({ value, title }: { value: string; title?: string }) {
   const map: Record<string, { glyph: string; cls: string }> = {
     completed: { glyph: '✓', cls: 'ok' },
     done: { glyph: '✓', cls: 'ok' },
     failed: { glyph: '✕', cls: 'fail' },
     running: { glyph: '', cls: 'run' },
-    interrupted: { glyph: '⊘', cls: 'interrupted' },
+    interrupted: { glyph: 'Ⅱ', cls: 'interrupted' },
+    // Not crashes: waited out a timeout, or backed off on a transient API error.
+    timed_out: { glyph: '⏱', cls: 'timed-out' },
+    throttled: { glyph: '⧖', cls: 'throttled' },
   };
   const s = map[value] ?? { glyph: '○', cls: 'idle' };
   return <span className={`status-icon ${s.cls}`} title={title ?? value} aria-label={value}>{s.glyph}</span>;
@@ -2616,10 +3268,69 @@ function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
 }
 
 function compareInboxItems(a: any, b: any) {
-  const aTime = Date.parse(a.created_at || a.updated_at || '') || 0;
-  const bTime = Date.parse(b.created_at || b.updated_at || '') || 0;
+  const aTime = Date.parse(inboxActivityAt(a) || '') || 0;
+  const bTime = Date.parse(inboxActivityAt(b) || '') || 0;
   if (aTime !== bTime) return bTime - aTime;
   return String(a.id).localeCompare(String(b.id));
+}
+
+function compareTasks(a: any, b: any) {
+  const aTime = Date.parse(taskActivityAt(a) || '') || 0;
+  const bTime = Date.parse(taskActivityAt(b) || '') || 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return String(a.id).localeCompare(String(b.id));
+}
+
+function compareRuns(a: any, b: any) {
+  const aTime = Date.parse(runActivityAt(a) || '') || 0;
+  const bTime = Date.parse(runActivityAt(b) || '') || 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
+}
+
+function compareSessions(a: any, b: any) {
+  const aTime = Date.parse(sessionActivityAt(a) || '') || 0;
+  const bTime = Date.parse(sessionActivityAt(b) || '') || 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return String(b.session).localeCompare(String(a.session), undefined, { numeric: true });
+}
+
+function taskActivityAt(task: any): string | undefined {
+  return task.updated_at ?? task.metadata?.updated_at ?? task.created_at ?? task.metadata?.created_at;
+}
+
+function inboxActivityAt(item: any): string | undefined {
+  return item.updated_at ?? item.created_at;
+}
+
+function runActivityAt(run: any): string | undefined {
+  const sessions = flattenSessions(run.sessions ?? []);
+  const sessionTimes = sessions.flatMap((session: any) => [session.last_at, session.ended_at, session.started_at]).filter(Boolean);
+  return run.updated_at ?? run.ended_at ?? run.created_at ?? sessionTimes.sort().at(-1);
+}
+
+function sessionActivityAt(session: any): string | undefined {
+  return session.last_at ?? session.ended_at ?? session.started_at;
+}
+
+function flattenSessions(sessions: any[]): any[] {
+  return sessions.flatMap((session) => [session, ...flattenSessions(session.children ?? [])]);
+}
+
+function normalizedInboxStatus(status: string | undefined) {
+  if (status === 'closed') return 'completed';
+  if (status === 'archived') return 'archived';
+  return status || 'open';
+}
+
+function filterLabel(value: string) {
+  if (value === 'completed') return 'closed';
+  if (value === 'archived') return 'archived';
+  if (value === 'accept') return gateLabel(value);
+  if (value === 'pending') return gateLabel(value);
+  if (value === 'reject') return gateLabel(value);
+  if (value === 'clear') return gateLabel(value);
+  return value;
 }
 
 function inboxGate(labels: string[]) {
@@ -2651,6 +3362,13 @@ function inboxAuthor(item: any) {
   return '';
 }
 
+// The finer-grained sub-identity behind a role author (e.g. the subagent
+// descriptor name), kept in metadata so the author itself stays a clean role.
+function inboxAgent(item: any) {
+  const agent = item.metadata?.agent;
+  return typeof agent === 'string' && agent.trim() ? agent.trim() : '';
+}
+
 function inboxTitleAndBody(item: any) {
   const text = String(item.body ?? '').trim();
   if (!text) return { title: item.id, body: '' };
@@ -2673,12 +3391,14 @@ function inboxSourceUrl(item: any, repo?: string | null) {
 
 function matchesInboxFilters(
   item: any,
-  filters: { query: string; providerFilter: string; statusFilter: string; gateFilter: string },
+  filters: { query: string; providerFilter: Set<string>; statusFilter: Set<string>; gateFilter: Set<string>; kinds?: Set<string>; audienceFilter?: Set<string> },
 ) {
-  if (filters.providerFilter !== 'all' && item.provider !== filters.providerFilter) return false;
-  if (filters.statusFilter !== 'all' && item.status !== filters.statusFilter) return false;
+  if (!filters.providerFilter.has(item.provider)) return false;
+  if (!filters.statusFilter.has(normalizedInboxStatus(item.status))) return false;
+  if (filters.kinds && filters.kinds.size > 0 && !filters.kinds.has(item.kind)) return false;
+  if (filters.audienceFilter && !filters.audienceFilter.has(String(item.audience || 'general'))) return false;
   const gate = inboxGate(item.labels ?? []);
-  if (filters.gateFilter !== 'all' && gate !== filters.gateFilter) return false;
+  if (!filters.gateFilter.has(gate)) return false;
   const query = filters.query.trim().toLowerCase();
   if (!query) return true;
   const comments = inboxComments(item).map((comment: any) => comment.body ?? '').join(' ');
@@ -2688,6 +3408,7 @@ function matchesInboxFilters(
     item.kind,
     item.status,
     item.body,
+    item.audience,
     inboxAuthor(item),
     item.source_ref,
     ...(item.labels ?? []),

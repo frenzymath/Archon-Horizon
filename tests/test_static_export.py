@@ -81,3 +81,30 @@ def test_pages_workflow_refuses_out_dir_outside_repo(tmp_path: Path) -> None:
     path, status = write_pages_workflow(ws, outside)
     assert status == "outside"
     assert not (ws / ".github").exists()
+
+
+def test_static_export_is_committed_to_workspace_git(tmp_path: Path) -> None:
+    # The exported dashboard (and Pages workflow) must be committed into the
+    # workspace ledger, else it stays untracked ("the static page is gitignored"
+    # symptom) and can't be pushed to publish Pages.
+    import subprocess
+
+    import pytest
+
+    from archon_horizon.vcs.git import WorkspaceGit, git_available
+
+    if not git_available():
+        pytest.skip("git not installed")
+
+    ws = _workspace(tmp_path)
+    main(["--root", str(ws), "dashboard", "--static", "--out", "dashboard", "--workflow"])
+
+    git = WorkspaceGit(ws)
+    assert git.is_repo()
+    tracked = subprocess.run(
+        ["git", "--git-dir", str(git.git_dir), "--work-tree", str(ws),
+         "ls-files", "dashboard", ".github"],
+        capture_output=True, text=True,
+    ).stdout
+    assert "dashboard/index.html" in tracked
+    assert f".github/workflows/{PAGES_WORKFLOW_FILENAME}" in tracked
