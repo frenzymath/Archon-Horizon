@@ -71,9 +71,16 @@ def _dag_section(dag: dict[str, Any] | None) -> str:
         return "<p class='empty-state'>No blueprint DAG.</p>"
     nodes = dag.get("nodes", [])
     edges = dag.get("edges", [])
+
+    def render_node(node: dict[str, Any]) -> str:
+        leanok = ' <span class="text-emerald-400">✓</span>' if node.get("leanok") else ""
+        return (
+            f"<li><span class='badge'>{escape(str(node.get('id')))}</span> "
+            f"({escape(str(node.get('kind', '')))}){leanok}</li>"
+        )
+
     items = "".join(
-        f"<li><span class='badge'>{escape(str(n.get('id')))}</span> "
-        f"({escape(str(n.get('kind', '')))}){' <span class=\"text-emerald-400\">✓</span>' if n.get('leanok') else ''}</li>"
+        render_node(n)
         for n in nodes
     )
     return (
