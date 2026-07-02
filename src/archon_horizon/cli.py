@@ -17,6 +17,7 @@ from typer.main import get_command
 
 from archon_horizon import __version__
 from archon_horizon.commands import blueprint as blueprint_cmd
+from archon_horizon.commands import commit as commit_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
 from archon_horizon.commands import inbox as inbox_cmd
@@ -97,6 +98,14 @@ def callback(
     ),
 ) -> None:
     """Workspace-first orchestration for long-horizon Lean formalization agents."""
+    import os
+
+    # An agent's shell cwd is often a project subdirectory, so a bare
+    # `horizon <cmd>` (root defaulting to `.`) wouldn't find the workspace.
+    # When the orchestrator stamps ARCHON_HORIZON_ROOT and the caller did not
+    # pass --root explicitly, resolve to that workspace root.
+    if root == Path(".") and os.environ.get("ARCHON_HORIZON_ROOT"):
+        root = Path(os.environ["ARCHON_HORIZON_ROOT"])
     json_mode = _machine_output_requested()
     ctx.obj = {"root": root, "json": json_mode}
     if json_mode:
@@ -112,6 +121,7 @@ app.command()(init_cmd.init)
 app.command("setup")(setup_cmd.setup)
 app.command("update")(update_cmd.update)
 app.command("run")(run_cmd.run)
+app.command("commit")(commit_cmd.commit)
 app.command("discuss")(discuss_cmd.discuss)
 app.add_typer(inbox_cmd.app, name="inbox")
 app.add_typer(roadmap_cmd.app, name="roadmap")

@@ -61,53 +61,14 @@ github:
 projects: {{}}
 """
 
-# Starter subagent descriptors so Ground has review/upkeep helpers to dispatch
-# out of the box (the roster is otherwise empty and nothing gets dispatched).
-# Read-only by default — they report through the inbox, they don't edit source.
-_STARTER_SUBAGENTS: dict[str, str] = {
-    "blueprint-reviewer": """\
----
-name: blueprint-reviewer
-description: Check that the Lean declarations match their blueprint statements and the \\uses dependency edges are correct.
-read_only: true
----
-You are a focused blueprint reviewer dispatched by Ground after a Horizon run.
-
-Scope: the blueprint chapter(s) and Lean file(s) named in your directive.
-
-Do:
-- Confirm each `\\lean{...}` declaration's Lean signature actually matches the
-  blueprint statement (types, directions of iso, hypotheses) — flag any drift.
-- Check the `\\uses{...}` edges form a correct, acyclic dependency DAG for the
-  declarations in scope (consult the `leandag` skill).
-- Verify `\\leanok`/`\\mathlibok` markers are honest: statement-level only while a
-  proof still has `sorry`.
-
-Report concisely. Raise findings via the inbox (`"$HORIZON_BIN" inbox add
---author <your-name> ...` / `inbox comment`); do not edit any source files.
-""",
-    "diff-auditor": """\
----
-name: diff-auditor
-description: Audit the project diff from the last Horizon round for sound reasoning, no stray files, and no buried sorries.
-read_only: true
----
-You are a focused diff auditor dispatched by Ground after a Horizon run.
-
-Scope: the project diff since the previous checkpoint (see the `project-git`
-skill — projects have no root `.git`; diff them through their out-of-tree git).
-
-Do:
-- Read the diff and check the reasoning is sound and the change does what its
-  report claims.
-- Flag new `sorry`s that aren't sanctioned by a hint, signatures weakened to dodge
-  a proof, and any stray files/scratch directories left behind.
-- Note anything that should become an inbox issue or a memory.
-
-Report concisely and raise findings via the inbox (`--author <your-name>`); do
-not edit any source files.
-""",
-}
+# Legacy starter descriptors older Horizon versions seeded verbatim into
+# ``.archon-horizon/subagents/``. The canonical roster now lives in the bundled
+# ``archon_horizon/subagents/descriptors/`` package dir (always merged in at
+# compile/catalog time), so these workspace copies are stale duplicates that
+# only pollute the roster. ``--update`` removes them (see the migration below).
+# We match by name AND the generated marker/shape so a descriptor a user has
+# since hand-authored under one of these names is never deleted.
+_LEGACY_SEEDED_SUBAGENTS: tuple[str, ...] = ("blueprint-reviewer", "diff-auditor")
 
 
 def _default_model(kind: str) -> str:
@@ -172,11 +133,24 @@ def _detect_github_repo() -> str:
     return ""
 
 
-def _find_mathlib_revs(root: Path) -> dict[str, str]:
-    """Map each project dir to the mathlib rev its ``lake-manifest.json`` pins."""
+def _find_mathlib_revs(root: Path) -> dict[str, set[str]]:
+    """Map each project dir to the mathlib rev identifiers its manifest pins.
+
+    Each value holds both the resolved ``rev`` (SHA) and the ``inputRev``
+    (tag/branch) — see ``find_package_revs``."""
     from archon_horizon.config.manifest import find_package_revs
 
     return find_package_revs(root, "mathlib")
+
+
+def _looks_like_sha(value: str) -> bool:
+    return len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+
+
+def _pick_readable(ids: set[str]) -> str:
+    """A representative rev, preferring a human tag/branch over a raw SHA."""
+    tags = sorted(v for v in ids if not _looks_like_sha(v))
+    return tags[0] if tags else sorted(ids)[0]
 
 
 def _fetch_latest_mathlib_tag() -> str:
@@ -207,20 +181,23 @@ def _fetch_latest_mathlib_tag() -> str:
 
 def _detect_mathlib_version(root: Path) -> str:
     """Propose a Mathlib version: detected from projects, else latest tag, else master."""
-    revs = list(_find_mathlib_revs(root).values())
-    if revs:
-        return max(set(revs), key=revs.count)
+    picks = [_pick_readable(ids) for ids in _find_mathlib_revs(root).values() if ids]
+    if picks:
+        return max(set(picks), key=picks.count)
     return _fetch_latest_mathlib_tag() or "master"
 
 
 def _warn_mathlib_mismatch(root: Path, chosen: str) -> None:
-    """Warn if any project pins a Mathlib rev different from the chosen one."""
-    mismatched = {d: rev for d, rev in _find_mathlib_revs(root).items() if rev != chosen}
+    """Warn if any project pins a Mathlib rev different from the chosen one.
+
+    ``chosen`` matches a project when it equals *either* its ``rev`` or its
+    ``inputRev``, so a chosen tag agrees with the SHA it resolves to."""
+    mismatched = {d: ids for d, ids in _find_mathlib_revs(root).items() if chosen not in ids}
     if not mismatched:
         return
-    log.warn(f"Some projects pin a different Mathlib version than '{chosen[:12]}':")
-    for project_dir, rev in mismatched.items():
-        log.step(f"{project_dir}: {rev[:12]}")
+    log.warn(f"Some projects pin a different Mathlib version than {chosen!r}:")
+    for project_dir, ids in mismatched.items():
+        log.step(f"{project_dir}: {_pick_readable(ids)}")
 
 
 def _print_config_summary(data: dict) -> None:
@@ -749,17 +726,26 @@ class InitCommand:
         stamp_workspace_version(self.root)
         log.info(f"Stamped workspace with Horizon {__version__}.")
 
-        # Seed starter subagent descriptors (only if absent — never clobber edits)
-        # so Ground actually has helpers to dispatch.
+        # The subagent roster is the bundled ``archon_horizon/subagents/descriptors/``
+        # package dir — always merged in at compile/catalog time, so Ground has its
+        # review/upkeep helpers without anything being seeded into the workspace.
+        # ``.archon-horizon/subagents/`` is reserved for the user's own custom
+        # descriptors and starts empty. On ``--update`` we also remove the legacy
+        # starter descriptors older versions seeded there, which are now stale
+        # duplicates that pollute the roster (blueprint-reviewer, diff-auditor).
         sub_dir = self.root / ".archon-horizon" / "subagents"
-        seeded = 0
-        for name, content in _STARTER_SUBAGENTS.items():
-            dest = sub_dir / f"{name}.md"
-            if not dest.exists():
-                dest.write_text(content, "utf-8")
-                seeded += 1
-        if seeded:
-            log.success(f"Seeded {seeded} starter subagent descriptor(s) under .archon-horizon/subagents/.")
+        if self.update:
+            removed = 0
+            for name in _LEGACY_SEEDED_SUBAGENTS:
+                stale = sub_dir / f"{name}.md"
+                if stale.exists():
+                    stale.unlink()
+                    removed += 1
+            if removed:
+                log.success(
+                    f"Removed {removed} stale legacy subagent descriptor(s) from "
+                    ".archon-horizon/subagents/ (superseded by the bundled roster)."
+                )
 
         from archon_horizon.skills.registry import install_skills
 
@@ -853,9 +839,9 @@ def init(
     update: bool = typer.Option(
         False,
         "--update",
-        "--reinit",
-        help="Refresh an existing workspace: re-install skills, recompile subagents, and rewrite MCP/gitignore "
-        "to this Horizon's bundled versions, keeping your config and content. Run after upgrading Horizon.",
+        help="Refresh an existing workspace: re-install skills, recompile subagents (pruning stale ones), and "
+        "rewrite MCP/gitignore to this Horizon's bundled versions, keeping your config and content. Run after "
+        "upgrading Horizon.",
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON; implies --no-interactive and no advisor."),
 ) -> None:

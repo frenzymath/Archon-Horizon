@@ -39,3 +39,24 @@ build to finish**:
   done — while a build that affects your conclusion is still running. If the
   engine cannot wait long enough, say so explicitly under `## Issues` and leave
   the next action clear, rather than implying the proof checked.
+- Before marking a task or roadmap item done/blocked/rejected, add a concise
+  closing comment with the exact check command, result, relevant files, and any
+  caveat. If a task has `roadmap_refs`, make sure the linked roadmap items end
+  with a consistent status and their own sync/closing comment.
+
+## When the LSP dies on big import files
+
+The Lean LSP loads the full environment for the file you open. On a file whose
+imports pull in most of Mathlib (a broad `import Mathlib` umbrella, or a module
+that transitively imports one), that environment is huge and the LSP server can
+run out of memory or time out and die. This is an LSP limitation, **not** a
+proof error:
+
+- Do not treat an LSP crash/timeout on such a file as a failure of your proof.
+  Fall back to the kernel check: `lake build <Module>` or `lake env lean <file>`,
+  which verifies faithfully without holding the whole environment interactively.
+- Prefer opening the **narrowest** module in the LSP. Avoid pointing the LSP at
+  umbrella/`import Mathlib`-style files just to get feedback; edit and inspect
+  the specific module you are proving in instead.
+- If the LSP has crashed, restart it (or just proceed with `lake build`) rather
+  than repeatedly reopening the same giant file and getting the same crash.

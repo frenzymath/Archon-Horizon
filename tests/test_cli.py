@@ -95,8 +95,16 @@ def test_task_command_writes_safe_yaml(tmp_path: Path) -> None:
     data = yaml.safe_load(task_file.read_text("utf-8"))  # valid YAML
     assert data["id"] == "T-1" and data["objective"] == objective and data["status"] == "queued"
 
+    assert _run(ws, "roadmap", "add", "--id", "A.3", "--title", "linked", "--project", "ag-main") == 0
+    data["roadmap_refs"] = ["A.3"]
+    task_file.write_text(yaml.safe_dump(data, sort_keys=False), "utf-8")
+
     assert _run(ws, "task", "set", "T-1", "--status", "done") == 0
     assert yaml.safe_load(task_file.read_text("utf-8"))["status"] == "done"
+    roadmap_file = ws / ".archon-horizon" / "roadmap" / "items" / "A.3.yaml"
+    assert yaml.safe_load(roadmap_file.read_text("utf-8"))["status"] == "done"
+    comments_dir = ws / ".archon-horizon" / "roadmap" / "comments" / "A.3"
+    assert any("T-1" in p.read_text("utf-8") for p in comments_dir.glob("*.md"))
     assert _run(ws, "task", "list") == 0
     assert _run(ws, "task", "remove", "T-1") == 0
     assert not task_file.exists()
@@ -136,6 +144,32 @@ def test_init_scaffolds_minimal_state_dirs(tmp_path: Path) -> None:
     assert _run(ws, "init", "--no-interactive") == 0
     state_dirs = sorted(p.name for p in (ws / ".archon-horizon").iterdir() if p.is_dir())
     assert state_dirs == ["blueprints", "inbox", "roadmap", "runs", "subagents", "tasks", "tools", "vcs"]
+
+
+def test_init_does_not_seed_starter_subagents(tmp_path: Path) -> None:
+    # The bundled descriptors are the roster (merged at compile time); the
+    # workspace subagents dir must start empty, not be polluted with a seeded set.
+    ws = tmp_path / "ws"
+    assert _run(ws, "init", "--no-interactive") == 0
+    sub_dir = ws / ".archon-horizon" / "subagents"
+    assert list(sub_dir.glob("*.md")) == []
+
+
+def test_update_removes_legacy_seeded_subagents(tmp_path: Path) -> None:
+    # A workspace an older Horizon seeded with legacy starter descriptors: --update
+    # removes them (they are stale duplicates of the bundled roster).
+    ws = tmp_path / "ws"
+    assert _run(ws, "init", "--no-interactive") == 0
+    sub_dir = ws / ".archon-horizon" / "subagents"
+    (sub_dir / "blueprint-reviewer.md").write_text("---\nname: blueprint-reviewer\n---\nold\n", "utf-8")
+    (sub_dir / "diff-auditor.md").write_text("---\nname: diff-auditor\n---\nold\n", "utf-8")
+    (sub_dir / "my-custom.md").write_text("---\nname: my-custom\n---\nmine\n", "utf-8")
+
+    assert _run(ws, "init", "--update", "--no-interactive") == 0
+
+    assert not (sub_dir / "blueprint-reviewer.md").exists()
+    assert not (sub_dir / "diff-auditor.md").exists()
+    assert (sub_dir / "my-custom.md").exists()  # a user's own descriptor is untouched
 
 
 def test_init_advisor_with_null_harness_writes_prompt_only(tmp_path: Path) -> None:

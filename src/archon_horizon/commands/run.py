@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import dataclasses
+import threading
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import typer
 
@@ -15,6 +18,7 @@ from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.log import log
 
+from .dashboard import LOCAL_DASHBOARD_HOST, resolve_dashboard_host
 from .shared import emit_json, inbox_providers, load_workspace
 
 # The single-agent run targets. ``horizon run ground`` / ``horizon run horizon``
@@ -33,7 +37,12 @@ class RunCommand:
         dry_run: bool = False,
         resume: str | None = None,
         backend: str = "default",
+        run_id: str | None = None,
+        round_index: int | None = None,
         as_json: bool = False,
+        dashboard: bool = True,
+        dashboard_host: str = LOCAL_DASHBOARD_HOST,
+        dashboard_port: int = 8765,
     ) -> None:
         self.root = root
         self.targets = targets
@@ -42,44 +51,89 @@ class RunCommand:
         self.dry_run = dry_run
         self.resume = resume
         self.backend = (backend or "default").strip().lower()
+        self.run_id = (run_id or "").strip() or None
+        self.round_index = round_index
         self.as_json = as_json
+        self.dashboard = dashboard
+        self.dashboard_host = dashboard_host
+        self.dashboard_port = dashboard_port
 
     def run(self) -> None:
         if not self.targets and self.task:
             self.targets = (self.task,)
 
-        # `--backend interactive` hands the terminal straight to the engine so a
-        # human can drive the agent (type follow-ups). It only makes sense for a
-        # single role, not the headless orchestrated alternation.
-        if self.backend == "interactive":
-            self._run_interactive()
-            return
+        with self._dashboard_server():
+            # `--backend interactive` hands the terminal straight to the engine so a
+            # human can drive the agent (type follow-ups). It only makes sense for a
+            # single role, not the headless orchestrated alternation.
+            if self.backend == "interactive":
+                self._run_interactive()
+                return
 
-        cfg, workspace = load_workspace(self.root)
-        self._install_native_subagents(cfg, workspace)
-        _, providers = inbox_providers(cfg, workspace)
-        orch = build_orchestrator(self.root, registry=HarnessRegistry(), inbox_providers=providers)
+            cfg, workspace = load_workspace(self.root)
+            self._install_native_subagents(cfg, workspace)
+            _, providers = inbox_providers(cfg, workspace)
+            orch = build_orchestrator(self.root, registry=HarnessRegistry(), inbox_providers=providers)
 
-        if self.resume is not None:
-            run = self._resume_run(orch)
-            reports = orch.run(run, resume=True)
+            if self.resume is not None:
+                run = self._resume_run(orch)
+                reports = orch.run(run, resume=True)
+                self._emit_reports(reports)
+                return
+
+            if not self.targets:
+                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `ground`, `horizon`, task names, project names, or files.")
+                raise typer.Exit(1)
+
+            # `horizon run ground` / `horizon run horizon`: one session of that role.
+            if len(self.targets) == 1 and self.targets[0] in ROLE_TARGETS:
+                reports = self._run_single_role(orch, self.targets[0])
+                self._emit_reports(reports)
+                return
+
+            focus = self._resolve_focus(orch, tuple(self.targets))
+            run = RunRecord(id="", focus=focus, rounds_requested=self.rounds or cfg.rounds)
+            reports = orch.run(run, dry_run=self.dry_run)
             self._emit_reports(reports)
+
+    @contextmanager
+    def _dashboard_server(self) -> Iterator[None]:
+        if not self.dashboard:
+            yield
+            return
+        from archon_horizon.commands.dashboard import _packaged_dist
+        from archon_horizon.server.app import create_server_with_fallback, serve_server
+
+        dist = _packaged_dist()
+        try:
+            server = create_server_with_fallback(
+                self.root,
+                self.dashboard_host,
+                self.dashboard_port,
+                dist,
+            )
+        except OSError as exc:
+            log.warn(f"Could not start dashboard on {self.dashboard_host}:{self.dashboard_port}: {exc}")
+            yield
             return
 
-        if not self.targets:
-            log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `ground`, `horizon`, task names, project names, or files.")
-            raise typer.Exit(1)
-
-        # `horizon run ground` / `horizon run horizon`: one session of that role.
-        if len(self.targets) == 1 and self.targets[0] in ROLE_TARGETS:
-            reports = self._run_single_role(orch, self.targets[0])
-            self._emit_reports(reports)
-            return
-
-        focus = self._resolve_focus(orch, tuple(self.targets))
-        run = RunRecord(id="", focus=focus, rounds_requested=self.rounds or cfg.rounds)
-        reports = orch.run(run, dry_run=self.dry_run)
-        self._emit_reports(reports)
+        thread = threading.Thread(
+            target=serve_server,
+            kwargs={
+                "server": server,
+                "root": self.root,
+                "host": self.dashboard_host,
+                "requested_port": self.dashboard_port,
+                "dist_dir": dist,
+            },
+            daemon=True,
+        )
+        thread.start()
+        try:
+            yield
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
 
     def _run_single_role(self, orch, role: str):
         """Drive exactly one session of ``role``.
@@ -87,14 +141,22 @@ class RunCommand:
         Ground: run the opening plan only (``rounds=0`` runs the opener, then the
         loop body never executes). Horizon: skip the opening and closing Ground
         (``start_with``/``end_with`` = ``horizon``) and run a single round, so the
-        run is one bare Horizon step over the current focus."""
+        run is one bare Horizon step over the current focus.
+
+        ``--run <id>`` appends the session to an existing (or new) run directory
+        instead of allocating a fresh run, and ``--round <n>`` numbers it — so a
+        human hand-driving ground → horizon → horizon → … into one run keeps the
+        logs, session metadata, and commit trailers consistent with the automatic
+        alternation (and the dashboard groups them under that one run)."""
+        run_id = self.run_id or ""
+        start_round = self.round_index or 0
         if role == "ground":
             orch.start_with, orch.end_with = "ground", "ground"
-            run = RunRecord(id="", focus=Focus(), rounds_requested=0)
+            run = RunRecord(id=run_id, focus=Focus(), rounds_requested=0, start_round=start_round)
         else:  # horizon
             orch.start_with, orch.end_with = "horizon", "horizon"
             focus = Focus() if not self.targets[1:] else self._resolve_focus(orch, self.targets[1:])
-            run = RunRecord(id="", focus=focus, rounds_requested=1)
+            run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
         return orch.run(run, dry_run=self.dry_run)
 
     def _run_interactive(self) -> None:
@@ -177,12 +239,23 @@ class RunCommand:
                 raise typer.Exit(1)
             return Focus()
 
+        # Resolution order for each target: an existing task id wins, then a
+        # roadmap item id (materialized into a task on demand), then a project /
+        # file / '.' (an ad-hoc task). This lets `horizon run <roadmap_id>` launch
+        # a milestone without the roadmap ever auto-creating tasks.
         known_tasks = {task.id: task for task in orch.task_store.list()}
+        roadmap_ids = {item.id for item in orch.roadmap_store.load().items}
         selected: list[str] = []
         remaining: list[str] = []
         for target in targets:
             if target in known_tasks:
                 selected.append(target)
+            elif target in roadmap_ids:
+                task = orch.ensure_roadmap_task(target)
+                if task is None:
+                    log.error(f"Roadmap item {target!r} has no project to run in; add one to its scope.")
+                    raise typer.Exit(1)
+                selected.append(task.id)
             else:
                 remaining.append(target)
 
@@ -254,7 +327,7 @@ class RunCommand:
 
 def run(
     ctx: typer.Context,
-    targets: list[str] = typer.Argument(None, help="Run target: '.', '*', 'ground', 'horizon', task names, project names, or files."),
+    targets: list[str] = typer.Argument(None, help="Run target: '.', '*', 'ground', 'horizon', a task id, a roadmap item id, project names, or files (resolved task > roadmap > project)."),
     task: str | None = typer.Option(None, "--task", help="Pin one task name."),
     rounds: int | None = typer.Option(None, "--rounds", help="Override configured round count."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only; do not run Horizon."),
@@ -266,14 +339,37 @@ def run(
         "default", "--backend",
         help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine for a single role so you can type prompts — use with `ground` or `horizon`.",
     ),
+    run_id: str | None = typer.Option(
+        None, "--run",
+        help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving ground/horizon into one run keeps the logs and dashboard grouped. Use with `ground` or `horizon`.",
+    ),
+    round_index: int | None = typer.Option(
+        None, "--round",
+        help="Round number for a single-role session (used with --run), so its metadata and commit trailer match the automatic alternation.",
+    ),
+    no_dashboard: bool = typer.Option(False, "--no-dashboard", help="Do not start the live dashboard alongside the run."),
+    host: str = typer.Option(LOCAL_DASHBOARD_HOST, "--host", help="Dashboard host to bind during the run."),
+    port: int = typer.Option(8765, "--port", help="Dashboard port to bind during the run."),
+    public: bool = typer.Option(
+        False,
+        "--public",
+        help="Bind the run dashboard to all IPv4 interfaces (equivalent to --host 0.0.0.0).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout."),
 ) -> None:
     """Run collaboration rounds.
 
-    Targets: `.` (workspace), `*` (all projects), a task/project name or file, or a
-    single role — `ground` (run one planning session) or `horizon` (run one prover
-    session). Add `--backend interactive` to drive a role in a live terminal.
+    Targets resolve in order **task id > roadmap item id > project/file**: a task
+    id runs that human-created task; a roadmap item id infers and runs a task for
+    that mathematical milestone; a project name / file / `.` runs an ad-hoc task.
+    `*` runs all queued tasks. A single role — `ground` (one planning session) or
+    `horizon` (one prover session) — runs just that role. Add `--backend
+    interactive` to drive a role in a live terminal.
     """
+    try:
+        dashboard_host = resolve_dashboard_host(host, public)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     RunCommand(
         ctx.obj["root"],
         targets=tuple(targets or ()),
@@ -282,5 +378,10 @@ def run(
         dry_run=dry_run,
         resume=resume,
         backend=backend,
+        run_id=run_id,
+        round_index=round_index,
         as_json=as_json,
+        dashboard=not no_dashboard,
+        dashboard_host=dashboard_host,
+        dashboard_port=port,
     ).run()
