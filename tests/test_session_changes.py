@@ -62,7 +62,6 @@ def test_session_change_summary_reports_sorry_delta(tmp_path: Path) -> None:
     first = session_change_summary(tmp_path, s1.workspace_commit, (projpath,), base=None)
     assert first["available"] and first["sorry_delta"] == 2
     assert next(r for r in first["files"] if r["path"].endswith("Foo.lean"))["added"] is True
-    assert next(r for r in first["files"] if r["path"].endswith("Foo.lean"))["added"] is True
 
 
 def test_session_change_summary_reports_declaration_deltas(tmp_path: Path) -> None:

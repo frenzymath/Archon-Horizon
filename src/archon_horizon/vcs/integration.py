@@ -45,6 +45,12 @@ def author_for(role: str | None) -> tuple[str, str] | None:
 # processes from racing on Git's index.
 _WORKSPACE_COMMIT_LOCK = threading.Lock()
 _COMMIT_QUEUE_POLL_S = 0.25
+# A commit-queue holder older than this is treated as stale and reclaimed even
+# when it looks alive. Guards against an infinite wait when the holder is a
+# crashed process on another host (``_process_alive`` can't probe cross-host, so
+# it conservatively reports "alive"). A real commit takes well under a second;
+# an hour is far beyond any legitimate hold.
+_COMMIT_QUEUE_STALE_S = 3600.0
 
 
 def _process_alive(pid: int, host: str) -> bool:
@@ -64,6 +70,20 @@ def _read_lock(path: Path) -> dict | None:
         return json.loads(path.read_text("utf-8"))
     except (FileNotFoundError, ValueError, OSError):
         return None
+
+
+def _lock_is_stale(holder: dict) -> bool:
+    """True when the holder is older than ``_COMMIT_QUEUE_STALE_S``.
+
+    Backstops the pid/host liveness check for the cross-host case, where
+    ``_process_alive`` can't probe the remote pid and returns ``True`` — without
+    this a lock left by a crashed process on another host would never be
+    reclaimed and every subsequent committer would wait forever."""
+    try:
+        created = float(holder.get("created_at") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return created > 0.0 and (time.time() - created) > _COMMIT_QUEUE_STALE_S
 
 
 @contextmanager
@@ -87,7 +107,7 @@ def _workspace_commit_queue(workspace: Workspace):
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             holder = _read_lock(path)
-            if holder is not None and _process_alive(
+            if holder is not None and not _lock_is_stale(holder) and _process_alive(
                 int(holder.get("pid") or 0), str(holder.get("host") or "")
             ):
                 time.sleep(_COMMIT_QUEUE_POLL_S)

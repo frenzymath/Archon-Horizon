@@ -117,7 +117,7 @@ def _item_dict_capped(item, comments: int | None = None) -> dict:
 @app.command("list")
 def list_items(
     ctx: typer.Context,
-    status: InboxStatus | None = typer.Option(None, "--status", help="Only show this status: open or closed."),
+    status: InboxStatus | None = typer.Option(None, "--status", help="Only show this status: open, closed, or archived."),
     kind: list[InboxKind] = typer.Option((), "--kind", help="Only show this kind. Repeat for several kinds."),
     label: list[str] = typer.Option((), "--label", help="Require this label. Repeat to require several labels."),
     project: str | None = typer.Option(None, "--project", help="Only show items scoped to this project."),

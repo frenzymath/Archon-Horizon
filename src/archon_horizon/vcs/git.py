@@ -256,6 +256,7 @@ class WorkspaceGit:
         *,
         author: tuple[str, str] | None = None,
         trailers: dict[str, str] | None = None,
+        allow_empty: bool = False,
     ) -> str | None:
         """Stage and commit. Returns the new SHA, or None if nothing changed.
 
@@ -286,9 +287,12 @@ class WorkspaceGit:
             if projects:
                 self._run(["add", "-A", "--", *projects])
         status = self._run(["status", "--porcelain"])
-        if not status:
+        if not status and not allow_empty:
             return None
-        self._run(["commit", *_author_args(author), "-m", message])
+        args = ["commit", *_author_args(author)]
+        if allow_empty:
+            args.append("--allow-empty")
+        self._run([*args, "-m", message])
         return self.current_sha()
 
     def current_sha(self) -> str | None:
@@ -335,31 +339,64 @@ class WorkspaceGit:
         out = self._run(["rev-parse", "--verify", "--quiet", f"{sha}^"], check=False)
         return out or None
 
-    def session_commits(self, run_id: str, session: str) -> list[tuple[str, str]]:
-        """``(sha, subject)`` for every commit tagged with BOTH ``Archon-Run`` =
-        ``run_id`` and ``Archon-Session`` = ``session``, oldest-first. This is how
-        a session maps to the (possibly several) commits made during it — the
-        agent's own semantic commits plus the orchestrator's shared-state
-        integration commit. Both trailers are needed because session names (e.g.
-        ``0001-ground``) repeat across runs."""
+    def session_commits(
+        self,
+        run_id: str,
+        session: str,
+        *,
+        kinds: Sequence[str] | None = None,
+    ) -> list[tuple[str, str]]:
+        """``(sha, subject)`` for commits tagged with this run and session.
+
+        ``kinds`` filters the ``Archon-Commit`` trailer (for example ``agent``
+        or ``integration``). Without it this preserves the historical behavior:
+        all commits for the session, oldest-first.
+        """
+        rows = self.session_commits_detailed(run_id, session)
+        allowed = {k.strip().lower() for k in kinds or () if k.strip()}
+        if allowed:
+            rows = [r for r in rows if str(r.get("kind") or "").lower() in allowed]
+        return [(str(r["sha"]), str(r["subject"])) for r in rows]
+
+    def session_commits_detailed(self, run_id: str, session: str) -> list[dict[str, str]]:
+        """Commit rows for one run/session, oldest-first, with provenance.
+
+        ``Archon-Commit`` is the source-of-truth for new commits. Older ledgers
+        did not have it, so infer the orchestrator integration sweep from its
+        stable subject and treat other session commits as agent-authored.
+        """
         if not self.is_repo() or not run_id or not session:
             return []
+        # Keep the existing cheap git pre-filter; the trailer comparisons below
+        # remain authoritative.
         out = self._run(
-            ["log", "--format=%H%x1f%s%x1f"
+            ["log", "--fixed-strings", "--all-match",
+             f"--grep=Archon-Run: {run_id}", f"--grep=Archon-Session: {session}",
+             "--format=%H%x1f%s%x1f"
              "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
-             "%(trailers:key=Archon-Session,valueonly,separator=%x1e)"],
+             "%(trailers:key=Archon-Session,valueonly,separator=%x1e)%x1f"
+             "%(trailers:key=Archon-Role,valueonly,separator=%x1e)%x1f"
+             "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)"],
             check=False,
         ) or ""
-        matched: list[tuple[str, str]] = []
+        matched: list[dict[str, str]] = []
         for line in out.splitlines():
             parts = line.split("\x1f")
-            if len(parts) != 4:
+            if len(parts) != 6:
                 continue
-            sha, subject, run_trailer, session_trailer = parts
+            sha, subject, run_trailer, session_trailer, role_trailer, kind_trailer = parts
             runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
             sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
             if run_id in runs and session in sessions:
-                matched.append((sha, subject))
+                kinds = [v.strip().lower() for v in kind_trailer.split("\x1e") if v.strip()]
+                kind = kinds[-1] if kinds else ("integration" if subject.startswith("workspace[") and ": integrate " in subject else "agent")
+                roles = [v.strip().lower() for v in role_trailer.split("\x1e") if v.strip()]
+                matched.append({
+                    "sha": sha,
+                    "subject": subject,
+                    "role": roles[-1] if roles else "",
+                    "kind": kind,
+                })
         matched.reverse()  # oldest-first
         return matched
 
