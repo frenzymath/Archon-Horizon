@@ -883,7 +883,7 @@ class Orchestrator:
             session_id = update.metadata.get("session_id")
             if session_id:
                 meta["engine_session_id"] = session_id
-            for key in ("harness_name", "harness_kind", "model", "config_dir", "auth", "usage", "returncode", "failure_reason"):
+            for key in ("harness_name", "harness_kind", "model", "effort", "config_dir", "auth", "usage", "returncode", "failure_reason"):
                 value = update.metadata.get(key)
                 if value is not None:
                     meta[key] = value
@@ -997,6 +997,7 @@ class Orchestrator:
                     "harness_name": result.metadata.get("harness_name"),
                     "harness_kind": result.metadata.get("harness_kind"),
                     "model": result.metadata.get("model"),
+                    "effort": result.metadata.get("effort"),
                     "config_dir": result.metadata.get("config_dir"),
                     "auth": result.metadata.get("auth"),
                     "usage": result.metadata.get("usage"),

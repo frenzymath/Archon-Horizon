@@ -230,6 +230,8 @@ class CommandHarness(Harness):
         end_data: dict[str, object] = {"ok": result.ok, "returncode": result.metadata.get("returncode")}
         if result.metadata.get("model"):
             end_data["model"] = result.metadata["model"]
+        if result.metadata.get("effort"):
+            end_data["effort"] = result.metadata["effort"]
         if result.metadata.get("session_id"):
             end_data["session_id"] = result.metadata["session_id"]
         if reason:
@@ -324,6 +326,11 @@ class CommandHarness(Harness):
         model = observed_model(events or []) or getattr(self, "horizon_model", None)
         if model:
             result_meta["model"] = model
+        # The reasoning-effort tier the harness ran with (Codex effort / Claude
+        # thinking budget), recorded so the run view can show it next to the model.
+        effort = getattr(self, "horizon_effort", None)
+        if effort:
+            result_meta["effort"] = effort
         if engine_session_id:
             # Stamp the engine's session id into the result, which the orchestrator
             # records in the session meta for a later native --resume.

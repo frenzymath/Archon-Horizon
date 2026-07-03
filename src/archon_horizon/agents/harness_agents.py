@@ -92,7 +92,7 @@ def _result_metadata(result: HarnessResult) -> dict[str, object]:
             value = result.metadata.get(key)
             if value is not None:
                 meta[key] = value
-    for key in ("harness_name", "harness_kind", "model", "config_dir", "auth"):
+    for key in ("harness_name", "harness_kind", "model", "effort", "config_dir", "auth"):
         value = result.metadata.get(key)
         if value:
             meta[key] = value
@@ -104,6 +104,7 @@ def _harness_metadata(harness: Harness) -> dict[str, object]:
     name = getattr(harness, "horizon_harness_name", None) or getattr(harness, "name", None)
     kind = getattr(harness, "horizon_harness_kind", None)
     model = getattr(harness, "horizon_model", None)
+    effort = getattr(harness, "horizon_effort", None)
     config_dir = getattr(harness, "horizon_config_dir", None)
     auth = getattr(harness, "horizon_auth", None)
     if name:
@@ -112,6 +113,8 @@ def _harness_metadata(harness: Harness) -> dict[str, object]:
         meta["harness_kind"] = kind
     if model:
         meta["model"] = model
+    if effort:
+        meta["effort"] = effort
     if config_dir:
         meta["config_dir"] = config_dir
     if auth:

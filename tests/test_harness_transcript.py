@@ -122,6 +122,19 @@ def test_command_harness_captures_model_from_stream(tmp_path: Path) -> None:
     assert any(e.data.get("model") == "claude-opus-4-x" for e in events)
 
 
+def test_command_harness_surfaces_effort_on_metadata_and_transcript(tmp_path: Path) -> None:
+    # The reasoning-effort tier the harness ran with must reach the result
+    # metadata (→ session meta → run view) and the SESSION_END event so the
+    # Logs UI can show it next to the model.
+    harness = CommandHarness("claude", [sys.executable, "-c", "print('hi')"])
+    harness.horizon_effort = "xhigh"
+    result = harness.run(HarnessRequest(prompt="x", cwd=tmp_path, artifact_dir=tmp_path / "a"))
+
+    assert result.metadata["effort"] == "xhigh"
+    end = [e for e in read_transcript(tmp_path / "a" / "transcript.jsonl") if e.kind is TranscriptKind.SESSION_END][-1]
+    assert end.data.get("effort") == "xhigh"
+
+
 def test_command_harness_injects_resume_args(tmp_path: Path) -> None:
     from archon_horizon.harnesses.base import HarnessCapability
 

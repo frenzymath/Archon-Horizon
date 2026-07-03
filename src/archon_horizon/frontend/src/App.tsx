@@ -2135,6 +2135,9 @@ function TranscriptViewer({
   // the session meta is written at the end of the run).
   const observedModel = events?.find((event: any) => event?.data?.model)?.data?.model;
   const model = session?.meta?.model ?? session?.meta?.effective_model ?? observedModel ?? harnessConfig?.model;
+  // Reasoning-effort tier the run used (Codex effort / Claude thinking budget),
+  // stamped into session meta by the harness. Falls back to the current config.
+  const effort = session?.meta?.effort ?? session?.effort ?? harnessConfig?.options?.effort;
   // The session records the kind the engine ACTUALLY ran with; prefer it over the
   // current config (which may differ, or default to claude-code) so a Codex run
   // doesn't mislabel itself.
@@ -2153,6 +2156,7 @@ function TranscriptViewer({
           {session && (
             <div className="transcript-meta-row">
               {model && <span className="transcript-meta-chip">model <strong>{model}</strong></span>}
+              {effort && <span className="transcript-meta-chip" title="Reasoning-effort tier this run used">effort <strong>{effort}</strong></span>}
               {harness && (
                 <span className="transcript-meta-chip">harness {harness}{kind ? ` · ${kind}` : ''}</span>
               )}
@@ -2301,6 +2305,7 @@ function SessionParameters({
     ['Harness kind', session.meta?.harness_kind ?? harnessConfig?.kind],
     // Prefer the model the engine actually used over the configured one.
     ['Model', session.model ?? meta.model ?? meta.effective_model ?? harnessConfig?.model],
+    ['Effort', session.effort ?? meta.effort ?? harnessConfig?.options?.effort],
     ['Auth', meta.auth],
     ['Config dir', meta.config_dir ?? harnessConfig?.config_dir],
     ['Command', harnessConfig?.command],
@@ -2833,6 +2838,7 @@ function SessionNode({
   const role = sessionRole(session);
   const displayName = displaySessionName(session);
   const model = shortModel(session.model);
+  const effort = session.effort ?? session.meta?.effort;
   // An interrupted session never wrote an end, so measure it to its last
   // activity instead of leaving the duration stuck on "running".
   const durEnd = session.status === 'running'
@@ -2850,6 +2856,7 @@ function SessionNode({
           </div>
           <div className="session-row2">
             {model && <span className="meta-chip model-chip" title={session.model}>{model}</span>}
+            {effort && <span className="meta-chip effort-chip" title="Reasoning-effort tier">{effort}</span>}
             {round && <span className="meta-chip">{round}</span>}
             {session.started_at && <span className="meta-chip" title={`${formatTime(session.started_at)}-${formatTime(session.ended_at)}`}>{formatTime(session.started_at)}</span>}
             {session.started_at && <span className="meta-chip">{formatDuration(session.started_at, durEnd)}</span>}

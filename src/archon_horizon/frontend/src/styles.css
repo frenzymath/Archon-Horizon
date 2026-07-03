@@ -1149,6 +1149,7 @@ button.danger { color: var(--red); }
 .session-row1 strong { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .session-row2 { display: flex; flex-wrap: wrap; gap: 4px; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; padding-left: 22px; }
 .session-row2 .model-chip { color: #6d28d9; background: #f5f3ff; box-shadow: inset 0 0 0 1px #ddd6fe; text-transform: lowercase; letter-spacing: .2px; }
+.session-row2 .effort-chip { color: #b45309; background: #fffbeb; box-shadow: inset 0 0 0 1px #fde68a; text-transform: lowercase; letter-spacing: .2px; }
 .session-role { color: var(--text-muted); font-style: italic; font-size: 11px; }
 .session-tag { color: var(--text-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .session-children { margin-left: 12px; padding-left: 6px; }

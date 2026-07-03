@@ -172,6 +172,49 @@ def test_registry_builds_codex_argv(tmp_path: Path) -> None:
     assert argv[-1] == "PROMPT"
 
 
+def test_registry_maps_claude_effort_to_thinking_budget() -> None:
+    cfg = HarnessConfig(name="horizon", kind="claude-code", model="opus", options={"effort": "xhigh"})
+    harness = HarnessRegistry().build(cfg)
+    assert harness.env_overrides["MAX_THINKING_TOKENS"] == "32000"
+
+
+def test_registry_claude_effort_accepts_raw_integer() -> None:
+    cfg = HarnessConfig(name="horizon", kind="claude-code", model="opus", options={"effort": "9000"})
+    harness = HarnessRegistry().build(cfg)
+    assert harness.env_overrides["MAX_THINKING_TOKENS"] == "9000"
+
+
+def test_registry_claude_explicit_thinking_env_wins_over_effort() -> None:
+    cfg = HarnessConfig(
+        name="horizon",
+        kind="claude-code",
+        model="opus",
+        options={"effort": "low", "env": {"MAX_THINKING_TOKENS": "50000"}},
+    )
+    harness = HarnessRegistry().build(cfg)
+    assert harness.env_overrides["MAX_THINKING_TOKENS"] == "50000"
+
+
+def test_registry_claude_effort_default_is_no_override() -> None:
+    cfg = HarnessConfig(name="horizon", kind="claude-code", model="opus", options={"effort": "default"})
+    harness = HarnessRegistry().build(cfg)
+    assert "MAX_THINKING_TOKENS" not in harness.env_overrides
+    assert getattr(harness, "horizon_effort", None) is None
+
+
+def test_registry_codex_effort_default_omits_reasoning_flag() -> None:
+    cfg = HarnessConfig(name="horizon", kind="codex", model="fable5", options={"effort": "default"})
+    harness = HarnessRegistry().build(cfg)
+    argv = harness._argv("PROMPT")  # noqa: SLF001 — asserting the wiring
+    assert not any("model_reasoning_effort" in a for a in argv)
+
+
+def test_registry_claude_unknown_effort_is_explicit() -> None:
+    cfg = HarnessConfig(name="horizon", kind="claude-code", model="opus", options={"effort": "bogus"})
+    with pytest.raises(ValueError, match="unknown effort"):
+        HarnessRegistry().build(cfg)
+
+
 def test_registry_applies_optional_pricing_to_codex_parser() -> None:
     cfg = HarnessConfig(
         name="horizon",

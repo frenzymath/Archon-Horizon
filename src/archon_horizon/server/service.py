@@ -356,6 +356,7 @@ class WorkspaceService:
             "meta": meta,
             "status": status,
             "model": observed_model(events) or meta.get("model"),
+            "effort": meta.get("effort"),
             "started_at": events[0].at.isoformat() if events else "",
             "ended_at": end.at.isoformat() if end else "",
             "last_at": events[-1].at.isoformat() if events else "",

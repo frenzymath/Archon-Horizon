@@ -66,8 +66,10 @@ projects: {{}}
 # ``archon_horizon/subagents/descriptors/`` package dir (always merged in at
 # compile/catalog time), so these workspace copies are stale duplicates that
 # only pollute the roster. ``--update`` removes them (see the migration below).
-# We match by name AND the generated marker/shape so a descriptor a user has
-# since hand-authored under one of these names is never deleted.
+# Removal is by *name*: these names are reserved for the (now bundled) starter
+# roster, so any ``<name>.md`` still sitting in the workspace is a stale seed. If
+# you hand-authored your own descriptor under one of these names, rename it
+# before ``horizon init --update`` or it will be deleted.
 _LEGACY_SEEDED_SUBAGENTS: tuple[str, ...] = ("blueprint-reviewer", "diff-auditor")
 
 
@@ -79,15 +81,25 @@ def _default_model(kind: str) -> str:
 def _options_block(kind: str) -> str:
     """Kind-specific harness ``options:`` YAML (or empty).
 
-    Keeps engine-specific keys off the wrong engine — e.g. Codex's ``effort`` must
-    not land on a ``claude-code`` harness, and vice-versa. The returned string is
-    spliced right after the ``model:`` line, so it starts with a newline and has
-    no trailing newline."""
+    Keeps engine-specific keys off the wrong engine — e.g. Codex's ``sandbox`` must
+    not land on a ``claude-code`` harness, and vice-versa. Both engines honour
+    ``effort`` (Codex maps it to ``model_reasoning_effort``; Claude Code maps it
+    to a ``MAX_THINKING_TOKENS`` budget). The returned string is spliced right
+    after the ``model:`` line, so it starts with a newline and has no trailing
+    newline."""
     if kind == "codex":
-        return "\n    options:\n      # Codex reasoning effort: low | medium | high.\n      effort: high"
+        return (
+            "\n    options:\n"
+            "      # Reasoning effort — 'default' leaves Codex's own default.\n"
+            "      # default | low | medium | high\n"
+            "      effort: default"
+        )
     if kind == "claude-code":
         return (
-            "\n    # options:\n"
+            "\n    options:\n"
+            "      # Effort → thinking budget — 'default' leaves Claude Code's own default.\n"
+            "      # default | low | medium | high | xhigh | max | ultracode  (or a raw integer)\n"
+            "      effort: default\n"
             "      # backend: default   # default | vscode | desktop | claude-p"
         )
     return ""

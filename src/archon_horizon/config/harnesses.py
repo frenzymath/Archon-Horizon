@@ -72,6 +72,65 @@ def _config_dir(cfg: HarnessConfig) -> str | None:
     return cfg.config_dir
 
 
+# Claude Code has no ``model_reasoning_effort`` flag like Codex; the equivalent
+# lever is the extended-thinking token budget, which Claude Code reads from the
+# ``MAX_THINKING_TOKENS`` env var. Map the same ``options.effort`` vocabulary
+# onto a budget so effort works uniformly across harnesses. The high end is
+# capped by the model; oversized values are clamped by the CLI, not us.
+CLAUDE_EFFORT_BUDGETS: dict[str, int] = {
+    "low": 4_000,
+    "medium": 12_000,
+    "high": 24_000,
+    "xhigh": 32_000,
+    "max": 48_000,
+    "ultracode": 48_000,
+}
+
+
+# Effort values that mean "no override — let the engine pick its own default".
+# Scaffolding ``effort: default`` keeps the knob discoverable in config.yaml
+# without forcing a reasoning tier onto the run.
+_EFFORT_DEFAULT_SENTINELS = frozenset({"", "default", "none", "auto"})
+
+
+def _effort_label(cfg: HarnessConfig) -> str | None:
+    """The configured effort as a display string, or ``None`` when unset or set
+    to a 'use the engine default' sentinel (``default``/``none``/``auto``).
+
+    Engine-agnostic: both Codex (``model_reasoning_effort``) and Claude Code
+    (thinking budget) read the same ``options.effort`` key, so the Logs/run view
+    can show it uniformly. Normalised to lower-case; a raw integer budget is kept
+    verbatim (e.g. ``"9000"``)."""
+    raw = cfg.options.get("effort")
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    return None if value in _EFFORT_DEFAULT_SENTINELS else value
+
+
+def _claude_thinking_budget(cfg: HarnessConfig) -> int | None:
+    """Resolve ``options.effort`` to a ``MAX_THINKING_TOKENS`` budget for Claude.
+
+    Accepts the named tiers in :data:`CLAUDE_EFFORT_BUDGETS` or a raw integer
+    token count. Returns ``None`` when effort is unset or ``default`` (leaving
+    Claude Code's own default). Raises on an unrecognised value so a typo fails
+    loudly instead of silently disabling thinking.
+    """
+    effort = _effort_label(cfg)
+    if effort is None:
+        return None
+    if effort.isdigit():
+        return int(effort)
+    budget = CLAUDE_EFFORT_BUDGETS.get(effort)
+    if budget is None:
+        valid = ", ".join(CLAUDE_EFFORT_BUDGETS)
+        raise ValueError(
+            f"harness {cfg.name!r}: unknown effort {effort!r}; "
+            f"expected default or one of {valid}, or an integer token budget"
+        )
+    return budget
+
+
 # Provider API-key env vars per engine kind: if one is set (in the harness's own
 # ``env`` or the ambient environment) the CLI authenticates by API key (metered
 # billing); otherwise it uses the stored subscription/OAuth credentials in its
@@ -144,6 +203,12 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
     if config_dir:
         env_overrides.setdefault("CLAUDE_CONFIG_DIR", config_dir)
 
+    # Effort → extended-thinking budget. An explicit MAX_THINKING_TOKENS in the
+    # harness's `env` wins (setdefault), so the effort tier is only a default.
+    budget = _claude_thinking_budget(cfg)
+    if budget is not None:
+        env_overrides.setdefault("MAX_THINKING_TOKENS", str(budget))
+
     # Horizon agents run fully headless — there is no TTY to answer a permission
     # prompt, so Claude must bypass them or every `cd`/redirect/multi-op command
     # and out-of-tree write is denied. Horizon's own write-domain/freeze checks
@@ -213,7 +278,9 @@ def _build_codex(cfg: HarnessConfig) -> Harness:
     argv = ["codex", "exec", "--json", "--skip-git-repo-check"]
     if cfg.model:
         argv += ["-m", cfg.model]
-    effort = cfg.options.get("effort")
+    # `effort: default` (and other sentinels) leave Codex's own default rather
+    # than passing an override it would reject.
+    effort = _effort_label(cfg)
     if effort:
         argv += ["-c", f"model_reasoning_effort={effort}"]
     # Headless: codex's default sandbox blocks the shell, so the agent can't run
@@ -269,6 +336,7 @@ class HarnessRegistry:
         setattr(harness, "horizon_harness_name", cfg.name)
         setattr(harness, "horizon_harness_kind", cfg.kind)
         setattr(harness, "horizon_model", getattr(harness, "horizon_model", cfg.model))
+        setattr(harness, "horizon_effort", _effort_label(cfg))
         # Provenance for the Logs view: which engine config-home the session used
         # and how it authenticated (api-key vs subscription).
         setattr(harness, "horizon_config_dir", _config_dir(cfg))
