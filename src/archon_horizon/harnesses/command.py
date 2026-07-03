@@ -45,13 +45,20 @@ _POLL_S = 0.2
 # Ordered so a usage/billing limit wins over a bare rate-limit match.
 _FAILURE_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     ("auth_error", re.compile(r"not logged in|please run /login|unauthenticated|authentication required|invalid api key|incorrect api key|unauthorized|auth error", re.I)),
-    ("usage_limit", re.compile(r"usage limit|insufficient[_ ]quota|quota exceeded|credit balance|billing|payment required", re.I)),
+    ("usage_limit", re.compile(r"usage limit|session limit|hit your .*limit|insufficient[_ ]quota|quota exceeded|credit balance|billing|payment required", re.I)),
     ("rate_limit", re.compile(r"rate[ _-]?limit|too many requests|\b429\b|resource[_ ]?exhausted", re.I)),
     ("overloaded", re.compile(r"overloaded|\b529\b", re.I)),
     ("server_error", re.compile(r"internal server error|service unavailable|bad gateway|gateway timeout|\b50[0234]\b|server_error", re.I)),
     ("network", re.compile(r"connection reset|connection error|econnreset|etimedout|network error|temporarily unavailable", re.I)),
 )
 _RETRYABLE_REASONS = frozenset({"rate_limit", "overloaded", "server_error", "network"})
+
+# A failed session that produced no output and exited faster than this almost
+# never did real work — it's the engine refusing to start (a session/usage cap,
+# a bad flag, an auth wall whose message we don't pattern-match). Treat it as a
+# hard stop (``aborted_early``) so the run loop halts instead of respawning a
+# session that will die the same way every round.
+_EARLY_ABORT_S = 3.0
 
 
 def _classify_failure(text: str) -> str | None:
@@ -266,6 +273,7 @@ class CommandHarness(Harness):
             extra = list(self._extra_argv(request))
             if request.resume_session_id and self._resume_args is not None:
                 extra = [*self._resume_args(request.resume_session_id), *extra]
+            started_at = time.monotonic()
             proc = subprocess.Popen(
                 self._argv(request.prompt, extra),
                 cwd=request.cwd,
@@ -285,6 +293,7 @@ class CommandHarness(Harness):
             return HarnessResult(ok=False, text=f"{self.name}: engine not found: {exc}", artifact_refs=_refs(ref)), None
 
         events, stderr_lines, engine_session_id, threads = self._stream(proc, request, sink)
+        elapsed = time.monotonic() - started_at
 
         timed_out = events is None
         cancelled = request.cancel is not None and request.cancel.is_cancelled()
@@ -300,6 +309,7 @@ class CommandHarness(Harness):
         ok = returncode == 0 and not timed_out and not cancelled
 
         text, usage = aggregate(events or [])
+        had_output = bool(text.strip())
         stderr_text = "".join(stderr_lines).strip()
         if not ok and not text:
             text = stderr_text or (
@@ -338,6 +348,10 @@ class CommandHarness(Harness):
         # Classify a failure from the engine's own output (never our synthetic
         # cancel/timeout text) so `run` can retry transient ones and label the rest.
         reason = _classify_failure(f"{stderr_text}\n{text}") if (not ok and not cancelled) else None
+        # Backstop for a limit/refusal whose exact wording we don't match: an
+        # instant, output-less, non-zero exit is a hard stop, not a retry.
+        if reason is None and not ok and not timed_out and not cancelled and not had_output and elapsed < _EARLY_ABORT_S:
+            reason = "aborted_early"
         return HarnessResult(
             ok=ok,
             text=text,

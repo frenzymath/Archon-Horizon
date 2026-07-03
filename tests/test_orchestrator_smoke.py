@@ -170,6 +170,11 @@ def test_focused_task_is_reworked_every_round_even_after_done(tmp_path: Path) ->
 
     assert tuple(task_id for report in reports for task_id in report.tasks_run) == ("R-1", "R-1", "R-1")
     assert task_store.get("R-1").status is TaskStatus.DONE
+    # Each round-start re-queue of the agent-completed task is auditable, not a
+    # silent status flip: history records the done -> queued reopens by "system".
+    history = task_store.get("R-1").metadata.get("history") or []
+    reopens = [h for h in history if h.get("field") == "status" and h.get("to") == "queued" and h.get("actor") == "system"]
+    assert reopens, "focused re-queue of a done task should be recorded in history"
 
 
 def test_focused_task_with_recorded_done_status_is_not_requeued(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from archon_horizon.harnesses.base import HarnessRequest
-from archon_horizon.harnesses.command import CommandHarness
+from archon_horizon.harnesses.command import CommandHarness, _classify_failure
 from archon_horizon.harnesses.null import NullHarness
 from archon_horizon.transcript.model import TranscriptKind
 from archon_horizon.transcript.parsers import claude_session_id, parse_claude_line
@@ -120,6 +120,21 @@ def test_command_harness_captures_model_from_stream(tmp_path: Path) -> None:
     assert result.metadata["model"] == "claude-opus-4-x"
     events = read_transcript(tmp_path / "a" / "transcript.jsonl")
     assert any(e.data.get("model") == "claude-opus-4-x" for e in events)
+
+
+def test_classify_failure_flags_claude_session_limit_as_usage_limit() -> None:
+    # Claude Code's subscription session cap; retrying in-process can't clear it,
+    # so it must be a hard stop (usage_limit), not a retryable rate-limit.
+    assert _classify_failure("You've hit your session limit · resets 6:40am (UTC)") == "usage_limit"
+
+
+def test_command_harness_flags_instant_outputless_failure_as_aborted_early(tmp_path: Path) -> None:
+    # An engine that exits non-zero immediately with no output (a refusal whose
+    # wording we don't match) is a hard stop the run loop must halt on, not retry.
+    harness = CommandHarness("boom", [sys.executable, "-c", "import sys; sys.exit(3)"])
+    result = harness.run(HarnessRequest(prompt="x", cwd=tmp_path, artifact_dir=tmp_path / "a"))
+    assert not result.ok
+    assert result.metadata["failure_reason"] == "aborted_early"
 
 
 def test_command_harness_surfaces_effort_on_metadata_and_transcript(tmp_path: Path) -> None:

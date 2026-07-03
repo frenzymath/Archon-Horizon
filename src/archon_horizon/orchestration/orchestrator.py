@@ -92,7 +92,7 @@ def _files_summary(value: object, *, limit: int = 8) -> str:
     return f"{len(files)} {noun}: {shown}"
 
 
-_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit"})
+_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early"})
 
 
 def _is_fatal_failure(meta: dict[str, object] | None) -> bool:
@@ -747,6 +747,17 @@ class Orchestrator:
             if has_recorded_terminal_status(task):
                 continue
             if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.RUNNING):
+                # Record the reopen in the task's history (separate file from the
+                # task doc) so a focused run re-queuing an agent-completed task is
+                # auditable rather than a silent status flip.
+                self.task_store.append_history(task_id, {
+                    "at": utc_now().isoformat(),
+                    "actor": "system",
+                    "field": "status",
+                    "from": task.status.value,
+                    "to": TaskStatus.QUEUED.value,
+                    "note": "re-queued for the next round of a focused run",
+                })
                 self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
 
     def _task_terminal_watcher(
