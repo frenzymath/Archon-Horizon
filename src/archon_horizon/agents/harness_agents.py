@@ -83,6 +83,17 @@ def _agent_env(role: str, context: HorizonContext | GroundContext) -> dict[str, 
         projects = getattr(task, "projects", None) or ((task.project,) if getattr(task, "project", None) else ())
         if projects:
             env["ARCHON_HORIZON_PROJECTS"] = ",".join(projects)
+    # Ledger access for plain-git commits (see the project-git skill). We expose
+    # the ledger paths + a thin `hgit` passthrough rather than exporting
+    # GIT_DIR/GIT_WORK_TREE, which would redirect `lake` and the project's own git.
+    # The prepare-commit-msg hook stamps provenance trailers from the ARCHON_* env
+    # above, so a raw `git commit` still maps to its session/task in the dashboard.
+    from archon_horizon.vcs.git import WorkspaceGit, install_ledger_git_wrapper
+    env["HORIZON_LEDGER_GIT_DIR"] = str(WorkspaceGit(context.workspace.root).git_dir.resolve())
+    env["HORIZON_LEDGER_WORK_TREE"] = str(context.workspace.root.resolve())
+    wrapper = install_ledger_git_wrapper(context.workspace.state_path)
+    if wrapper is not None:
+        env["HORIZON_GIT"] = str(wrapper.resolve())
     return env
 
 

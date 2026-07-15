@@ -17,12 +17,38 @@ Read this before running `git diff`/`git log` on a project.
 - **There are no per-project repositories.** A project directory has no nested
   `.git/`, and there is no `.archon-horizon/vcs/<project>.git`. A project's
   "history" is simply the workspace ledger filtered to that project's path.
-- **You never commit.** The orchestrator writes the integration commit for each
-  session automatically. You *read* history; you do not commit project or
-  workspace repos manually, and there is no "project VCS" to reconcile.
+- **You record your own work by committing to the ledger** with plain `git` (see
+  below). Commit *early and often* with a semantic, math-first message — the
+  commit message + diff is how your progress is read, so make the message say what
+  you proved/built. Provenance trailers are added automatically; do not write them.
 
 So a plain `git diff` at the root sees only a user repo (if any), never Archon's.
-To inspect Archon's history, drive the out-of-tree workspace ledger explicitly.
+Drive the out-of-tree workspace ledger explicitly (or use `hgit`).
+
+## Recording your work (committing)
+
+Commits go to the ledger, **not** to `<root>/.git` and **not** via any project
+`.git` (there is none). Do **not** `export GIT_DIR` / `GIT_WORK_TREE` yourself — that
+would redirect `lake` and other tooling. Two equivalent ways to commit:
+
+```bash
+# 1) The `hgit` wrapper (on the session env as $HORIZON_GIT) — plain git, ledger-scoped:
+"$HORIZON_GIT" add path/to/File.lean
+"$HORIZON_GIT" commit -m "feat(chapter): prove foo_lemma"
+
+# 2) The explicit form (identical effect):
+git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" \
+    add path/to/File.lean
+git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" \
+    commit -m "feat(chapter): prove foo_lemma"
+```
+
+- Prefer staging **explicit paths** you changed over `add -A` — the work tree is the
+  whole workspace, so `-A` can sweep in unrelated files.
+- `Archon-Run`/`Session`/`Role`/`Task`/`Projects` trailers are stamped for you by a
+  hook from the session env; your message stays clean.
+- Build artifacts (`.lake`, `*.olean`, …) and secrets are excluded/blocked
+  automatically, so a broad add still won't commit them.
 
 ## Reading history / a project's diff
 

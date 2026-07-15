@@ -122,8 +122,10 @@ _COMMON_EXCLUDES = (
 )
 
 # Workspace-ledger-only excludes: the project git dirs and ephemeral leases that
-# live under the workspace root (a project work tree never contains these).
-_WORKSPACE_EXCLUDES = (".archon-horizon/vcs/", ".archon-horizon/locks/")
+# live under the workspace root (a project work tree never contains these). The
+# ``bin/`` dir holds the auto-installed ``hgit`` wrapper — a regenerable tool, not
+# project state, so it stays out of the ledger even under a broad ``git add -A``.
+_WORKSPACE_EXCLUDES = (".archon-horizon/vcs/", ".archon-horizon/locks/", ".archon-horizon/bin/")
 
 # A pre-commit guard installed into every out-of-tree git so an accidental
 # credential (in a transcript, config, or dropped file) is caught before it is
@@ -142,6 +144,52 @@ if [ -n "$hit" ]; then
 fi
 exit 0
 """
+
+
+# A prepare-commit-msg hook that stamps run/session/task provenance as git
+# trailers onto commits made from inside a Horizon session, so the dashboard can
+# link a commit to its session/task WITHOUT a custom commit wrapper. The agent
+# writes only a semantic message; provenance is added here. Idempotent: a no-op
+# outside a session (no ARCHON_HORIZON_RUN) or when the message is already stamped
+# (e.g. the Python integration path put the trailers in itself).
+_PROVENANCE_HOOK = r"""#!/bin/sh
+# Auto-installed by Archon Horizon. Adds Archon-* provenance trailers from the env.
+msg="$1"
+[ -n "$ARCHON_HORIZON_RUN" ] || exit 0
+[ -n "$msg" ] || exit 0
+grep -q '^Archon-Run:' "$msg" 2>/dev/null && exit 0
+set -- --trailer "Archon-Run=$ARCHON_HORIZON_RUN"
+[ -n "$ARCHON_HORIZON_AGENT_ROLE" ] && set -- "$@" --trailer "Archon-Role=$ARCHON_HORIZON_AGENT_ROLE"
+[ -n "$ARCHON_HORIZON_SESSION" ] && set -- "$@" --trailer "Archon-Session=$ARCHON_HORIZON_SESSION"
+[ -n "$ARCHON_HORIZON_TASK" ] && set -- "$@" --trailer "Archon-Task=$ARCHON_HORIZON_TASK"
+[ -n "$ARCHON_HORIZON_PROJECTS" ] && set -- "$@" --trailer "Archon-Projects=$ARCHON_HORIZON_PROJECTS"
+git interpret-trailers --in-place --trailer "Archon-Commit=agent" "$@" "$msg" 2>/dev/null || exit 0
+exit 0
+"""
+
+# A thin plain-git passthrough to the workspace ledger, installed under
+# ``<state>/bin/hgit`` so an agent commits with normal git semantics WITHOUT
+# exporting GIT_DIR/GIT_WORK_TREE globally — which would redirect ``lake`` and the
+# project's own git too. Reads the ledger paths from the session env.
+_LEDGER_GIT_WRAPPER = """#!/bin/sh
+# Auto-installed by Archon Horizon. `git` against the workspace ledger.
+exec git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" "$@"
+"""
+
+
+def install_ledger_git_wrapper(state_dir: Path) -> Path | None:
+    """Write the ``hgit`` ledger-git passthrough into ``<state>/bin`` and return
+    its path. Idempotent. Returns ``None`` on failure — the explicit
+    ``git --git-dir=… --work-tree=…`` form documented in the skill still works."""
+    try:
+        bin_dir = Path(state_dir) / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        path = bin_dir / "hgit"
+        path.write_text(_LEDGER_GIT_WRAPPER, "utf-8")
+        path.chmod(0o755)
+        return path
+    except OSError:
+        return None
 
 
 def neutralize_nested_git(work_tree: Path) -> str | None:
@@ -176,6 +224,9 @@ def _ensure_repo_hygiene(git_dir: Path, *, extra_excludes: Sequence[str] = ()) -
     hook = hooks / "pre-commit"
     hook.write_text(_SECRET_HOOK, "utf-8")
     hook.chmod(0o755)
+    prov = hooks / "prepare-commit-msg"
+    prov.write_text(_PROVENANCE_HOOK, "utf-8")
+    prov.chmod(0o755)
 
 
 def _prune_ignored_from_index(git_dir: Path, work_tree: Path) -> None:
