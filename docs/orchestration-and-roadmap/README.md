@@ -19,17 +19,22 @@ Archon Horizon manages complex mathematical formalization through structured orc
 
 The core execution command in Archon Horizon is `horizon run` (see [`commands/run.py`](../../src/archon_horizon/commands/run.py)). It dispatches the underlying agent engine against specified targets within the workspace:
 
+# Each target resolves in order **task id → roadmap item id → project/file**:
+
 ```bash
-# Run a specific task
+# Run a specific human-created task
 horizon run my_formalization_task
 
-# Run all tasks induced by a specific project
+# Launch a roadmap milestone (a task is inferred from it on demand)
+horizon run thm_main_result
+
+# Ad-hoc task scoped to a project (or a file)
 horizon run project_a
 
-# Run across multiple projects simultaneously
+# Ad-hoc task across multiple projects simultaneously
 horizon run project_a project_b
 
-# Run across all projects in the entire workspace
+# Run every queued task in the workspace
 horizon run '*'
 ```
 
@@ -87,10 +92,10 @@ When a run is initiated, Horizon executes a structured **collaboration loop** be
 
 ## 3. Roadmaps vs. Tasks
 
-Horizon makes a sharp distinction between human-defined tasks and dynamic agent roadmaps:
+Horizon keeps a sharp distinction between the human's tasks and the agent-maintained roadmap:
 
-- **Tasks (`horizon task`)**: High-level, human-managed objectives defining project scopes, permissions, directives, and target files. Modeled in [`core/tasks.py`](../../src/archon_horizon/core/tasks.py), commands in [`commands/task.py`](../../src/archon_horizon/commands/task.py).
-- **Roadmap (`horizon roadmap`)**: Dynamic milestones and granular work items maintained by the Ground agent to organize pending proof steps, blocker dependencies, and completion estimates. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
+- **Tasks (`horizon task`)**: the human's lever for launching sessions — objectives with project scope, write-set, and target files. **Human-authored only**: agents may read and `comment` (to suggest an edit) but cannot `add`/`set`/`remove` (the CLI refuses when `ARCHON_HORIZON_AGENT_ROLE` is set); to propose work an agent opens an inbox item for the human. Modeled in [`core/tasks.py`](../../src/archon_horizon/core/tasks.py), commands in [`commands/task.py`](../../src/archon_horizon/commands/task.py).
+- **Roadmap (`horizon roadmap`)**: the project's **mathematical status** — the main theorems and infrastructure formalized and still to build. Ground maintains it to mirror the real Lean/blueprint state; it is a map that guides the work, **not** a work queue. Marking an item active does not launch anything and the orchestrator never turns roadmap items into tasks on its own. A human launches a milestone with `horizon run <roadmap-id>`, which **infers** a task from the item's scope on demand. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
 
 ### Common Roadmap Commands
 

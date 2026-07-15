@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from archon_horizon.agents.base import HorizonAgent, HorizonContext, GroundAgent, GroundContext, GroundUpdate
-from archon_horizon.blueprint.checks import blueprint_lint_issues, dag_consistency_issues
+from archon_horizon.blueprint.checks import blueprint_coverage, blueprint_lint_issues, dag_consistency_issues
 from archon_horizon.blueprint.workspace import workspace_dags, workspace_dags_rich
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.events import Event
@@ -28,9 +30,11 @@ from archon_horizon.core.labels import is_agent_ready
 from archon_horizon.core.permissions import WriteDomain, horizon_write_domain, ground_write_domain
 from archon_horizon.core.roadmap import Roadmap, RoadmapStatus
 from archon_horizon.core.scope import ItemScope
-from archon_horizon.core.sessions import Focus, RunRecord, SyncBoundary
+from archon_horizon.core.sessions import RunRecord, SyncBoundary
+from archon_horizon.core.status_sync import has_recorded_terminal_status
 from archon_horizon.core.tasks import HorizonResult, HorizonTask, TaskStatus, WriteSet
 from archon_horizon.core.workspace import Workspace
+from archon_horizon.harnesses.base import Cancellation
 from archon_horizon.inboxes.base import InboxProvider
 from archon_horizon.runlog import RunLog, RunLogTree, SessionLog
 from archon_horizon.subagents.base import Subagent, SubagentContext
@@ -45,6 +49,7 @@ from archon_horizon.store.base import (
 )
 from archon_horizon.vcs.integration import (
     author_for,
+    integrate_workspace_baseline,
     integrate_workspace_run,
     integrate_workspace_session,
     project_checkpoint,
@@ -53,6 +58,9 @@ from archon_horizon.vcs.integration import (
 from .locks import LockManager, workspace_run_lock
 from .scheduler import Scheduler
 from .sync import SyncCoordinator
+
+
+_TASK_CANCEL_POLL_S = 0.5
 
 
 def _csv(values: object, *, none: str = "none") -> str:
@@ -69,6 +77,37 @@ def _short_sha(value: object) -> str:
     return text[:7] if text else "none"
 
 
+def _files_summary(value: object, *, limit: int = 8) -> str:
+    """A compact "which files" fragment for a commit event, e.g.
+    ``3 files: a.lean, b.tex, config.yaml`` — truncated with ``+N more``.
+    Empty string when no file list is available (older events, or a no-op)."""
+    if not isinstance(value, (list, tuple)):
+        return ""
+    files = [str(f) for f in value if f]
+    if not files:
+        return ""
+    shown = ", ".join(files[:limit])
+    if len(files) > limit:
+        shown += f", +{len(files) - limit} more"
+    noun = "file" if len(files) == 1 else "files"
+    return f"{len(files)} {noun}: {shown}"
+
+
+_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early"})
+
+
+def _is_fatal_failure(meta: dict[str, object] | None) -> bool:
+    """True when a session fails with unrecoverable auth/quota issues or exhausts retries."""
+    if not isinstance(meta, dict):
+        return False
+    reason = meta.get("failure_reason")
+    if reason in _FATAL_RUN_REASONS:
+        return True
+    if meta.get("retries_exhausted"):
+        return True
+    return False
+
+
 def _event_label(event_type: str) -> str:
     return event_type.replace(".", " ").replace("_", " ").capitalize()
 
@@ -83,11 +122,18 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         return f"Finished run {data.get('run_id')}."
     if event_type == "run.stopped":
         return f"Stopped run {data.get('run_id')}: {data.get('reason')}."
-    if event_type == "run.focus_broadened":
-        return (
-            f"Focus {_csv(data.get('focus_tasks'))} had no runnable task; ran the active roadmap work "
-            f"in project(s) {_csv(data.get('projects'))}: {_csv(data.get('selected'))}."
-        )
+    if event_type == "run.focus_unrunnable":
+        tasks = data.get("tasks")
+        if isinstance(tasks, dict) and tasks:
+            detail = ", ".join(f"{tid} is {status}" for tid, status in tasks.items())
+            return f"Focus task(s) not runnable ({detail}); the scheduler only runs queued tasks."
+        return "The pinned focus task(s) were not runnable."
+    if event_type == "ground.failed":
+        reason = data.get("reason") or data.get("failure_reason")
+        rc = data.get("returncode")
+        bits = [b for b in (f"exit {rc}" if rc is not None else "", str(reason) if reason else "") if b]
+        detail = f" ({'; '.join(bits)})" if bits else ""
+        return f"Ground session crashed{detail}; the round's plan/reconcile may be incomplete."
     if event_type == "run.dry-run":
         return f"Dry run planned tasks: {_csv(data.get('planned'))}."
     if event_type == "roadmap.load_failed":
@@ -96,6 +142,11 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         return "Restored roadmap from the last clean in-memory copy."
     if event_type == "roadmap.updated":
         return "Roadmap reloaded after Ground session."
+    if event_type == "roadmap.deps_unmet":
+        return (
+            f"Roadmap milestone {data.get('roadmap_id')} has unmet dependencies "
+            f"({_csv(data.get('dependencies'))}); running it anyway as requested."
+        )
     if event_type == "report.written":
         return f"Report saved: {data.get('ref') or data.get('name')}."
     if event_type == "blueprint.checks.findings":
@@ -107,16 +158,40 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         return f"Blueprint checks found {count} issue(s)."
     if event_type == "blueprint.checks.clean":
         return "Blueprint checks found no issues."
+    if event_type == "blueprint.dags":
+        projects = data.get("projects")
+        if isinstance(projects, dict) and projects:
+            detail = ", ".join(
+                f"{project} ({c.get('nodes', 0)} nodes, {c.get('edges', 0)} edges)"
+                for project, c in projects.items()
+            )
+            return f"Rebuilt blueprint DAG(s): {detail}."
+        return "Rebuilt blueprint DAG(s)."
     if event_type == "task.created":
         return f"Created task {data.get('task_id')} for project {data.get('project')}."
     if event_type == "task.started":
         return f"Started Horizon task {data.get('task_id')}."
     if event_type == "task.finished":
         return f"Finished Horizon task {data.get('task_id')} with status: {data.get('status')}."
+    if event_type == "task.incomplete":
+        return (
+            f"Horizon task {data.get('task_id')} did not record a terminal status; "
+            "returned it to queued for the next round."
+        )
+    if event_type == "task.external_terminal":
+        return (
+            f"Stopped Horizon task {data.get('task_id')} because its stored status became "
+            f"{data.get('status')} outside the running agent."
+        )
     if event_type == "task.blocked":
         return f"Blocked task {data.get('task_id')}: {data.get('reason')}."
     if event_type == "task.deferred":
         return f"Deferred task {data.get('task_id')}: {data.get('reason')}."
+    if event_type == "task.lock_warning":
+        return (
+            f"Warning: task {data.get('task_id')} overlaps a concurrent run's write set "
+            "(advisory lock); ran the Horizon anyway."
+        )
     if event_type == "agent.frozen":
         return f"Skipped {data.get('agent')} because that agent is frozen."
     if event_type == "write_domain.violation":
@@ -124,7 +199,9 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
     if event_type == "project.commit":
         project = data.get("project")
         if data.get("changed"):
-            return f"Committed {project} changes: {_short_sha(data.get('sha'))}."
+            files = _files_summary(data.get("files"))
+            detail = f" ({files})" if files else ""
+            return f"Committed {project} changes: {_short_sha(data.get('sha'))}{detail}."
         return f"No project changes to commit for {project}."
     if event_type == "project.commit.failed":
         return f"Project checkpoint failed for {data.get('project')}: {data.get('error')}."
@@ -135,8 +212,22 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
             return f"Integration of {role} session {session} failed: {data.get('workspace_commit_error')}."
         sha = data.get("workspace_commit")
         if sha:
-            return f"Integrated {role} session {session}: {_short_sha(sha)}."
+            parts = [f"Integrated {role} session {session}: {_short_sha(sha)}"]
+            projects = [p for p in (data.get("projects") or []) if p]
+            if projects:
+                parts.append("projects " + ", ".join(projects))
+            files = _files_summary(data.get("files"))
+            if files:
+                parts.append(files)
+            return "; ".join(parts) + "."
         return f"Integrated {role} session {session}; no workspace changes."
+    if event_type == "workspace.run_baseline":
+        sha = data.get("sha")
+        if sha:
+            return f"Recorded run {data.get('run_id')} baseline: {_short_sha(sha)}."
+        return f"Recorded run {data.get('run_id')} baseline."
+    if event_type == "workspace.run_baseline.failed":
+        return f"Run baseline commit failed: {data.get('error')}."
     if event_type == "run.concurrent":
         existing = data.get("existing") or {}
         return (
@@ -181,9 +272,12 @@ def _is_issue_event(event: TranscriptEvent) -> bool:
         "blueprint.checks.findings",
         "task.blocked",
         "task.deferred",
+        "task.incomplete",
         "roadmap.load_failed",
         "agent.frozen",
         "run.stopped",
+        "run.focus_unrunnable",
+        "ground.failed",
     }:
         return True
     status = str(data.get("status") or "")
@@ -218,11 +312,16 @@ class Orchestrator:
     run_logs: RunLogTree | None = None
     ground_subagents: tuple[Subagent, ...] = ()
     freeze: FreezeSet = field(default_factory=FreezeSet)
-    # The run is a flat ground/horizon alternation that opens and closes on
-    # ground by default; set either to "horizon" to skip the opening / closing
-    # ground so the run starts and/or ends on horizon instead.
-    start_with: str = "ground"
+    # The run is a flat ground/horizon alternation. By default it opens on
+    # horizon and closes on ground (H-G-H-G-…-G, no upfront planning Ground);
+    # set start_with="ground" to prepend an opening Ground, or end_with="horizon"
+    # to drop the closing reconcile Ground.
+    start_with: str = "horizon"
     end_with: str = "ground"
+    # Which agent roles the run loop drives. Default is both (normal alternation).
+    # ("horizon",) → a Horizon-only loop with no Ground; ("ground",) → a Ground-only
+    # loop with no Horizon (each round is a single Ground session).
+    roles: tuple[str, ...] = ("ground", "horizon")
     # Last roadmap that parsed cleanly; kept in memory if a human-readable item
     # shard is malformed, so one bad edit can't crash the whole run.
     _roadmap_cache: Roadmap | None = field(default=None, repr=False)
@@ -254,7 +353,15 @@ class Orchestrator:
 
         from archon_horizon.log import log
         if type == "run.started":
-            log.header(f"Starting Run (ID: {data.get('run_id')}) - {data.get('rounds')} rounds")
+            rounds = data.get("rounds")
+            resume_from = data.get("resume_from")
+            if data.get("resume") and resume_from:
+                suffix = f" (resuming, continuing from round {resume_from})"
+            elif data.get("resume"):
+                suffix = " (resuming)"
+            else:
+                suffix = ""
+            log.header(f"Starting Run (ID: {data.get('run_id')}) - {rounds} rounds{suffix}")
         elif type == "run.finished":
             log.success(f"Run {data.get('run_id')} finished.")
         elif type == "task.started":
@@ -264,6 +371,9 @@ class Orchestrator:
             log.step(f"[{actor}] Finished task: {data.get('task_id')} ({status_str})")
         elif type == "subagent.ran":
             log.step(f"[ground] Subagent '{data.get('name')}' finished (ok={data.get('ok')})")
+        elif type == "task.lock_warning":
+            log.warn(f"[horizon] Task {data.get('task_id')} overlaps a concurrent run's write set; "
+                     "running anyway (advisory lock).")
         elif type == "project.commit":
             sha = str(data.get('sha'))[:7] if data.get('sha') else "none"
             log.step(f"Committed changes to {data.get('project')} ({sha})")
@@ -277,23 +387,30 @@ class Orchestrator:
         return session.path if session is not None else None
 
     def _revision_meta(self) -> dict[str, object]:
-        from archon_horizon.vcs.git import WorkspaceGit, collect_revisions, git_available
+        from archon_horizon.vcs.git import WorkspaceGit, git_available
 
         if not git_available():
             return {}
         workspace_sha = WorkspaceGit(self.workspace.root).current_sha()
-        project_revisions = {k: v for k, v in collect_revisions(self.workspace).items() if v}
-        out: dict[str, object] = {}
-        if workspace_sha:
-            out["workspace_sha"] = workspace_sha
-        if project_revisions:
-            out["project_revisions"] = project_revisions
-        return out
+        return {"workspace_sha": workspace_sha} if workspace_sha else {}
 
     def _write_session_meta(self, session: SessionLog | None, meta: dict[str, object]) -> None:
         if session is None:
             return
         session.write_meta({**meta, **self._revision_meta()})
+
+    @staticmethod
+    def _agent_harness_metadata(agent: object) -> dict[str, object]:
+        """Harness/model/effort descriptor for ``agent`` (harness-backed roles
+        expose ``harness_metadata()``); empty for agents that don't, e.g. test
+        doubles — so this only ever adds fields, never breaks the meta write."""
+        describe = getattr(agent, "harness_metadata", None)
+        if not callable(describe):
+            return {}
+        try:
+            return describe()
+        except Exception:
+            return {}
 
     def _integrate_session(
         self,
@@ -304,6 +421,7 @@ class Orchestrator:
         round_index: int | None = None,
         project: str | None = None,
         task_id: str | None = None,
+        projects: tuple[str, ...] = (),
         project_commits: dict[str, str | None] | None = None,
         project_commit_errors: dict[str, str] | None = None,
     ) -> None:
@@ -317,8 +435,7 @@ class Orchestrator:
             round_index=round_index,
             project=project,
             task_id=task_id,
-            project_commits=project_commits,
-            project_commit_errors=project_commit_errors,
+            projects=projects,
             commit_workspace=True,
         )
         self._emit(
@@ -328,10 +445,12 @@ class Orchestrator:
             role=role,
             project=project,
             task_id=task_id,
-            project_commits=integration.project_commits,
-            project_commit_errors=integration.project_commit_errors,
+            projects=list(integration.projects),
+            project_commits=project_commits or {},
+            project_commit_errors=project_commit_errors or {},
             workspace_commit=integration.workspace_commit,
             workspace_commit_error=integration.workspace_commit_error,
+            files=list(integration.workspace_files),
         )
 
     # ── context assembly ────────────────────────────────────────────
@@ -401,13 +520,15 @@ class Orchestrator:
         return tuple(self.workspace.projects)
 
     def _ground_context(
-        self, run: RunRecord, log_dir: Path | None = None, resume_session_id: str | None = None
+        self, run: RunRecord, log_dir: Path | None = None, resume_session_id: str | None = None,
+        *, opening: bool = False,
     ) -> GroundContext:
         accepted = self._accepted_inbox()
         return GroundContext(
             workspace=self.workspace,
             run=run,
             focus=run.focus,
+            is_opening=opening,
             roadmap=self._load_roadmap(),
             accepted_inbox=accepted,
             memory=self._render_memory(accepted),
@@ -456,9 +577,15 @@ class Orchestrator:
         """
         total = 0
         by_project: dict[str, int] = {}
+        coverage: dict[str, dict[str, int]] = {}
         for project, dag in workspace_dags(self.workspace).items():
             try:
+                # Only true soundness defects count as "issues": dangling uses,
+                # cycles, and leanok-depends-on-not-leanok. Unlinked nodes are
+                # work remaining, reported as coverage — not as a defect that
+                # would tell agents the blueprint is broken.
                 count = len(dag_consistency_issues(dag) + blueprint_lint_issues(dag))
+                coverage[project] = blueprint_coverage(dag)
             except Exception as exc:  # a pathological DAG must not abort the run
                 self._emit("blueprint.checks.failed", actor="orchestrator", project=project, error=str(exc))
                 continue
@@ -471,9 +598,10 @@ class Orchestrator:
                 actor="orchestrator",
                 count=total,
                 projects=by_project,
+                coverage=coverage,
             )
         else:
-            self._emit("blueprint.checks.clean", actor="orchestrator")
+            self._emit("blueprint.checks.clean", actor="orchestrator", coverage=coverage)
 
     def _task_projects(self, task: HorizonTask) -> tuple[str, ...]:
         """The full project set a task covers — a task may span several projects.
@@ -492,6 +620,7 @@ class Orchestrator:
         runlog: RunLog | None,
         log_dir: Path | None = None,
         resume_session_id: str | None = None,
+        cancel: Cancellation | None = None,
     ) -> HorizonContext:
         roadmap = self._load_roadmap()
         projects = self._task_projects(task)
@@ -509,6 +638,7 @@ class Orchestrator:
             write_domain=domain.allow,
             log_dir=log_dir,
             resume_session_id=resume_session_id,
+            cancel=cancel,
             metadata={"ground_recommendation": self._latest_ground_recommendation(runlog)},
         )
 
@@ -602,10 +732,14 @@ class Orchestrator:
 
     @classmethod
     def _write_recommendation(cls, session: SessionLog | None, text: str) -> str | None:
-        recommendation = cls._extract_recommendation(text)
-        if session is None or not recommendation:
+        if session is None:
             return None
         path = session.path / "recommendation.md"
+        if path.is_file() and path.read_text("utf-8").strip():
+            return path.as_posix()
+        recommendation = cls._extract_recommendation(text)
+        if not recommendation:
+            return None
         path.write_text(recommendation.rstrip() + "\n", "utf-8")
         return path.as_posix()
 
@@ -643,106 +777,139 @@ class Orchestrator:
             self._emit("report.written", name=f"{report_name}-recommendation", ref=recommendation_ref)
         self._emit("roadmap.updated", actor="ground")
 
-    def _focus_fallback(self, run: RunRecord, candidates: list[HorizonTask]) -> Focus:
-        """A project-scoped focus derived from the originally targeted task(s).
+    def _queue_focus_for_round(self, run: RunRecord, *, initial: bool) -> None:
+        """Queue explicitly focused tasks so a user-started run actually runs them.
 
-        ``horizon run <X>`` pins the focus to task ``X``; but the Ground agent
-        plans by marking roadmap items ACTIVE, and the orchestrator queues those
-        as tasks under the ITEM ids — never ``X``. So once ``X`` itself is done
-        (or is just a planning seed), the focus matches nothing runnable. Falling
-        back to ``X``'s project(s) lets the scheduler dispatch the roadmap work
-        Ground created in the same project instead of stopping the run."""
-        by_id = {task.id: task for task in candidates}
-        projects: list[str] = []
+        A Horizon step now leaves its task ``QUEUED`` unless the agent recorded a
+        terminal status itself, so a focused task normally stays runnable on its
+        own. This still re-queues a focused task that a previous run left
+        ``blocked``/``failed`` (agent-reported) so an explicit ``horizon run
+        <task|roadmap id>`` retries it. ``done`` is never reopened — it is terminal
+        and the CLI already refuses to start a done task without an explicit
+        re-queue. Dispatch records the transition to ``RUNNING`` immediately before
+        the agent starts.
+
+        Only the explicit focus is re-queued — unfocused queued work still runs
+        once and then rests. Frozen tasks are left alone (the scheduler and the
+        pre-dispatch freeze check handle them)."""
         for task_id in run.focus.tasks:
-            task = by_id.get(task_id)
-            if task is None:
+            try:
+                task = self.task_store.get(task_id)
+            except Exception:
+                continue
+            if frozen_violations(task.write_set, self.freeze):
+                continue
+            if task.status is TaskStatus.RUNNING and initial:
+                self.task_store.append_history(task_id, {
+                    "at": utc_now().isoformat(),
+                    "actor": "system",
+                    "field": "status",
+                    "from": task.status.value,
+                    "to": TaskStatus.QUEUED.value,
+                    "note": "queued so the explicitly started task can be dispatched by this run",
+                })
+                self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
+            elif task.status is not TaskStatus.RUNNING and task.status is not TaskStatus.QUEUED:
+                # A DONE the agent declared is authoritative and terminal: never
+                # reopen it here. Re-running a finished task is a deliberate human
+                # act (`horizon task set <id> --status queued`), guarded at the CLI.
+                if task.status is TaskStatus.DONE:
+                    continue
+                self.task_store.append_history(task_id, {
+                    "at": utc_now().isoformat(),
+                    "actor": "system",
+                    "field": "status",
+                    "from": task.status.value,
+                    "to": TaskStatus.QUEUED.value,
+                    "note": "queued because the user explicitly started this task" if initial
+                    else "re-queued for the next round of a focused run",
+                })
+                self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
+
+    def _focus_complete(self, run: RunRecord) -> bool:
+        """True when a focused run's whole milestone is finished — every focused
+        task has reached ``DONE``. Lets a focused ``run`` stop as soon as the work
+        it was launched for is complete instead of reworking it across the
+        remaining requested rounds. A FAILED/BLOCKED task is *not* complete, so
+        those still retry (status stays metadata, not a freeze)."""
+        if not run.focus.tasks:
+            return False
+        for task_id in run.focus.tasks:
+            try:
+                task = self.task_store.get(task_id)
+            except Exception:
+                return False
+            if task.status is not TaskStatus.DONE:
+                return False
+        return True
+
+    def _task_terminal_watcher(
+        self, task_id: str, cancel: Cancellation
+    ) -> tuple[threading.Event, list[TaskStatus], threading.Thread]:
+        """Cancel a running Horizon harness if its task is explicitly closed."""
+        stop = threading.Event()
+        observed: list[TaskStatus] = []
+
+        def watch() -> None:
+            while not stop.wait(_TASK_CANCEL_POLL_S):
                 try:
-                    task = self.task_store.get(task_id)
+                    current = self.task_store.get(task_id)
                 except Exception:
-                    task = None
-            if task is not None:
-                projects.extend(task.projects or ((task.project,) if task.project else ()))
-        return dataclasses.replace(
-            run.focus, tasks=(), task=None, projects=tuple(dict.fromkeys(p for p in projects if p))
-        )
+                    continue
+                if has_recorded_terminal_status(current):
+                    observed.append(current.status)
+                    cancel.cancel()
+                    return
 
-    def _sync_roadmap_tasks(self, run: RunRecord) -> None:
-        """Derive Horizon work from active roadmap items.
+        thread = threading.Thread(target=watch, name=f"horizon-task-watch-{task_id}", daemon=True)
+        thread.start()
+        return stop, observed, thread
 
-        The Ground agent recommends work by marking a roadmap item ACTIVE; the
-        orchestrator turns each unblocked active item into a queued Horizon
-        task. Task ids mirror the item id so this is idempotent across rounds;
-        a finished task is re-queued only if its item is re-activated by the
-        Ground agent.
-        """
+    def ensure_roadmap_task(self, item_id: str) -> HorizonTask | None:
+        """Infer a Horizon task from a roadmap item, on demand.
+
+        A roadmap item is a mathematical milestone (a theorem or piece of
+        infrastructure), not a task; but it carries enough scope/metadata to infer
+        one. ``horizon run <roadmap_id>`` uses this to materialize a task the human
+        can launch, without the orchestrator ever auto-creating tasks from the
+        roadmap. Returns the stored task, or ``None`` if the item is unknown or has
+        no project to run in. Unmet roadmap dependencies do not block an explicit
+        run; they are only surfaced as a warning."""
         roadmap = self._load_roadmap()
-        existing = {t.id: t for t in self.task_store.list()}
         items_by_id = {item.id: item for item in roadmap.items}
-        for item in roadmap.items:
-            if item.status is not RoadmapStatus.ACTIVE or not item.projects:
-                continue
-            # Task status (DONE/FAILED/BLOCKED) is user-facing metadata, never a
-            # scheduling gate: an ACTIVE roadmap item is re-derived and re-run
-            # every round — a long item makes more progress each round even
-            # though each Horizon pass returns "done". Ground retires an item by
-            # marking it DONE *in the roadmap*, not via the task's status. (So a
-            # resume / new run picks an active item back up even if its task
-            # finished in a prior run — that was the run-0008 stall.)
-            prior = existing.get(item.id)
-            unmet = tuple(
-                dep
-                for dep in item.depends_on
-                if (dep not in items_by_id) or items_by_id[dep].status is not RoadmapStatus.DONE
+        item = items_by_id.get(item_id)
+        if item is None or not item.projects:
+            return None
+        unmet = tuple(
+            dep for dep in item.depends_on
+            if (dep not in items_by_id) or items_by_id[dep].status is not RoadmapStatus.DONE
+        )
+        if unmet:
+            self._emit(
+                "roadmap.deps_unmet", actor="orchestrator", roadmap_id=item.id, dependencies=unmet
             )
-            objective = item.title if not item.summary else f"{item.title}\n\n{item.summary}"
-            metadata = {**item.metadata, "roadmap_priority": item.priority}
-            if unmet:
-                self.task_store.put(
-                    HorizonTask(
-                        id=item.id,
-                        project=item.projects[0],
-                        objective=objective,
-                        title=item.title,
-                        explanation=item.summary,
-                        projects=item.projects,
-                        priority=item.priority,
-                        status=TaskStatus.BLOCKED,
-                        write_set=self._roadmap_item_write_set(item),
-                        scope=item.scope,
-                        roadmap_refs=(item.id,),
-                        inbox_refs=item.inbox_refs,
-                        metadata={**metadata, "blocked_by_roadmap": unmet},
-                    )
-                )
-                if prior is None or prior.status is not TaskStatus.BLOCKED:
-                    self._emit(
-                        "task.blocked",
-                        actor="orchestrator",
-                        task_id=item.id,
-                        reason="roadmap-dependency",
-                        dependencies=unmet,
-                    )
-                continue
-            self.task_store.put(
-                HorizonTask(
-                    id=item.id,
-                    project=item.projects[0],
-                    objective=objective,
-                    title=item.title,
-                    explanation=item.summary,
-                    projects=item.projects,
-                    priority=item.priority,
-                    status=TaskStatus.QUEUED,
-                    write_set=self._roadmap_item_write_set(item),
-                    scope=item.scope,
-                    roadmap_refs=(item.id,),
-                    inbox_refs=item.inbox_refs,
-                    metadata=metadata,
-                )
-            )
-            if prior is None:
-                self._emit("task.created", actor="orchestrator", task_id=item.id, project=item.projects[0])
+        objective = item.title if not item.summary else f"{item.title}\n\n{item.summary}"
+        task = HorizonTask(
+            id=item.id,
+            project=item.projects[0],
+            objective=objective,
+            title=item.title,
+            explanation=item.summary,
+            projects=item.projects,
+            priority=item.priority,
+            status=TaskStatus.QUEUED,
+            write_set=self._roadmap_item_write_set(item),
+            scope=item.scope,
+            roadmap_refs=(item.id,),
+            inbox_refs=item.inbox_refs,
+            metadata={**item.metadata, "roadmap_priority": item.priority, "from_roadmap": True},
+        )
+        existing = {t.id: t for t in self.task_store.list()}
+        if item.id in existing:
+            task = dataclasses.replace(task, created_at=existing[item.id].created_at)
+        else:
+            self._emit("task.created", actor="orchestrator", task_id=item.id, project=item.projects[0])
+        return self.task_store.put(task)
 
     @staticmethod
     def _roadmap_item_write_set(item: object) -> WriteSet:
@@ -761,54 +928,6 @@ class Orchestrator:
 
     # ── one Ground / one Horizon step ───────────────────────────────
 
-    @staticmethod
-    def _project_commit_message(
-        run: RunRecord, task: HorizonTask, session: SessionLog | None, project: str, round_index: int
-    ) -> str:
-        """A project checkpoint message whose subject encodes the step
-        (run / round / task / project) and carries a human summary, mirroring the
-        ``role[run round task](project): summary`` house style."""
-        summary = (task.title or task.objective or "").strip().splitlines()[0] if (task.title or task.objective) else ""
-        summary = summary[:100]
-        subject = f"horizon[{run.id} r{round_index} {task.id}]({project}): {summary}".rstrip(": ")
-        body = [
-            f"Run: {run.id}",
-            f"Round: {round_index}",
-            "Role: horizon",
-            f"Session: {session.name if session else '—'}",
-            f"Task: {task.id}",
-            f"Project: {project}",
-        ]
-        return subject + "\n\n" + "\n".join(body)
-
-    def _checkpoint_projects(
-        self, run: RunRecord, task: HorizonTask, session: SessionLog | None, *, round_index: int
-    ) -> tuple[dict[str, str | None], dict[str, str]]:
-        """Commit a checkpoint in *every* project the task spans (a task may touch
-        several), so no project's work is left uncommitted."""
-        project_commits: dict[str, str | None] = {}
-        project_commit_errors: dict[str, str] = {}
-        for proj in self._task_projects(task):
-            checkpoint = project_checkpoint(
-                self.workspace,
-                proj,
-                message=self._project_commit_message(run, task, session, proj, round_index),
-                author=author_for("horizon"),
-            )
-            if checkpoint.error:
-                project_commit_errors[proj] = checkpoint.error
-                self._emit("project.commit.failed", project=proj, task_id=task.id, error=checkpoint.error)
-            elif checkpoint.attempted:
-                project_commits[proj] = checkpoint.sha
-                self._emit(
-                    "project.commit",
-                    project=proj,
-                    task_id=task.id,
-                    sha=checkpoint.sha,
-                    changed=checkpoint.changed,
-                )
-        return project_commits, project_commit_errors
-
     def _ground_step(
         self,
         run: RunRecord,
@@ -817,7 +936,7 @@ class Orchestrator:
         round_index: int,
         horizon_result: HorizonResult | None = None,
         resume_session_id: str | None = None,
-    ) -> None:
+    ) -> GroundUpdate | None:
         """One Ground session in the flat alternation. With no ``horizon_result``
         it is the opening plan (``run_round``); otherwise it reconciles the
         Horizon step that just ran (``handle_horizon_result``)."""
@@ -826,9 +945,21 @@ class Orchestrator:
         if self._agent_frozen("ground"):
             self._emit("agent.frozen", agent="ground", round=round_index)
             self.sync.sync(SyncBoundary.AFTER_GROUND)
-            return
+            return None
         session = self._session(runlog, "ground")
-        context = self._ground_context(run, self._log_dir(session), resume_session_id)
+        active_projects = self._active_projects(run)
+        if session is not None:
+            self._write_session_meta(session, {
+                "role": "ground",
+                "round": round_index,
+                "status": "running",
+                "projects": list(active_projects),
+                "dirty_at_start": sorted(self._dirty_files()),
+                **self._agent_harness_metadata(self.ground),
+            })
+        context = self._ground_context(
+            run, self._log_dir(session), resume_session_id, opening=horizon_result is None,
+        )
         if horizon_result is None:
             update = self.ground.run_round(context)
         else:
@@ -836,20 +967,42 @@ class Orchestrator:
         # Reload now so malformed human-readable roadmap shards are noticed
         # immediately and the cached clean roadmap remains available.
         self._load_roadmap()
+        # A Ground engine that exits non-zero (e.g. a hung MCP tool that blows the
+        # tool deadline and takes the process down) leaves a stub report the parser
+        # still turns into an "empty" update. Surface it as a failed session rather
+        # than recording the round as healthy — otherwise the run finishes silently
+        # with a truncated plan/reconcile and no visible cause.
+        ground_ok = update.metadata.get("ok")
+        if ground_ok is False:
+            self._emit(
+                "ground.failed",
+                round=round_index,
+                returncode=update.metadata.get("returncode"),
+                reason=update.metadata.get("failure_reason"),
+                timed_out=update.metadata.get("timed_out"),
+            )
         if session is not None:
-            meta: dict[str, object] = {"role": "ground", "round": round_index}
+            meta: dict[str, object] = {"role": "ground", "round": round_index, "projects": list(active_projects)}
+            meta["status"] = "failed" if ground_ok is False else "ok"
             session_id = update.metadata.get("session_id")
             if session_id:
                 meta["engine_session_id"] = session_id
-            for key in ("harness_name", "harness_kind", "model", "usage"):
+            for key in ("harness_name", "harness_kind", "model", "effort", "config_dir", "auth", "usage", "returncode", "failure_reason"):
                 value = update.metadata.get(key)
                 if value is not None:
                     meta[key] = value
             self._write_session_meta(session, meta)
         self._after_ground(update, report_name=f"ground-{round_index}", session=session)
         self._run_blueprint_checks()
-        self._integrate_session(run, session, role="ground", round_index=round_index)
+        # Ground is the workspace janitor: stage the active projects too, so its
+        # tidy-ups/blueprint edits land in this session's commit (attributed to
+        # ground) rather than leaking into the next Horizon's commit.
+        self._integrate_session(
+            run, session, role="ground", round_index=round_index,
+            projects=active_projects,
+        )
         self.sync.sync(SyncBoundary.AFTER_GROUND)
+        return update
 
     def _horizon_step(
         self, run: RunRecord, task: HorizonTask, runlog: RunLog | None, *, round_index: int,
@@ -872,47 +1025,148 @@ class Orchestrator:
                        rules=[r.pattern for r in violations])
             return None
 
+        # The write lock is advisory: if a concurrent run holds an overlapping
+        # write set we warn the user but still run the Horizon, rather than
+        # deferring (which silently skipped the step and left the round with a
+        # pointless planning Ground). Real cross-run conflicts are the user's to
+        # avoid; within a single run the scheduler already keeps selected tasks
+        # non-overlapping. When we couldn't take the lock we proceed without
+        # holding it — the release in `finally` is a harmless no-op for a token we
+        # never stored, and never touches the other holder's lock.
         if not self.locks.acquire(task.id, task.write_set):
-            self._emit("task.deferred", task_id=task.id, reason="lock-conflict")
-            return None
+            self._emit("task.lock_warning", task_id=task.id, reason="lock-conflict")
 
         try:
-            self.task_store.put(dataclasses.replace(task, status=TaskStatus.RUNNING, updated_at=utc_now()))
+            try:
+                current_task = self.task_store.get(task.id)
+            except Exception:
+                current_task = task
+            if has_recorded_terminal_status(current_task):
+                self._emit(
+                    "task.external_terminal",
+                    actor="orchestrator",
+                    task_id=task.id,
+                    status=current_task.status.value,
+                    phase="before-start",
+                )
+                return None
+
+            if current_task.status is not TaskStatus.RUNNING:
+                self.task_store.append_history(task.id, {
+                    "at": utc_now().isoformat(),
+                    "actor": "system",
+                    "field": "status",
+                    "from": current_task.status.value,
+                    "to": TaskStatus.RUNNING.value,
+                    "note": "started by Horizon run",
+                })
+            self.task_store.put(dataclasses.replace(current_task, status=TaskStatus.RUNNING, updated_at=utc_now()))
             self._finalize_system_session()  # close any open system session before Horizon runs
             self._emit("task.started", actor="horizon", task_id=task.id)
 
             session = self._session(runlog, f"horizon-{task.id}")
             started = utc_now()
-            domain = horizon_write_domain(self.workspace, self._task_projects(task))
+            task_projects = self._task_projects(task)
+            domain = horizon_write_domain(self.workspace, task_projects)
             before = self._dirty_files()
-            result = self.horizon.run_task(
-                self._horizon_context(run, task, domain, runlog, self._log_dir(session), resume_session_id)
-            )
-            self._enforce_write_domain(task, domain, before)
-            project_commits, project_commit_errors = self._checkpoint_projects(
-                run, task, session, round_index=round_index
-            )
-            ref = self._write_run_report(session, result.report)
-            if ref is not None:
-                self._emit("report.written", name=f"task-{task.id}", ref=ref)
-            self.task_store.put(dataclasses.replace(task, status=result.status, updated_at=utc_now()))
-            self._emit("task.finished", actor="horizon", task_id=task.id, status=result.status)
             if session is not None:
                 self._write_session_meta(session, {
                     "role": "horizon",
                     "round": round_index,
                     "project": task.project,
                     "task_id": task.id,
-                    "status": result.status.value,
+                    "status": "running",
+                    "started_at": started.isoformat(),
+                    "projects": list(task_projects),
+                    "dirty_at_start": sorted(before),
+                    # Stamp harness/model/effort now so a RUNNING session shows the
+                    # real config (e.g. ultracode) live, not a stale/empty value until
+                    # it finalizes. Finalize overwrites with the observed run metadata.
+                    **self._agent_harness_metadata(self.horizon),
+                })
+            cancel = Cancellation()
+            stop_watch, externally_terminal, watcher = self._task_terminal_watcher(task.id, cancel)
+            result = self.horizon.run_task(
+                self._horizon_context(
+                    run,
+                    task,
+                    domain,
+                    runlog,
+                    self._log_dir(session),
+                    resume_session_id,
+                    cancel,
+                )
+            )
+            stop_watch.set()
+            watcher.join(timeout=1.0)
+            self._enforce_write_domain(task, domain, before)
+            ref = self._write_run_report(session, result.report)
+            if ref is not None:
+                self._emit("report.written", name=f"task-{task.id}", ref=ref)
+            try:
+                current_task = self.task_store.get(task.id)
+            except Exception:
+                current_task = task
+            # Whether the ENGINE exited non-cleanly. This is a harness lifecycle
+            # signal (DONE == clean exit, FAILED == non-clean) — NOT a verdict on
+            # the task. It only steers the post-step sync boundary below; it never
+            # writes a task status, because the machine owns only queued/running.
+            harness_failed = result.status is TaskStatus.FAILED
+            if has_recorded_terminal_status(current_task):
+                # The agent (or a subagent) recorded a terminal status
+                # (done/blocked/failed) via `horizon task set` this run — that is
+                # the agent's own word, and the ONLY way a task becomes terminal.
+                # Never override it, and never read the report to second-guess it.
+                final_status = current_task.status
+                self._emit(
+                    "task.external_terminal",
+                    actor="orchestrator",
+                    task_id=task.id,
+                    status=final_status.value,
+                    phase="during-run" if externally_terminal else "after-run",
+                )
+            else:
+                # The agent did not record a terminal status, so the task is not
+                # finished: the machine returns it to QUEUED for the next round.
+                # The orchestrator never invents done/failed and never parses the
+                # report — completion is the agent's explicit act
+                # (`horizon task set <id> --status done`), verified by Ground.
+                final_status = TaskStatus.QUEUED
+                self._emit(
+                    "task.incomplete",
+                    actor="orchestrator",
+                    task_id=task.id,
+                    reason="no-terminal-status-recorded",
+                )
+                if current_task.status is not final_status:
+                    self.task_store.append_history(task.id, {
+                        "at": utc_now().isoformat(),
+                        "actor": "system",
+                        "field": "status",
+                        "from": current_task.status.value,
+                        "to": final_status.value,
+                        "note": "Horizon session ended without the agent recording a terminal status; returned to queued",
+                    })
+                self.task_store.put(dataclasses.replace(current_task, status=final_status, updated_at=utc_now()))
+            self._emit("task.finished", actor="horizon", task_id=task.id, status=final_status)
+            if session is not None:
+                self._write_session_meta(session, {
+                    "role": "horizon",
+                    "round": round_index,
+                    "project": task.project,
+                    "task_id": task.id,
+                    "projects": list(task_projects),
+                    "status": final_status.value,
                     "started_at": started.isoformat(),
                     "ended_at": utc_now().isoformat(),
                     "harness_name": result.metadata.get("harness_name"),
                     "harness_kind": result.metadata.get("harness_kind"),
                     "model": result.metadata.get("model"),
+                    "effort": result.metadata.get("effort"),
+                    "config_dir": result.metadata.get("config_dir"),
+                    "auth": result.metadata.get("auth"),
                     "usage": result.metadata.get("usage"),
                     "engine_session_id": result.metadata.get("session_id"),
-                    "project_commits": project_commits,
-                    "project_commit_errors": project_commit_errors,
                 })
             self._integrate_session(
                 run,
@@ -921,18 +1175,21 @@ class Orchestrator:
                 round_index=round_index,
                 project=task.project,
                 task_id=task.id,
-                project_commits=project_commits,
-                project_commit_errors=project_commit_errors,
+                projects=task_projects,
             )
 
             boundary = (
                 SyncBoundary.ON_BUILD_FAILURE
-                if result.status is TaskStatus.FAILED
+                if harness_failed
                 else SyncBoundary.AFTER_HORIZON
             )
             self.sync.sync(boundary)
-            return result
+            return dataclasses.replace(result, status=final_status)
         finally:
+            if "stop_watch" in locals():
+                stop_watch.set()
+            if "watcher" in locals():
+                watcher.join(timeout=1.0)
             self.locks.release(task.id)
 
     def _publish_silent(self, run: RunRecord) -> None:
@@ -1028,27 +1285,61 @@ class Orchestrator:
             return False
         return any(e.kind is TranscriptKind.SESSION_END for e in events)
 
+    @staticmethod
+    def _agent_sessions(runlog: RunLog) -> list[SessionLog]:
+        """On-disk agent sessions in order, minus the interleaved system ones."""
+        return [s for s in runlog.sessions() if not s.name.endswith("-system")]
+
+    @staticmethod
+    def _is_ground_session(session: SessionLog) -> bool:
+        return session.name.endswith("-ground")
+
+    def _opening_offset(self, sessions: list[SessionLog]) -> int:
+        """1 when an opening Ground occupies index 0, else 0.
+
+        The round-session layout is ``[opening_ground?, horizon_0, reconcile_0?,
+        horizon_1, …]``. When the opening Ground is absent — ``start_with ==
+        "horizon"``, or it was frozen so it wrote no session — the first on-disk
+        agent session is round-0's Horizon and every round index shifts down by
+        one. A system session is always flushed first in that case, so without
+        this offset the recovery math treats the Horizon as the opening Ground and
+        the interrupted agent is never resumed.
+        """
+        return 1 if (sessions and self._is_ground_session(sessions[0])) else 0
+
     def _resume_point(self, runlog: RunLog) -> tuple[bool, int, bool]:
         """Where the interrupted run should pick back up, read from on-disk sessions.
 
-        The flat layout is ``[ground, horizon_0, ground_1, horizon_1, …]`` — index
-        0 is the opening Ground, then each round ``i`` owns sessions ``2i+1`` (its
-        Horizon) and ``2i+2`` (its reconcile Ground). Returns ``(run_opening,
+        The flat layout is ``[opening_ground?, horizon_0, reconcile_0?, horizon_1,
+        …]``. With an opening Ground (``offset == 1``) round ``i`` owns sessions
+        ``2i+1`` (Horizon) and ``2i+2`` (reconcile Ground); without one
+        (``offset == 0``) they are ``2i`` and ``2i+1``. Returns ``(run_opening,
         resume_round, reconcile_only)``: redo the opening Ground, the first round
         to (re)run, and whether only that round's reconcile Ground remains (its
         Horizon already finished, so just re-run the Ground with the recovered
         Horizon result).
         """
-        sessions = [s for s in runlog.sessions() if not s.name.endswith("-system")]
-        if not sessions or not self._session_complete(sessions[0]):
-            return True, 0, False  # opening never finished → redo from the top
-        t = 1
+        sessions = self._agent_sessions(runlog)
+        offset = self._opening_offset(sessions)
+        expect_opening = self.start_with != "horizon"
+        if expect_opening and not sessions:
+            return True, 0, False  # nothing on disk yet → redo from the opening Ground
+        if offset == 1 and not self._session_complete(sessions[0]):
+            return True, 0, False  # opening Ground never finished → redo from the top
+        # Completed round sessions after the (optional) opening Ground.
+        t = offset
         while t < len(sessions) and self._session_complete(sessions[t]):
             t += 1
-        # ``t`` is the first unfinished session, or the next to create when all
-        # present ones finished cleanly (the run stopped between sessions).
-        round_index = (t - 1) // 2
-        reconcile_only = (t - 1) % 2 == 1
+        completed = sessions[offset:t]
+        round_index = len(completed) // 2
+        # ``reconcile_only`` means the last thing that ran was a Horizon whose
+        # reconcile Ground never followed — so resume just replays that Ground.
+        # Decide it from the last completed session's ACTUAL role, not from
+        # session-count parity: a degenerate layout (e.g. a legacy run that
+        # skipped Horizon on a lock conflict and recorded only Grounds) would have
+        # an odd count yet end on a Ground, and must resume into a fresh Horizon,
+        # not a bare reconcile Ground.
+        reconcile_only = bool(completed) and not self._is_ground_session(completed[-1])
         return False, round_index, reconcile_only
 
     def _recover_engine_session_id(self, runlog: RunLog, session_index: int) -> str | None:
@@ -1058,7 +1349,7 @@ class Orchestrator:
         crashed mid-run is still resumable from its partial stream)."""
         from archon_horizon.transcript.sink import read_transcript
 
-        sessions = [s for s in runlog.sessions() if not s.name.endswith("-system")]
+        sessions = self._agent_sessions(runlog)
         if session_index < 0 or session_index >= len(sessions):
             return None
         session = sessions[session_index]
@@ -1079,25 +1370,89 @@ class Orchestrator:
                         return candidate
         return None
 
-    def _recover_horizon_result(self, runlog: RunLog, round_index: int) -> HorizonResult | None:
+    def _requeue_interrupted_horizon(
+        self, runlog: RunLog, resume_round: int, reconcile_only: bool, offset: int
+    ) -> None:
+        """Re-queue the task whose Horizon session was interrupted, so a resume
+        actually continues it.
+
+        A killed Horizon step leaves its task stuck in ``RUNNING`` — it is set
+        RUNNING just before the engine starts and only given a terminal status
+        once the engine returns, which a crash prevents. The scheduler picks only
+        ``QUEUED`` tasks, and an unfocused run has no ``focus.tasks`` for
+        ``_queue_focus_for_round`` to revive, so without this the resumed round
+        selects nothing and stops immediately (``no-runnable-tasks``) — never
+        re-running the interrupted work, let alone continuing its native session.
+
+        Re-queue it here so the resumed round dispatches it; ``_horizon_step``
+        then continues the engine's native session (via the recovered
+        ``resume_session_id``) or, for an engine without RESUME, relaunches it
+        with the original prompt. Skipped when only the reconcile Ground was lost
+        (``reconcile_only``): the Horizon already finished and its task carries
+        its real terminal status, so re-queuing would redo completed work.
+        """
+        if reconcile_only:
+            return
+        sessions = self._agent_sessions(runlog)
+        idx = 2 * resume_round + offset
+        if idx >= len(sessions):
+            return  # the interruption predates any Horizon session (e.g. opening Ground)
+        task_id = str(sessions[idx].read_meta().get("task_id") or "")
+        if not task_id:
+            return
+        try:
+            task = self.task_store.get(task_id)
+        except Exception:
+            return
+        if task.status is not TaskStatus.RUNNING:
+            return
+        self.task_store.append_history(task_id, {
+            "at": utc_now().isoformat(),
+            "actor": "system",
+            "field": "status",
+            "from": task.status.value,
+            "to": TaskStatus.QUEUED.value,
+            "note": "re-queued on resume: its Horizon session was interrupted mid-run",
+        })
+        self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
+
+    def _recover_horizon_result(self, runlog: RunLog, round_index: int, offset: int) -> HorizonResult | None:
         """Rebuild a finished Horizon step's result from its session, so a resume
         that only needs the reconcile Ground can feed it the prior Horizon output."""
         # Index against the agent-session layout only — system sessions are
-        # interleaved on disk but excluded from the 2i+1/2i+2 scheme (matching
+        # interleaved on disk but excluded from the 2i+offset scheme (matching
         # ``_resume_point`` and ``_recover_engine_session_id``).
-        sessions = [s for s in runlog.sessions() if not s.name.endswith("-system")]
-        idx = 2 * round_index + 1
+        sessions = self._agent_sessions(runlog)
+        idx = 2 * round_index + offset
         if idx >= len(sessions):
             return None
         session = sessions[idx]
         meta = session.read_meta()
+        # The 2i+offset math assumes a canonical [ground?, H, G, H, G, …] layout.
+        # A run recorded under a degenerate layout can land a non-Horizon session
+        # here — e.g. an older build that skipped Horizon on a lock conflict and
+        # wrote only Grounds, whose session-level status ("ok") is not a
+        # TaskStatus. Recover nothing rather than misreading it (or crashing).
+        if meta.get("role") != "horizon":
+            return None
         report_path = session.path / "report.md"
         report = report_path.read_text("utf-8") if report_path.exists() else ""
         raw_status = meta.get("status")
-        status = TaskStatus(raw_status) if raw_status else TaskStatus.DONE
+        try:
+            status = TaskStatus(raw_status) if raw_status else TaskStatus.DONE
+        except ValueError:
+            status = TaskStatus.DONE
         return HorizonResult(task_id=str(meta.get("task_id", "")), status=status, report=report)
 
     # ── full run ─────────────────────────────────────────────────────
+
+    @property
+    def _ground_enabled(self) -> bool:
+        return "ground" in self.roles
+
+    @property
+    def _horizon_enabled(self) -> bool:
+        return "horizon" in self.roles
 
     def _run_scope_projects(self, run: RunRecord) -> tuple[str, ...]:
         projects: list[str] = list(run.focus.projects)
@@ -1114,7 +1469,10 @@ class Orchestrator:
             projects.extend(self.workspace.projects)
         return tuple(dict.fromkeys(projects))
 
-    def run(self, run: RunRecord, *, dry_run: bool = False, resume: bool = False) -> list[RoundReport]:
+    def run(
+        self, run: RunRecord, *, dry_run: bool = False, resume: bool = False,
+        rounds_override: int | None = None,
+    ) -> list[RoundReport]:
         """Drive a flat ground/horizon alternation: G H G H … G.
 
         One Ground opens the run (plan), then each round runs one Horizon step
@@ -1123,11 +1481,15 @@ class Orchestrator:
         ``"horizon"`` drop the opening / final Ground. Publish is silent
         bookkeeping between steps, not a session.
 
-        With ``resume`` the run id must already exist: finished rounds are skipped
-        and the interrupted round is re-launched with the same prompt (the
-        engine-agnostic fallback — claude's native ``--resume`` is layered on top
-        later). If only that round's reconcile Ground was lost, its Horizon result
-        is recovered from disk and replayed into the Ground.
+        With ``resume`` the run id must already exist. If a round was interrupted,
+        it is re-launched (continuing the engine's native session where possible,
+        else the same prompt); if only that round's reconcile Ground was lost, its
+        Horizon result is recovered from disk and replayed into the Ground. Once
+        the run has cleanly consumed all its originally-planned rounds, resume does
+        not stop dead — it runs a *fresh batch* of forward rounds on the same focus
+        (so ``--resume`` means "keep pushing this run"). The batch size is
+        ``rounds_override`` (from ``--rounds``) when given, else the run's
+        configured round count; see ``_run_locked`` for the exact rule.
 
         The workspace run lock is advisory: if another *live* orchestrator is
         already driving this workspace we warn (``run.concurrent``) and proceed
@@ -1141,7 +1503,8 @@ class Orchestrator:
         status = _lock.__enter__()
         try:
             return self._run_locked(
-                run, dry_run=dry_run, resume=resume, concurrent_holder=status.concurrent
+                run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
+                concurrent_holder=status.concurrent,
             )
         finally:
             _lock.__exit__(None, None, None)
@@ -1152,6 +1515,7 @@ class Orchestrator:
         *,
         dry_run: bool = False,
         resume: bool = False,
+        rounds_override: int | None = None,
         concurrent_holder: dict | None = None,
     ) -> list[RoundReport]:
         runlog: RunLog | None = None
@@ -1159,11 +1523,45 @@ class Orchestrator:
             runlog = self.run_logs.get(run.id) if run.id else self.run_logs.allocate()
             run = dataclasses.replace(run, id=runlog.id)
         if self.run_store is not None and not resume:
+            # Appending a hand-driven session to an existing run (via `--run`):
+            # keep its original created_at so the run's position/ordering in the
+            # dashboard is stable rather than jumping to "now" on every append.
+            existing = None
+            if run.id:
+                try:
+                    existing = self.run_store.get(run.id)
+                except Exception:
+                    existing = None
+            if existing is not None:
+                run = dataclasses.replace(run, created_at=existing.created_at)
             run = self.run_store.put(run)
 
         run_opening, resume_round, reconcile_only = (True, 0, False)
+        # Session-index offset for resume recovery: 1 when an opening Ground sits at
+        # index 0, else 0 (start_with='horizon' or a frozen opening). Computed once
+        # from the pre-resume on-disk layout; new sessions append after it.
+        resume_offset = 1
+        # How many rounds this invocation drives, in the run's own round numbering.
+        # A normal run does its configured count; resume adjusts it below.
+        total_rounds = run.rounds_requested
+        # Fresh Horizon rounds this resume will drive (for the banner). Equals the
+        # batch — the reconcile-only recovery Ground is extra, not one of them.
+        batch = run.rounds_requested
         if resume and runlog is not None:
+            resume_offset = self._opening_offset(self._agent_sessions(runlog))
             run_opening, resume_round, reconcile_only = self._resume_point(runlog)
+            # Revive the task the interrupted Horizon step left stuck in RUNNING so
+            # the scheduler can pick it up again this round (and continue its native
+            # engine session); otherwise an unfocused resume finds nothing runnable.
+            self._requeue_interrupted_horizon(runlog, resume_round, reconcile_only, resume_offset)
+            # Resume always drives a *fresh batch* of `batch` Horizon rounds — the
+            # "keep pushing this run for its configured rounds" model — no matter how
+            # many rounds already ran. `--rounds N` overrides the batch size. A
+            # dangling reconcile Ground (reconcile_only: a Horizon finished but its
+            # Ground never ran) is replayed first as recovery and is NOT counted
+            # against the batch, so the run still gets `batch` full Horizon rounds.
+            batch = rounds_override if rounds_override is not None else run.rounds_requested
+            total_rounds = resume_round + (1 if reconcile_only else 0) + batch
 
         # Tee orchestrator events into a buffer; each `_flush_system_session`
         # writes the buffered work as a "system" session in the Log.
@@ -1171,17 +1569,56 @@ class Orchestrator:
         self._system_buffer.clear()
         self._open_system = None
         self._open_system_events = []
-        self._emit("run.started", run_id=run.id, rounds=run.rounds_requested, dry_run=dry_run, resume=resume)
+        # ``rounds`` is the fresh Horizon rounds this invocation drives (the batch),
+        # not the run's lifetime total, so the banner reflects the work ahead.
+        rounds_to_run = batch if resume else total_rounds
+        self._emit(
+            "run.started", run_id=run.id, rounds=rounds_to_run, dry_run=dry_run,
+            resume=resume, resume_from=resume_round if resume else None,
+        )
+        if not dry_run and not resume:
+            baseline = integrate_workspace_baseline(
+                self.workspace,
+                run_id=run.id,
+                projects=self._run_scope_projects(run),
+            )
+            if baseline.error:
+                self._emit("workspace.run_baseline.failed", run_id=run.id, error=baseline.error)
+            elif baseline.attempted:
+                self._emit(
+                    "workspace.run_baseline",
+                    run_id=run.id,
+                    sha=baseline.sha,
+                    changed=baseline.changed,
+                    files=list(baseline.files),
+                    projects=list(self._run_scope_projects(run)),
+                )
         if concurrent_holder:
             self._emit("run.concurrent", run_id=run.id, existing=concurrent_holder)
         reports: list[RoundReport] = []
 
-        if self.start_with != "horizon" and run_opening:
-            self._ground_step(run, runlog, round_index=0)
+        # Displayed round numbering is offset by ``start_round`` (0 for a normal
+        # run) so a human driving one role at a time into an existing run gets
+        # session meta / commit trailers consistent with the automatic loop. The
+        # loop counter ``i`` still drives resume recovery math (``2*i+…``).
+        base = run.start_round
+        fatal_opening = False
+        # The opening Ground is a feature of the alternation only (plan before the
+        # first Horizon). Single-role loops don't use it: a Ground-only loop already
+        # runs a Ground every round, and a Horizon-only loop has no Ground at all.
+        if self._ground_enabled and self._horizon_enabled and self.start_with != "horizon" and run_opening:
+            update = self._ground_step(run, runlog, round_index=base)
+            if update is not None and _is_fatal_failure(update.metadata):
+                self._publish_silent(run)
+                self._flush_system_session(runlog)
+                self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=base)
+                fatal_opening = True
         self._publish_silent(run)
         self._flush_system_session(runlog)
 
-        for i in range(run.rounds_requested):
+        for i in range(total_rounds):
+            if fatal_opening:
+                break
             if resume and i < resume_round:
                 continue  # this round finished before the interruption
 
@@ -1189,38 +1626,63 @@ class Orchestrator:
             # result into it rather than re-running the Horizon step, and continue
             # its native session if the engine can.
             if resume and i == resume_round and reconcile_only:
-                is_last = i == run.rounds_requested - 1
-                if not (is_last and self.end_with == "horizon"):
-                    self._ground_step(
-                        run, runlog, round_index=i + 1,
-                        horizon_result=self._recover_horizon_result(runlog, i),
-                        resume_session_id=self._recover_engine_session_id(runlog, 2 * i + 2),
+                is_last = i == total_rounds - 1
+                if self._ground_enabled and not (is_last and self.end_with == "horizon"):
+                    update = self._ground_step(
+                        run, runlog, round_index=base + i + 1,
+                        horizon_result=self._recover_horizon_result(runlog, i, resume_offset),
+                        resume_session_id=self._recover_engine_session_id(runlog, 2 * i + 1 + resume_offset),
                     )
+                    if update is not None and _is_fatal_failure(update.metadata):
+                        self._publish_silent(run)
+                        self._flush_system_session(runlog)
+                        self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
+                        break
                 self._publish_silent(run)
                 self._flush_system_session(runlog)
                 continue
 
-            self._sync_roadmap_tasks(run)
+            # Ground-only loop: no task selection, no Horizon — each round is a
+            # single standalone Ground session (planning/organizing/reconciling the
+            # workspace). Horizon-centric machinery below is skipped entirely.
+            if not self._horizon_enabled:
+                if dry_run:
+                    self._emit("run.dry-run", planned=[])
+                    reports.append(RoundReport(round_index=i))
+                    break
+                update = self._ground_step(run, runlog, round_index=base + i, horizon_result=None)
+                reports.append(RoundReport(round_index=i))
+                if update is not None and _is_fatal_failure(update.metadata):
+                    self._publish_silent(run)
+                    self._flush_system_session(runlog)
+                    self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
+                    break
+                self._publish_silent(run)
+                self._flush_system_session(runlog)
+                continue
+
+            if not dry_run:
+                self._queue_focus_for_round(run, initial=(not resume and i == 0))
             self._write_blueprint_dags(rich=False)  # leandag skill reads a fresh parser DAG during horizon
             candidates = self.task_store.list()
             selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
-            # A focus pinned to a task that Ground has since decomposed into new
-            # roadmap-derived task ids (e.g. a planning seed) selects nothing
-            # runnable. Rather than stop, broaden to the focused task's project(s)
-            # so the work Ground just created there runs — and say so in the log.
+            # A focus pinned to a task that is not runnable (e.g. it is frozen, or
+            # names nothing that exists) selects nothing. Say *why* before the run
+            # stops, so it does not look like it silently "finished early".
             if not selected and run.focus.tasks:
-                fallback = self._focus_fallback(run, candidates)
-                broadened = self.scheduler.select_tasks(self.workspace, run, fallback, candidates)
-                if broadened:
-                    self._emit(
-                        "run.focus_broadened",
-                        run_id=run.id,
-                        round=i,
-                        focus_tasks=list(run.focus.tasks),
-                        projects=list(fallback.projects),
-                        selected=[t.id for t in broadened],
-                    )
-                    selected = broadened
+                by_id = {t.id: t for t in candidates}
+                skipped: dict[str, str] = {}
+                for tid in run.focus.tasks:
+                    task = by_id.get(tid)
+                    if task is None:
+                        skipped[tid] = "unknown"
+                    elif frozen_violations(task.write_set, self.freeze):
+                        skipped[tid] = "frozen"
+                    elif task.status is not TaskStatus.QUEUED:
+                        skipped[tid] = task.status.value
+                    else:
+                        skipped[tid] = "not-runnable"
+                self._emit("run.focus_unrunnable", run_id=run.id, round=i, tasks=skipped)
 
             if dry_run:
                 self._emit("run.dry-run", planned=[t.id for t in selected])
@@ -1235,15 +1697,16 @@ class Orchestrator:
             # Continue the interrupted Horizon's native session (the first task of
             # the resumed round) if the engine can; later tasks always run fresh.
             h_resume = (
-                self._recover_engine_session_id(runlog, 2 * i + 1)
+                self._recover_engine_session_id(runlog, 2 * i + resume_offset)
                 if resume and i == resume_round else None
             )
             ran: list[str] = []
             blocked: list[str] = []
             last_result: HorizonResult | None = None
+            fatal_reason: str | None = None
             for n, task in enumerate(selected):
                 result = self._horizon_step(
-                    run, task, runlog, round_index=i,
+                    run, task, runlog, round_index=base + i,
                     resume_session_id=h_resume if n == 0 else None,
                 )
                 if result is None:
@@ -1251,6 +1714,9 @@ class Orchestrator:
                 else:
                     ran.append(task.id)
                     last_result = result
+                    if _is_fatal_failure(result.metadata):
+                        fatal_reason = str(result.metadata.get("failure_reason") or "task-failed")
+                        break
             reports.append(RoundReport(round_index=i, tasks_run=tuple(ran), tasks_blocked=tuple(blocked)))
 
             # A system session after the Horizon step makes the alternation
@@ -1258,14 +1724,31 @@ class Orchestrator:
             # deterministic aftermath (commits, integration) is its own row in the
             # Log rather than being folded into the next Ground's system session.
             self._flush_system_session(runlog)
+            if fatal_reason is not None:
+                self._emit("run.stopped", run_id=run.id, reason=fatal_reason, round=i)
+                break
 
             # Reconcile Ground after the Horizon step, closing the G/H/G pairing —
-            # unless this is the final round and the run is set to end on Horizon.
-            is_last = i == run.rounds_requested - 1
-            if not (is_last and self.end_with == "horizon"):
-                self._ground_step(run, runlog, round_index=i + 1, horizon_result=last_result)
+            # unless this is the final round and the run is set to end on Horizon, or
+            # Ground is disabled entirely (a Horizon-only loop).
+            is_last = i == total_rounds - 1
+            if self._ground_enabled and not (is_last and self.end_with == "horizon"):
+                update = self._ground_step(run, runlog, round_index=base + i + 1, horizon_result=last_result)
+                if update is not None and _is_fatal_failure(update.metadata):
+                    self._publish_silent(run)
+                    self._flush_system_session(runlog)
+                    self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
+                    break
             self._publish_silent(run)
             self._flush_system_session(runlog)
+
+            # Stop as soon as a focused run's milestone is complete: the reconcile
+            # Ground and integration commit for this round have already run (so the
+            # DONE task and the completion event are recorded in the ledger), and
+            # reworking a finished task across the remaining rounds is wasted work.
+            if self._focus_complete(run):
+                self._emit("run.stopped", run_id=run.id, reason="focus-complete", round=i)
+                break
 
         self._emit("run.finished", run_id=run.id)
         if not dry_run:
@@ -1276,7 +1759,7 @@ class Orchestrator:
                 message=(
                     f"workspace[{run.id}] run finished\n\n"
                     f"Run: {run.id}\n"
-                    f"Rounds: {run.rounds_requested}\n"
+                    f"Rounds: {total_rounds}\n"
                     f"Projects: {', '.join(self._run_scope_projects(run)) or '—'}"
                 ),
             )
@@ -1327,8 +1810,28 @@ class Orchestrator:
             return refs
         out_dir = self.workspace.state_path / "blueprints"
         out_dir.mkdir(parents=True, exist_ok=True)
+        counts: dict[str, dict[str, int]] = {}
         for project, dag in dags.items():
             path = out_dir / f"{project}.json"
+            # Never DOWNGRADE a rich (leandag, Lean-source-bearing) cache to the
+            # cheap parser DAG: the mid-round refresh (rich=False) would otherwise
+            # strip the Lean source the dashboard shows, forcing a manual
+            # "Synchronize". Only overwrite a rich cache with another rich build.
+            if not rich and path.exists():
+                try:
+                    existing = json.loads(path.read_text("utf-8"))
+                    if (existing.get("meta") or {}).get("engine") == "leandag":
+                        continue
+                except (OSError, ValueError):
+                    pass
             path.write_text(json.dumps(dag, indent=2, sort_keys=True), "utf-8")
             refs.append(path.relative_to(self.workspace.root).as_posix())
+            counts[project] = {
+                "nodes": len(dag.get("nodes", ())),
+                "edges": len(dag.get("edges", ())),
+            }
+        # Only announce the rich rebuild (once per boundary); the mid-round
+        # parser refresh is transient scaffolding for the leandag skill.
+        if rich:
+            self._emit("blueprint.dags", projects=counts)
         return refs

@@ -61,26 +61,6 @@ def agent_author(default: str | None = None) -> str | None:
     return default
 
 
-def refuse_agents(action: str) -> None:
-    """Block the ground/horizon agent from a human-only task action.
-
-    Tasks are the human's lever for launching sessions; agents organize pending
-    work through the roadmap, never by authoring tasks. Agents may still read and
-    ``comment`` on tasks — neither affects what the orchestrator runs.
-    """
-    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    if role in {"ground", "horizon"}:
-        import typer
-
-        from archon_horizon.log import log
-
-        log.error(
-            f"The {role} agent may not {action}: tasks are human-only. Organize pending work "
-            "through the roadmap (`horizon roadmap …`); you can still `horizon task comment`."
-        )
-        raise typer.Exit(2)
-
-
 def agent_provenance() -> dict | None:
     """Structured provenance for an agent-authored write, from the run env.
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getBlueprintChapters, type BlueprintChaptersResponse } from './api';
+import { getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
 import { buildBlueprintModel, ChapterView, TitleInline } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
 import styles from './BlueprintPage.module.css';
@@ -101,10 +101,25 @@ export default function BlueprintPage({ state }: { state: any }) {
       .finally(() => setLoading(false));
   }, [project]);
 
+  // The full DAG (carrying each node's Lean source, needed for the code chips) is
+  // fetched on demand — /api/state now ships only light DAG nodes.
+  const [fullDag, setFullDag] = useState<BlueprintDagResponse | null>(null);
+  useEffect(() => {
+    if (!project) { setFullDag(null); return; }
+    let cancelled = false;
+    getBlueprintDag(project)
+      .then((d) => { if (!cancelled) setFullDag(d); })
+      .catch(() => { if (!cancelled) setFullDag(null); });
+    return () => { cancelled = true; };
+  }, [project]);
+
   const macros = data?.macros ?? {};
   const chapters = useMemo(() => data?.chapters ?? [], [data]);
   const { doc, labels } = useMemo(() => buildBlueprintModel(chapters, true), [chapters]);
-  const dagNodes: any[] = useMemo(() => state.blueprints?.[project]?.nodes ?? [], [state.blueprints, project]);
+  const dagNodes: any[] = useMemo(
+    () => fullDag?.nodes ?? state.blueprints?.[project]?.nodes ?? [],
+    [fullDag, state.blueprints, project],
+  );
   const dagById = useMemo(() => new Map(dagNodes.map((n) => [String(n.id), n])), [dagNodes]);
   const leanSource = useMemo(() => {
     const out = new Map<string, string>();
@@ -132,17 +147,29 @@ export default function BlueprintPage({ state }: { state: any }) {
   const pending = useRef<string | null>(null);
 
   useEffect(() => { setOpen(new Set()); setExpanded(new Set()); }, [project]);
-  useEffect(() => {
-    if (!pending.current) return;
-    const el = document.getElementById(pending.current);
-    if (el) { el.scrollIntoView({ block: 'start' }); pending.current = null; }
-  }, [open]);
+  // Scroll to a pending anchor, retrying across frames: the target block may not
+  // be painted yet because a freshly-opened chapter streams its blocks in
+  // progressively (see ChapterView). Poll for up to ~2s, then give up.
+  const scrollToPending = useCallback(() => {
+    const id = pending.current;
+    if (!id) return;
+    const deadline = performance.now() + 2000;
+    const tick = () => {
+      if (pending.current !== id) return; // superseded by a newer target
+      const el = document.getElementById(id);
+      if (el) { el.scrollIntoView({ block: 'start' }); pending.current = null; return; }
+      if (performance.now() < deadline) requestAnimationFrame(tick);
+      else pending.current = null;
+    };
+    requestAnimationFrame(tick);
+  }, []);
+  useEffect(() => { scrollToPending(); }, [open, scrollToPending]);
 
   const openTo = useCallback((slug: string, anchor?: string) => {
-    if (open.has(slug)) { if (anchor) document.getElementById(anchor)?.scrollIntoView({ block: 'start' }); return; }
     pending.current = anchor ?? `ch-${slug}`;
+    if (open.has(slug)) { scrollToPending(); return; }
     setOpen((v) => { const n = new Set(v); n.add(slug); return n; });
-  }, [open]);
+  }, [open, scrollToPending]);
 
   useEffect(() => {
     if (!data?.hasBlueprint) return;

@@ -11,6 +11,8 @@ otherwise the single-file Python dashboard is served as a fallback.
 from __future__ import annotations
 
 import errno
+import gzip
+import hashlib
 import json
 import mimetypes
 import threading
@@ -30,15 +32,95 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         def log_message(self, *args: object) -> None:
             return
 
-        def _send(self, code: int, body: bytes, content_type: str) -> None:
-            self.send_response(code)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        # Browsers routinely open speculative keep-alive connections and drop them
+        # (or abort an in-flight poll when the tab navigates/refreshes). That aborts
+        # the socket read/flush with ECONNRESET/EPIPE, which socketserver would
+        # otherwise dump as a full traceback per connection — pure noise, not a
+        # real failure. Swallow those benign resets across the whole request
+        # lifecycle (the requestline read in handle(), the flush in finish()).
+        @staticmethod
+        def _benign_conn_error(exc: BaseException) -> bool:
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                return True
+            return isinstance(exc, OSError) and exc.errno in (errno.EPIPE, errno.ECONNRESET)
+
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except Exception as exc:  # noqa: BLE001 - re-raise anything unexpected
+                if not self._benign_conn_error(exc):
+                    raise
+                self.close_connection = True
+
+        def finish(self) -> None:
+            try:
+                super().finish()
+            except Exception as exc:  # noqa: BLE001 - re-raise anything unexpected
+                if not self._benign_conn_error(exc):
+                    raise
+
+        def _send(self, code: int, body: bytes, content_type: str, cache_control: str | None = None) -> None:
+            try:
+                self.send_response(code)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                if cache_control is not None:
+                    self.send_header("Cache-Control", cache_control)
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except OSError as exc:
+                if exc.errno in (errno.EPIPE, errno.ECONNRESET):
+                    return
+                raise
 
         def _json(self, obj: object, code: int = 200) -> None:
             self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
+
+        def _api_response(self, obj: object) -> None:
+            """Send a GET /api/* JSON payload with conditional-GET + gzip.
+
+            The dashboard polls /api/state every 5s and the payload can be several
+            MB. An ETag lets an unchanged poll return a tiny ``304 Not Modified``
+            instead of re-sending the whole body, and gzip shrinks the payload
+            (~10x for this JSON) when it *does* change. Both are safe/generic for
+            every /api/* GET, so this is not special-cased to /api/state.
+            """
+            body = json.dumps(obj).encode("utf-8")
+            etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+            if self.headers.get("If-None-Match") == etag:
+                try:
+                    self.send_response(304)
+                    self.send_header("ETag", etag)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                except OSError as exc:
+                    if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
+                        raise
+                return
+            encoding: str | None = None
+            # Only worth compressing a payload big enough to beat the CPU/overhead;
+            # tiny endpoints (a few hundred bytes) are sent as-is.
+            if "gzip" in self.headers.get("Accept-Encoding", "") and len(body) > 1024:
+                body = gzip.compress(body, compresslevel=6)
+                encoding = "gzip"
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("ETag", etag)
+                if encoding:
+                    self.send_header("Content-Encoding", encoding)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
+                    raise
 
         def _serve_asset(self, route: str) -> None:
             if route.startswith("/reports/") and route.endswith(".md"):
@@ -63,13 +145,20 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
             if not target.is_file():
                 target = dist_dir / "index.html"
             ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-            self._send(200, target.read_bytes(), ctype)
+            served_index = target.resolve() == (dist_dir / "index.html").resolve()
+            if rel.startswith("assets/") and not served_index:
+                # Vite emits content-hashed filenames, so these are safe to cache forever.
+                cache_control = "public, max-age=31536000, immutable"
+            else:
+                # index.html / SPA fallback must be refetched so new asset hashes are picked up.
+                cache_control = "no-store"
+            self._send(200, target.read_bytes(), ctype, cache_control=cache_control)
 
         def do_GET(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             try:
                 if route.startswith("/api/"):
-                    self._json(service.serve_endpoint(self.path))
+                    self._api_response(service.serve_endpoint(self.path))
                 else:
                     self._serve_asset(route)
             except KeyError:
@@ -78,23 +167,38 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
                 self._json({"error": str(exc)}, 400)
 
         def do_POST(self) -> None:  # noqa: N802
-            if urlparse(self.path).path not in ("/api/inbox", "/api/roadmap", "/api/tasks"):
+            route = urlparse(self.path).path
+            if route not in ("/api/inbox", "/api/roadmap", "/api/tasks", "/api/blueprint/sync"):
                 self._json({"error": "not found"}, 404)
                 return
             length = int(self.headers.get("Content-Length", 0))
             try:
                 payload = json.loads(self.rfile.read(length) or b"{}")
+                if route == "/api/blueprint/sync":
+                    self._json(service.sync_blueprint_dags())
+                    return
                 action = payload.pop("action")
-                if urlparse(self.path).path == "/api/inbox":
+                if route == "/api/inbox":
                     self._json(service.edit_inbox(action, **payload))
-                elif urlparse(self.path).path == "/api/roadmap":
+                elif route == "/api/roadmap":
                     self._json(service.edit_roadmap(action, **payload))
-                elif urlparse(self.path).path == "/api/tasks":
+                elif route == "/api/tasks":
                     self._json(service.edit_task(action, **payload))
             except Exception as exc:
                 self._json({"error": str(exc)}, 400)
 
     return Handler
+
+
+def dashboard_url(host: str, port: int) -> str:
+    """Return a browser URL for a bound dashboard host."""
+    if host == "0.0.0.0":
+        return f"http://localhost:{port}"
+    if host == "::":
+        return f"http://[::1]:{port}"
+    if ":" in host and not host.startswith("["):
+        return f"http://[{host}]:{port}"
+    return f"http://{host}:{port}"
 
 
 def create_server(
@@ -146,12 +250,27 @@ def serve_server(
     actual_port = server.server_address[1]
     if requested_port != 0 and actual_port != requested_port:
         log.warn(f"Port {requested_port} was busy; serving dashboard on {actual_port}.")
+    url = dashboard_url(host, actual_port)
     log.header("Archon Horizon Dashboard")
-    log.key_value({
+    rows = {
         "Mode": mode,
-        "URL": f"http://{host}:{actual_port}",
+        "URL": url,
         "Workspace": str(root),
-    })
+    }
+    if host in ("0.0.0.0", "::"):
+        rows["Bind"] = f"{host}:{actual_port}"
+        rows["Remote"] = f"http://<server-host>:{actual_port}"
+        log.warn(
+            "Dashboard is bound to all interfaces and may be reachable from other machines "
+            "if your firewall allows it."
+        )
+    log.key_value(rows)
+    if host in ("127.0.0.1", "localhost", "::1"):
+        log.info(
+            "On some remote VMs, containers, or port-forwarded sessions, localhost forwarding "
+            "may fail; rerun with `horizon dashboard --public --port "
+            f"{actual_port}` if the dashboard does not open."
+        )
     service = getattr(server, "_horizon_service", None)
     if service is not None:
         # Build the search index ahead of the first query so search is snappy.

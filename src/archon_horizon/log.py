@@ -62,6 +62,10 @@ class HorizonLog:
     def warn(self, msg: str) -> None:
         self._out.print(f"{_PREFIX} [#fcd34d]⚠ {msg}[/#fcd34d]")
 
+    def warn_stderr(self, msg: str) -> None:
+        """Emit a human-facing warning on stderr without changing the route."""
+        _err_console.print(f"{_PREFIX} [#fcd34d]⚠ {msg}[/#fcd34d]")
+
     def error(self, msg: str) -> None:
         self._out.print(f"{_PREFIX} [bold #fda4af]✗ {msg}[/bold #fda4af]")
 

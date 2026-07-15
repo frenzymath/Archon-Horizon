@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getProjects, getReport, getTranscript, getTranscripts, searchDeclarations, getBlueprintChapters, type ProjectStat } from './api';
+import { editInbox, editRoadmap, editTask, getState, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type RunChanges, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
 import BlueprintRendered from './components/BlueprintRendered';
 import LeanCodeLine from './components/LeanCodeLine';
+import { useProgressiveCount } from './hooks/useProgressiveCount';
 import BlueprintPage from './BlueprintPage';
 import DagPage from './DagPage';
 import LeanPage from './LeanPage';
@@ -17,9 +18,19 @@ const ARCHON_ACCEPT = 'agent-ready';
 const ARCHON_PENDING = 'not-ready';
 const ARCHON_REJECTED = 'rejected';
 const INBOX_KIND_OPTIONS = ['hint', 'issue', 'protection', 'info', 'memory'];
+const INBOX_PROVIDER_OPTIONS = ['local', 'github'];
+const INBOX_STATUS_OPTIONS = ['open', 'closed', 'archived'];
+// Archived items are soft-deleted: hidden until the user selects the filter.
+const INBOX_STATUS_DEFAULT = ['open', 'closed'];
+const INBOX_GATE_OPTIONS = ['accept', 'pending', 'reject', 'clear'];
+const TASK_STATUS_OPTIONS = ['queued', 'running', 'blocked', 'done', 'failed', 'cancelled'];
+const TASK_PRIORITY_OPTIONS = ['urgent', 'high', 'normal', 'low'];
+const ROADMAP_STATUS_OPTIONS = ['active', 'pending', 'blocked', 'done', 'rejected'];
 
 type HorizonState = {
   workspace: string;
+  workspace_root?: string;
+  config_dir?: string;
   projects?: string[];
   roadmap?: { items?: any[] };
   tasks?: any[];
@@ -69,7 +80,7 @@ function ConnectionBanner({ isError }: { isError: boolean }) {
   if (STATIC || !isError) return null;
   return (
     <div className="connection-banner">
-      Cannot reach server - check that <code>horizon serve</code> is running on the current port.
+      Cannot reach server - check that <code>horizon dashboard</code> is running on the current port.
     </div>
   );
 }
@@ -109,7 +120,7 @@ export function App() {
       <header className="header">
         <h1>Archon Horizon</h1>
         <span className="version-badge" title={`Horizon dashboard v${APP_VERSION}`}>v{APP_VERSION}</span>
-        <span className="project-badge" title={state.workspace}>{state.workspace}</span>
+        <span className="project-badge" title={state.workspace_root || state.workspace}>{state.workspace}</span>
         {STATIC && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
         <nav className="header-nav" aria-label="Dashboard">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
@@ -132,7 +143,7 @@ export function App() {
           <Route path="/tasks" element={<TasksPage state={state} reload={reload} />} />
           <Route path="/search" element={<SearchPage state={state} />} />
           <Route path="/blueprint" element={<BlueprintPage state={state} />} />
-          <Route path="/dag" element={<DagPage state={state} />} />
+          <Route path="/dag" element={<DagPage state={state} reload={reload} />} />
           <Route path="/logs" element={<Transcripts state={state} />} />
           <Route path="/transcripts" element={<Navigate to="/logs" replace />} />
           <Route path="/lean" element={<LeanPage state={state} />} />
@@ -153,6 +164,7 @@ function Overview({ state }: PageProps) {
   const githubInbox = state.github_inbox ?? [];
   const activeRoadmap = roadmapItems.filter((item: any) => ['active', 'blocked'].includes(item.status));
   const activeTasks = tasks.filter((task: any) => ['queued', 'running', 'blocked'].includes(task.status));
+  const recentRuns = [...runs].sort(compareRuns).slice(0, 5);
 
   return (
     <div className="page page-narrow">
@@ -169,8 +181,8 @@ function Overview({ state }: PageProps) {
 
       <ProjectsPanel />
 
-      <Panel title="Recent Runs" subtitle="Run logs, rounds, sessions, and transcript links">
-        <RunList runs={runs} />
+      <Panel title="Recent Runs" subtitle="Run logs, rounds, sessions, and transcript links" to="/logs">
+        <RunList runs={recentRuns} />
       </Panel>
 
       <div className="overview-grid">
@@ -190,11 +202,58 @@ function Overview({ state }: PageProps) {
 
 function ProjectsPanel() {
   const [data, setData] = useState<{ projects: ProjectStat[]; totals: Omit<ProjectStat, 'name'> } | null>(null);
+  const [selected, setSelected] = useState('');
+  const [historyLimit, setHistoryLimit] = useState(10);
+  const [historyByProject, setHistoryByProject] = useState<Record<string, ProjectTrendPoint[]>>({});
+  const [historyLoading, setHistoryLoading] = useState('');
   useEffect(() => { getProjects().then(setData).catch(() => setData(null)); }, []);
-  if (!data || data.projects.length === 0) return null;
+  useEffect(() => {
+    if (!data?.projects.length) return;
+    if (!selected || !data.projects.some((p) => p.name === selected)) {
+      setSelected(data.projects[0].name);
+    }
+  }, [data, selected]);
+  useEffect(() => {
+    const key = `${selected}:${historyLimit}`;
+    if (!selected || historyByProject[key]) return;
+    let cancelled = false;
+    setHistoryLoading(key);
+    getProjectHistory(selected, historyLimit)
+      .then((result) => {
+        if (cancelled) return;
+        setHistoryByProject((prev) => ({ ...prev, [key]: result.history ?? [] }));
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryByProject((prev) => ({ ...prev, [key]: [] }));
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading((current) => current === key ? '' : current);
+      });
+    return () => { cancelled = true; };
+  }, [selected, historyLimit, historyByProject]);
+  if (!data) {
+    return (
+      <Panel title="Workspace" subtitle="Per-project Lean size, open sorries, and blueprint coverage">
+        <div className="project-trend-empty">Loading workspace metrics...</div>
+      </Panel>
+    );
+  }
+  if (data.projects.length === 0) return null;
+  const selectedProject = data.projects.find((p) => p.name === selected) ?? data.projects[0];
+  const historyKey = `${selectedProject.name}:${historyLimit}`;
+  const selectedHistory = historyByProject[historyKey] ?? [];
   const fmt = (n: number) => n.toLocaleString();
   return (
     <Panel title="Workspace" subtitle="Per-project Lean size, open sorries, and blueprint coverage">
+      <ProjectTrendChart
+        projects={data.projects}
+        selected={selectedProject.name}
+        onSelect={setSelected}
+        limit={historyLimit}
+        onLimitChange={setHistoryLimit}
+        points={selectedHistory}
+        loading={historyLoading === historyKey && !historyByProject[historyKey]}
+      />
       <div className="table-wrap">
         <table className="projects-table">
           <thead>
@@ -220,19 +279,113 @@ function ProjectsPanel() {
                 <td><BlueprintProgress ok={p.blueprint_leanok} total={p.blueprint_nodes} /></td>
               </tr>
             ))}
-            <tr className="projects-total">
-              <td>Total</td>
-              <td>{fmt(data.totals.lean_files)}</td>
-              <td>{fmt(data.totals.loc)}</td>
-              <td>{fmt(data.totals.loc_code)}</td>
-              <td>{data.totals.sorries > 0 ? <span className="sorry-pill">{data.totals.sorries}</span> : <span className="ok-pill">0</span>}</td>
-              <td><BlueprintProgress ok={data.totals.blueprint_leanok} total={data.totals.blueprint_nodes} /></td>
-            </tr>
           </tbody>
         </table>
       </div>
     </Panel>
   );
+}
+
+function ProjectTrendChart({
+  projects,
+  selected,
+  onSelect,
+  limit,
+  onLimitChange,
+  points,
+  loading,
+}: {
+  projects: ProjectStat[];
+  selected: string;
+  onSelect: (name: string) => void;
+  limit: number;
+  onLimitChange: (limit: number) => void;
+  points: ProjectTrendPoint[];
+  loading: boolean;
+}) {
+  const project = projects.find((p) => p.name === selected) ?? projects[0];
+  const datedPoints = points.filter((p) => p.date);
+  const latest = datedPoints[datedPoints.length - 1];
+  return (
+    <div className="project-trend">
+      <div className="project-trend-toolbar">
+        <select value={project?.name ?? ''} onChange={(e) => onSelect(e.target.value)} aria-label="Project trend">
+          {projects.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+        </select>
+        <div className="project-trend-limit" role="group" aria-label="Commit history length">
+          {[10, 25, 50].map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === limit ? 'active' : ''}
+              onClick={() => onLimitChange(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+        <div className="project-trend-stats">
+          <span>{(latest?.sorries ?? project?.sorries ?? 0).toLocaleString()} open sorries</span>
+          {datedPoints.length > 0 && <span>{datedPoints.length.toLocaleString()} commits sampled</span>}
+          {loading && <span>loading history...</span>}
+        </div>
+      </div>
+      {datedPoints.length >= 2 ? (
+        <SorryTrendSvg points={datedPoints} />
+      ) : (
+        <div className="project-trend-empty">{loading ? 'Loading sorry history...' : 'No commit history for this project yet.'}</div>
+      )}
+    </div>
+  );
+}
+
+function SorryTrendSvg({ points }: { points: ProjectTrendPoint[] }) {
+  const w = 760;
+  const h = 210;
+  const pad = { left: 42, right: 18, top: 18, bottom: 34 };
+  const times = points.map((p) => Date.parse(p.date)).filter((n) => Number.isFinite(n));
+  const minT = Math.min(...times);
+  const maxT = Math.max(...times);
+  const sorries = points.map((p) => p.sorries);
+  const maxS = Math.max(1, ...sorries);
+  const x = (p: ProjectTrendPoint, i: number) => {
+    const t = Date.parse(p.date);
+    if (!Number.isFinite(t) || minT === maxT) {
+      return pad.left + (i / Math.max(1, points.length - 1)) * (w - pad.left - pad.right);
+    }
+    return pad.left + ((t - minT) / (maxT - minT)) * (w - pad.left - pad.right);
+  };
+  const ySorry = (value: number) => pad.top + (1 - value / maxS) * (h - pad.top - pad.bottom);
+  const barBase = h - pad.bottom;
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p, i).toFixed(1)} ${ySorry(p.sorries).toFixed(1)}`).join(' ');
+  const firstDate = formatShortDate(points[0]?.date);
+  const lastDate = formatShortDate(points[points.length - 1]?.date);
+  return (
+    <svg className="project-trend-chart" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Open sorries over commit history">
+      <line className="trend-axis" x1={pad.left} y1={barBase} x2={w - pad.right} y2={barBase} />
+      <line className="trend-axis" x1={pad.left} y1={pad.top} x2={pad.left} y2={barBase} />
+      {[0, 0.5, 1].map((n) => {
+        const y = ySorry(maxS * n);
+        return <line key={n} className="trend-grid" x1={pad.left} y1={y} x2={w - pad.right} y2={y} />;
+      })}
+      <path className="trend-sorry-line" d={path} />
+      {points.map((p, i) => (
+        <circle key={p.sha} className="trend-sorry-node" cx={x(p, i)} cy={ySorry(p.sorries)} r={4}>
+          <title>{formatDateTime(p.date)} · {p.sorries.toLocaleString()} open sorries · {p.short_sha} · {p.subject}</title>
+        </circle>
+      ))}
+      <text className="trend-label" x={pad.left} y={13}>{maxS.toLocaleString()} sorry</text>
+      <text className="trend-label" x={pad.left} y={h - 10}>{firstDate}</text>
+      <text className="trend-label trend-label-end" x={w - pad.right} y={h - 10}>{lastDate}</text>
+    </svg>
+  );
+}
+
+function formatShortDate(value: string | undefined) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return '';
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 function BlueprintProgress({ ok, total }: { ok: number; total: number }) {
@@ -245,16 +398,17 @@ function BlueprintProgress({ ok, total }: { ok: number; total: number }) {
   );
 }
 
-// Shared status → colour for roadmap + task chips.
-function statusColor(status: string) {
-  switch (status) {
-    case 'active': case 'running': return 'var(--blue)';
-    case 'pending': case 'queued': return 'var(--orange)';
-    case 'blocked': return 'var(--red)';
-    case 'done': return 'var(--green)';
-    case 'failed': case 'rejected': case 'cancelled': return 'var(--red)';
-    default: return 'var(--text-muted)';
+function chipTone(value: string) {
+  const normalized = filterToken(value);
+  if (INBOX_KIND_OPTIONS.includes(value)) return `kind-${normalized}`;
+  if (SEARCH_KINDS.includes(value)) return `kind-${normalized}`;
+  if (INBOX_PROVIDER_OPTIONS.includes(value)) return `provider-${normalized}`;
+  if (INBOX_GATE_OPTIONS.includes(value)) return `gate-${normalized}`;
+  if (TASK_PRIORITY_OPTIONS.includes(value)) return `priority-${normalized}`;
+  if ([...TASK_STATUS_OPTIONS, ...ROADMAP_STATUS_OPTIONS, ...INBOX_STATUS_OPTIONS, 'completed', 'closed'].includes(value)) {
+    return `state-${normalized}`;
   }
+  return 'project';
 }
 
 // Pick one or more projects: a checkbox per known project, plus free-text add for
@@ -266,7 +420,7 @@ function MultiProjectSelect({ value, onChange, projects }: { value: string[]; on
   return (
     <div className="project-multiselect">
       {[...projects, ...extras].map((p) => (
-        <label key={p} className={`project-chip ${value.includes(p) ? 'on' : ''}`}>
+        <label key={p} className={`project-chip tag-chip tag-project ${value.includes(p) ? 'on' : ''}`}>
           <input type="checkbox" checked={value.includes(p)} onChange={() => toggle(p)} />
           {p}
         </label>
@@ -288,9 +442,23 @@ function MultiProjectSelect({ value, onChange, projects }: { value: string[]; on
 
 function TasksPage({ state, reload }: PageProps) {
   const tasks = state.tasks ?? [];
+  const [searchParams] = useSearchParams();
+  const focusedTaskId = searchParams.get('task') ?? '';
   const roadmapIds = (state.roadmap?.items ?? []).map((item: any) => item.id);
   const projects = state.projects ?? [];
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  const taskProjectOptions = useMemo(() => {
+    const all = new Set<string>(projects);
+    for (const task of tasks) {
+      for (const project of task.projects ?? task.write_set?.projects ?? (task.project ? [task.project] : [])) {
+        if (project) all.add(project);
+      }
+    }
+    return [...all].sort();
+  }, [projects, tasks]);
+  const [statusFilter, toggleStatusFilter] = useFilterSelection(TASK_STATUS_OPTIONS);
+  const [priorityFilter, togglePriorityFilter] = useFilterSelection(TASK_PRIORITY_OPTIONS);
+  const [projectFilter, toggleProjectFilter] = useFilterSelection(taskProjectOptions);
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -307,9 +475,25 @@ function TasksPage({ state, reload }: PageProps) {
       });
   };
 
+  const focusedTask = focusedTaskId ? tasks.find((task: any) => task.id === focusedTaskId) : null;
+  const filteredTasksBase = tasks
+    .filter((task: any) => statusFilter.has(task.status || 'queued'))
+    .filter((task: any) => priorityFilter.has(task.priority || 'normal'))
+    .filter((task: any) => {
+      if (taskProjectOptions.length === 0) return true;
+      const taskProjects: string[] = task.projects ?? task.write_set?.projects ?? (task.project ? [task.project] : []);
+      return taskProjects.some((project) => projectFilter.has(project));
+    });
+  const filteredTasks = (
+    focusedTask && !filteredTasksBase.some((task: any) => task.id === focusedTaskId)
+      ? [focusedTask, ...filteredTasksBase]
+      : filteredTasksBase
+  ).sort(compareTasks);
+  const taskGroups = groupByDay(filteredTasks, taskActivityAt);
+
   return (
     <div className="page">
-      <Panel title="Tasks" subtitle={`${tasks.length} task${tasks.length === 1 ? '' : 's'}`}>
+      <Panel title="Tasks" subtitle={`${filteredTasks.length}/${tasks.length} task${tasks.length === 1 ? '' : 's'}`}>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
         {!STATIC && (
           <details className="local-create">
@@ -317,11 +501,29 @@ function TasksPage({ state, reload }: PageProps) {
             <TaskComposer runAction={runAction} projects={projects} roadmapIds={roadmapIds} />
           </details>
         )}
+        <div className="filter-stack">
+          <div className="search-facet-group"><span className="search-facet-label">Status</span>
+            <ChipMultiSelect options={TASK_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Task status filter" />
+          </div>
+          <div className="search-facet-group"><span className="search-facet-label">Priority</span>
+            <ChipMultiSelect options={TASK_PRIORITY_OPTIONS} selected={priorityFilter} onToggle={togglePriorityFilter} label="Task priority filter" />
+          </div>
+          {taskProjectOptions.length > 0 && (
+            <div className="search-facet-group"><span className="search-facet-label">Projects</span>
+              <ChipMultiSelect options={taskProjectOptions} selected={projectFilter} onToggle={toggleProjectFilter} label="Task project filter" />
+            </div>
+          )}
+        </div>
         <div className="task-list">
-          {tasks.map((task: any) => (
-            <TaskCard key={task.id} task={task} runAction={runAction} projects={projects} roadmapIds={roadmapIds} />
+          {taskGroups.map((group) => (
+            <section key={group.key} className="day-group">
+              <div className="day-heading"><h3>{group.label}</h3><span>{group.items.length}</span></div>
+              {group.items.map((task: any) => (
+                <TaskCard key={task.id} task={task} runAction={runAction} projects={projects} roadmapIds={roadmapIds} focused={task.id === focusedTaskId} />
+              ))}
+            </section>
           ))}
-          {tasks.length === 0 && <p className="empty">No tasks.</p>}
+          {filteredTasks.length === 0 && <p className="empty">No tasks match the current filters.</p>}
         </div>
       </Panel>
     </div>
@@ -330,6 +532,68 @@ function TasksPage({ state, reload }: PageProps) {
 
 function splitList(value: string) {
   return value.split(',').map((part) => part.trim()).filter(Boolean);
+}
+
+function useFilterSelection(options: string[], initialSelected?: string[]) {
+  const sig = options.join('\0');
+  const previousOptions = useRef<string[]>(options);
+  // Default to all options selected, unless an explicit initial subset is given
+  // (e.g. inbox: hide 'archived' by default until the user opts in).
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(initialSelected ?? options));
+
+  useEffect(() => {
+    setSelected((prev) => {
+      const oldOptions = previousOptions.current;
+      const oldSet = new Set(oldOptions);
+      const allowed = new Set(options);
+      const wasAllSelected = oldOptions.length === 0 || oldOptions.every((option) => prev.has(option));
+      const next = new Set([...prev].filter((option) => allowed.has(option)));
+      for (const option of options) {
+        if (!oldSet.has(option) || wasAllSelected) next.add(option);
+      }
+      previousOptions.current = options;
+      return next;
+    });
+  }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggle = (value: string) => setSelected((prev) => {
+    const next = new Set(prev);
+    next.has(value) ? next.delete(value) : next.add(value);
+    return next;
+  });
+
+  return [selected, toggle] as const;
+}
+
+function dayStamp(value: string | undefined) {
+  if (!value) return { key: 'undated', label: 'Undated' };
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return { key: 'undated', label: 'Undated' };
+  const key = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  return {
+    key,
+    label: date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }),
+  };
+}
+
+function groupByDay<T>(items: T[], getDate: (item: T) => string | undefined) {
+  const groups: { key: string; label: string; items: T[] }[] = [];
+  const byKey = new Map<string, { key: string; label: string; items: T[] }>();
+  for (const item of items) {
+    const stamp = dayStamp(getDate(item));
+    let group = byKey.get(stamp.key);
+    if (!group) {
+      group = { ...stamp, items: [] };
+      byKey.set(stamp.key, group);
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+  return groups;
 }
 
 function TaskComposer({ runAction, projects, roadmapIds }: { runAction: any; projects: string[]; roadmapIds: string[] }) {
@@ -391,7 +655,7 @@ function TaskComposer({ runAction, projects, roadmapIds }: { runAction: any; pro
   );
 }
 
-function TaskCard({ task, runAction, projects = [], roadmapIds = [] }: { task: any; runAction?: any; projects?: string[]; roadmapIds?: string[] }) {
+function TaskCard({ task, runAction, projects = [], roadmapIds = [], focused = false }: { task: any; runAction?: any; projects?: string[]; roadmapIds?: string[]; focused?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title || task.objective || task.id);
   const [explanation, setExplanation] = useState(task.explanation || task.objective || '');
@@ -449,11 +713,11 @@ function TaskCard({ task, runAction, projects = [], roadmapIds = [] }: { task: a
   };
 
   return (
-    <details className="task-card" open={editing}>
+    <details className={`task-card${focused ? ' focused' : ''}`} open={editing || focused}>
       <summary style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <div className="task-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
           {!STATIC && runAction ? (
-            <select className="chip-select state" style={{ color: statusColor(status), borderColor: statusColor(status) }} value={status} onChange={(e) => updateStatus(e.target.value)}>
+            <select className={`chip-select state ${status}`} value={status} onChange={(e) => updateStatus(e.target.value)}>
               <option value="queued">queued</option>
               <option value="running">running</option>
               <option value="blocked">blocked</option>
@@ -608,7 +872,14 @@ function ChipMultiSelect({ options, selected, onToggle, label }: { options: stri
   return (
     <div className="search-facet" aria-label={label}>
       {options.map((opt) => (
-        <button key={opt} type="button" className={`search-facet-chip ${selected.has(opt) ? 'on' : ''}`} onClick={() => onToggle(opt)}>{opt}</button>
+        <button
+          key={opt}
+          type="button"
+          className={`search-facet-chip tag-chip tag-${chipTone(opt)} ${selected.has(opt) ? 'on' : ''}`}
+          onClick={() => onToggle(opt)}
+        >
+          {filterLabel(opt)}
+        </button>
       ))}
     </div>
   );
@@ -721,13 +992,58 @@ export function Panel({ title, subtitle, to, children }: { title: string; subtit
   );
 }
 
+// Hierarchy is stored in item.metadata (parent id and/or a depth level), mirroring
+// core/roadmap.py's ordered_tree — so the dashboard renders the same outline the
+// CLI does: parents above their sub-items, ordered by id, one row per item.
+function roadmapDepth(item: any): number {
+  const d = Number(item?.metadata?.depth);
+  return Number.isFinite(d) && d > 0 ? Math.floor(d) : 0;
+}
+function roadmapParent(item: any): string {
+  const p = item?.metadata?.parent;
+  return typeof p === 'string' ? p.trim() : '';
+}
+function orderedRoadmapTree(items: any[]): Array<{ item: any; depth: number }> {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const children = new Map<string, any[]>();
+  const roots: any[] = [];
+  for (const it of items) {
+    const parent = roadmapParent(it);
+    if (parent && byId.has(parent) && parent !== it.id) {
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent)!.push(it);
+    } else roots.push(it);
+  }
+  const byId3 = (a: any, b: any) => String(a.id).localeCompare(String(b.id));
+  for (const kids of children.values()) kids.sort(byId3);
+  roots.sort(byId3);
+  const out: Array<{ item: any; depth: number }> = [];
+  const seen = new Set<string>();
+  const walk = (node: any, depth: number) => {
+    if (seen.has(node.id)) return;
+    seen.add(node.id);
+    out.push({ item: node, depth });
+    for (const child of children.get(node.id) ?? []) walk(child, depth + 1);
+  };
+  for (const root of roots) walk(root, roadmapDepth(root));
+  for (const it of items) if (!seen.has(it.id)) { seen.add(it.id); out.push({ item: it, depth: roadmapDepth(it) }); }
+  return out;
+}
+
 function RoadmapPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const items = state.roadmap?.items ?? [];
   const allProjects = state.projects || [];
 
-  const [projectFilter, setProjectFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const roadmapProjectOptions = useMemo(() => {
+    const all = new Set<string>(allProjects);
+    for (const item of items) {
+      for (const project of (item.projects?.length ? item.projects : ['Uncategorized'])) all.add(project);
+    }
+    return [...all].sort();
+  }, [allProjects, items]);
+  const [projectFilter, toggleProjectFilter] = useFilterSelection(roadmapProjectOptions);
+  const [statusFilter, toggleStatusFilter] = useFilterSelection(ROADMAP_STATUS_OPTIONS);
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -748,12 +1064,14 @@ function RoadmapPage({ state, reload }: PageProps) {
 
   const itemProjects = (i: any): string[] => (i.projects?.length ? i.projects : ['Uncategorized']);
   const filteredItems = items.filter((i: any) => {
-    if (projectFilter !== 'all' && !itemProjects(i).includes(projectFilter)) return false;
-    if (statusFilter !== 'all' && i.status !== statusFilter) return false;
+    if (!itemProjects(i).some((project) => projectFilter.has(project))) return false;
+    if (!statusFilter.has(i.status || 'active')) return false;
     return true;
   });
   // An item shared across projects appears under each of its project groups.
   const filteredProjects = [...new Set(filteredItems.flatMap(itemProjects))].sort();
+  // Tree order (parents above sub-items) computed once over the visible items.
+  const orderedFiltered = orderedRoadmapTree(filteredItems);
 
   return (
     <div className="page">
@@ -761,22 +1079,18 @@ function RoadmapPage({ state, reload }: PageProps) {
         {!STATIC && (
           <details className="local-create">
             <summary>New roadmap item</summary>
-            <RoadmapComposer runAction={runAction} projects={allProjects} />
+            <RoadmapComposer runAction={runAction} projects={allProjects} parentOptions={items.map((i: any) => i.id)} />
           </details>
         )}
-        <div className="filters">
-          <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}>
-            <option value="all">All projects</option>
-            {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="all">All statuses</option>
-            <option value="active">Active</option>
-            <option value="pending">Pending</option>
-            <option value="blocked">Blocked</option>
-            <option value="done">Done</option>
-            <option value="rejected">Rejected</option>
-          </select>
+        <div className="filter-stack">
+          {roadmapProjectOptions.length > 0 && (
+            <div className="search-facet-group"><span className="search-facet-label">Projects</span>
+              <ChipMultiSelect options={roadmapProjectOptions} selected={projectFilter} onToggle={toggleProjectFilter} label="Roadmap project filter" />
+            </div>
+          )}
+          <div className="search-facet-group"><span className="search-facet-label">Status</span>
+            <ChipMultiSelect options={ROADMAP_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Roadmap status filter" />
+          </div>
         </div>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
         <div className="roadmap-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -784,8 +1098,10 @@ function RoadmapPage({ state, reload }: PageProps) {
             <div key={proj as string} className="roadmap-project-group">
               <h3>{proj}</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {filteredItems.filter((i: any) => itemProjects(i).includes(proj)).map((item: any) => (
-                  <RoadmapItemCard key={item.id} item={item} runAction={runAction} projects={allProjects} />
+                {orderedFiltered.filter(({ item }) => itemProjects(item).includes(proj)).map(({ item, depth }) => (
+                  <div key={item.id} style={{ marginLeft: `${Math.min(depth, 6) * 1.5}rem` }}>
+                    <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                  </div>
                 ))}
               </div>
             </div>
@@ -797,11 +1113,12 @@ function RoadmapPage({ state, reload }: PageProps) {
   );
 }
 
-function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>, projects: string[] }) {
+function RoadmapComposer({ runAction, projects, parentOptions = [] }: { runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>, projects: string[], parentOptions?: string[] }) {
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [selProjects, setSelProjects] = useState<string[]>([]);
   const [author, setAuthor] = useState('');
+  const [parent, setParent] = useState('');
   const [busy, setBusy] = useState(false);
 
   const submit = (event: React.FormEvent) => {
@@ -813,7 +1130,8 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
       title: title.trim(),
       summary: summary.trim(),
       projects: selProjects,
-      author: author.trim()
+      author: author.trim(),
+      ...(parent.trim() ? { parent: parent.trim() } : {})
     }, 'Roadmap item added.')
       .then((ok) => {
         if (!ok) return;
@@ -821,6 +1139,7 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
         setSummary('');
         setAuthor('');
         setSelProjects([]);
+        setParent('');
       })
       .finally(() => setBusy(false));
   };
@@ -831,6 +1150,8 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
       <MultiProjectSelect value={selProjects} onChange={setSelProjects} projects={projects} />
       <input value={author} placeholder="Author (required)" onChange={(event) => setAuthor(event.target.value)} />
       <input value={title} placeholder="Title" onChange={(event) => setTitle(event.target.value)} />
+      <input value={parent} placeholder="Parent item id (optional — nests this under it)" list="roadmap-parent-ids" onChange={(event) => setParent(event.target.value)} />
+      <datalist id="roadmap-parent-ids">{parentOptions.map((id) => <option key={id} value={id} />)}</datalist>
       <textarea value={summary} placeholder="Summary (Markdown / LaTeX supported)" onChange={(event) => setSummary(event.target.value)} rows={3} />
       <button className="primary" type="submit" disabled={!title.trim() || !author.trim() || busy}>Add roadmap item</button>
     </form>
@@ -841,15 +1162,22 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
 function InboxPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const [query, setQuery] = useState('');
-  const [providerFilter, setProviderFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [gateFilter, setGateFilter] = useState('all');
+  const [providerFilter, toggleProviderFilter] = useFilterSelection(INBOX_PROVIDER_OPTIONS);
+  const [statusFilter, toggleStatusFilter] = useFilterSelection(INBOX_STATUS_OPTIONS, INBOX_STATUS_DEFAULT);
+  const [gateFilter, toggleGateFilter] = useFilterSelection(INBOX_GATE_OPTIONS);
+  const [kindFilter, toggleKindFilter] = useFilterSelection(INBOX_KIND_OPTIONS);
   const providers = state.inbox_providers ?? {};
   const github = providers.github;
   const allItems = [...(state.local_inbox ?? []), ...(state.github_inbox ?? [])];
+  const audienceOptions = useMemo(() => {
+    const values = new Set(allItems.map((item) => String(item.audience || 'general')));
+    return ['general', ...[...values].filter((value) => value !== 'general').sort()];
+  }, [allItems]);
+  const [audienceFilter, toggleAudienceFilter] = useFilterSelection(audienceOptions);
   const items = allItems
-    .filter((item) => matchesInboxFilters(item, { query, providerFilter, statusFilter, gateFilter }))
+    .filter((item) => matchesInboxFilters(item, { query, providerFilter, statusFilter, gateFilter, kinds: kindFilter, audienceFilter }))
     .sort(compareInboxItems);
+  const itemGroups = groupByDay(items, inboxActivityAt);
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -871,28 +1199,27 @@ function InboxPage({ state, reload }: PageProps) {
 
   return (
     <div className="page">
-      <Panel title="Inbox" subtitle="Search, review, and close inbox items">
+      <Panel title="Inbox" subtitle="Search, review, and archive inbox items">
         <div className="inbox-topbar">
           <div className="inbox-searchbar">
             <input value={query} placeholder="Search inbox..." onChange={(event) => setQuery(event.target.value)} />
-            <select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} aria-label="Provider filter">
-              <option value="all">All sources</option>
-              <option value="local">Local</option>
-              <option value="github">GitHub</option>
-            </select>
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Status filter">
-              <option value="all">All states</option>
-              <option value="open">Open</option>
-              <option value="completed">Closed</option>
-              <option value="archived">Archived</option>
-            </select>
-            <select value={gateFilter} onChange={(event) => setGateFilter(event.target.value)} aria-label="Agent label filter">
-              <option value="all">All labels</option>
-              <option value="accept">Agent-ready</option>
-              <option value="pending">Not-ready</option>
-              <option value="reject">Rejected</option>
-              <option value="clear">Unlabeled</option>
-            </select>
+          </div>
+          <div className="inbox-filterbar">
+            <div className="search-facet-group"><span className="search-facet-label">Sources</span>
+              <ChipMultiSelect options={INBOX_PROVIDER_OPTIONS} selected={providerFilter} onToggle={toggleProviderFilter} label="Inbox source filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">State</span>
+              <ChipMultiSelect options={INBOX_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Inbox state filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">Labels</span>
+              <ChipMultiSelect options={INBOX_GATE_OPTIONS} selected={gateFilter} onToggle={toggleGateFilter} label="Inbox label filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">To</span>
+              <ChipMultiSelect options={audienceOptions} selected={audienceFilter} onToggle={toggleAudienceFilter} label="Inbox audience filter" />
+            </div>
+            <div className="search-facet-group"><span className="search-facet-label">Type</span>
+              <ChipMultiSelect options={INBOX_KIND_OPTIONS} selected={kindFilter} onToggle={toggleKindFilter} label="Inbox type filter" />
+            </div>
           </div>
           <button
             onClick={() => runAction({ action: 'sync', provider: 'github' }, 'GitHub inbox synced.')}
@@ -914,13 +1241,18 @@ function InboxPage({ state, reload }: PageProps) {
           </div>
         )}
         <div className="inbox-list">
-          {items.map((item) => (
-            <InboxCard
-              key={`${item.provider}-${item.id}`}
-              item={item}
-              providers={providers}
-              runAction={runAction}
-            />
+          {itemGroups.map((group) => (
+            <section key={group.key} className="day-group inbox-day-group">
+              <div className="day-heading"><h3>{group.label}</h3><span>{group.items.length}</span></div>
+              {group.items.map((item) => (
+                <InboxCard
+                  key={`${item.provider}-${item.id}`}
+                  item={item}
+                  providers={providers}
+                  runAction={runAction}
+                />
+              ))}
+            </section>
           ))}
           {items.length === 0 && <p className="empty inbox-empty">No inbox items match the current filters.</p>}
         </div>
@@ -990,13 +1322,15 @@ function InboxCard({
   const caps = new Set(provider.capabilities ?? []);
   const editable = !STATIC;
   const isGithub = item.provider === 'github';
+  const canArchive = item.provider === 'local';
   const sourceUrl = inboxSourceUrl(item, provider.repo ?? undefined);
   const comments = inboxComments(item);
   const gate = inboxGate(item.labels ?? []);
   const { title, body } = inboxTitleAndBody(item);
   const itemNumber = item.metadata?.number ? `#${item.metadata.number}` : item.id;
   const author = inboxAuthor(item);
-  const itemStatus = (item.status === 'archived' || item.status === 'closed') ? 'completed' : item.status;
+  const agent = inboxAgent(item);
+  const itemStatus = normalizedInboxStatus(item.status);
   const [visibleKind, setVisibleKind] = useState(item.kind);
   const [visibleStatus, setVisibleStatus] = useState(itemStatus);
   const [visibleGate, setVisibleGate] = useState(gate);
@@ -1012,6 +1346,14 @@ function InboxCard({
   const deleteLocal = () => {
     if (!window.confirm(`Delete local inbox item ${item.id}? This cannot be undone.`)) return;
     runAction({ action: 'delete', provider: 'local', id: item.id }, 'Local inbox item deleted.');
+  };
+
+  const isArchived = item.status === 'archived';
+  const toggleArchive = () => {
+    runAction(
+      { action: isArchived ? 'unarchive' : 'archive', provider: item.provider, id: item.id },
+      isArchived ? 'Inbox item unarchived.' : 'Inbox item archived (hidden by default).',
+    );
   };
 
   const updateKind = (nextKind: string) => {
@@ -1030,11 +1372,17 @@ function InboxCard({
   const updateStatus = (nextStatus: string) => {
     const previous = visibleStatus;
     setVisibleStatus(nextStatus);
+    const nextAction = nextStatus === 'open'
+      ? (isArchived ? 'unarchive' : 'reopen')
+      : nextStatus === 'archived' ? 'archive' : 'complete';
     runAction({
-      action: nextStatus === 'open' ? 'reopen' : 'complete',
+      action: nextAction,
       provider: item.provider,
       id: item.id,
-    }, nextStatus === 'open' ? 'Inbox item reopened.' : 'Inbox item closed.').then((ok) => {
+    }, nextStatus === 'open'
+      ? 'Inbox item reopened.'
+      : nextStatus === 'archived' ? 'Inbox item archived (hidden by default).' : 'Inbox item closed.'
+    ).then((ok) => {
       if (!ok) setVisibleStatus(previous);
     });
   };
@@ -1071,9 +1419,10 @@ function InboxCard({
             {editable && caps.has('status') ? (
               <select className={`chip-select state ${visibleStatus}`} value={visibleStatus} onClick={stop} onChange={(event) => updateStatus(event.target.value)} aria-label="State">
                 <option className="state-open" value="open">open</option>
-                <option className="state-completed" value="completed">closed</option>
+                <option className="state-closed" value="closed">closed</option>
+                {canArchive && <option className="state-archived" value="archived">archived</option>}
               </select>
-            ) : <Status value={item.status} />}
+            ) : <Status value={normalizedInboxStatus(item.status)} label={filterLabel(normalizedInboxStatus(item.status))} />}
             {editable && caps.has('label') ? (
               <select className={`chip-select gate ${visibleGate}`} value={visibleGate} onClick={stop} onChange={(event) => updateGate(event.target.value)} aria-label="Agent label">
                 <option className="gate-accept" value="accept">agent-ready</option>
@@ -1082,16 +1431,17 @@ function InboxCard({
                 <option className="gate-clear" value="clear">unlabeled</option>
               </select>
             ) : <Status value={gate} label={gateLabel(gate)} />}
-            {sourceUrl ? (
-              <a className="issue-title" href={sourceUrl} target="_blank" rel="noreferrer" onClick={stop}><InlineMarkdown content={title} /></a>
-            ) : (
-              <span className="issue-title"><InlineMarkdown content={title} /></span>
-            )}
-            {author && <span className="author-tag">by {author}</span>}
+            <span className="issue-title"><InlineMarkdown content={title} /></span>
+            {author && <span className="author-tag">by {author}{agent && <span className="agent-tag"> · {agent}</span>}</span>}
           </div>
           <div className="issue-title-actions">
             {comments.length > 0 && (
               <span className="comment-count" title={`${comments.length} comment${comments.length === 1 ? '' : 's'}`}>{comments.length}</span>
+            )}
+            {editable && canArchive && (
+              <button className="text-action" onClick={(event) => { stop(event); toggleArchive(); }} title={isArchived ? 'Restore from archive' : 'Archive (soft-delete: kept but hidden by default)'}>
+                {isArchived ? 'Unarchive' : 'Archive'}
+              </button>
             )}
             {editable && item.provider === 'local' && (
               <button className="icon-danger" onClick={(event) => { stop(event); deleteLocal(); }} title="Delete local item" aria-label="Delete local item"><TrashIcon /></button>
@@ -1103,7 +1453,7 @@ function InboxCard({
           <div className="issue-body">
             <div className="issue-meta">
               <span>{itemNumber}</span>
-              {author && <span>by {author}</span>}
+              {author && <span>by {author}{agent ? ` · ${agent}` : ''}</span>}
               {item.audience && <span className="audience-chip" title="Who this item is addressed to">to {item.audience}</span>}
               <ProvenanceChip provenance={item.metadata?.provenance} />
               <span>opened {formatDate(item.created_at)}</span>
@@ -1347,17 +1697,22 @@ function historyOf(item: any): any[] {
 
 // One-line, human description of a history transition.
 function describeHistory(e: any): string {
-  const from = e.from ? `${e.from}` : '—';
+  const from = e.from ? historyValueLabel(e.from) : '—';
+  const to = e.to ? historyValueLabel(e.to) : '—';
   switch (e.field) {
     case 'created': return 'opened this item';
     case 'deleted': return 'deleted this item';
-    case 'status': return `status ${from} → ${e.to || '—'}`;
+    case 'status': return `status ${from} → ${to}`;
     case 'label': return `labels ${from} → ${e.to || '—'}`;
     case 'kind': return `type ${from} → ${e.to || '—'}`;
     case 'body': return e.note || 'edited the description';
     case 'edited': return e.note || 'edited fields';
     default: return e.note || e.field || 'changed';
   }
+}
+
+function historyValueLabel(value: unknown) {
+  return filterLabel(String(value || ''));
 }
 
 function HistoryRow({ entry }: { entry: any }) {
@@ -1466,13 +1821,61 @@ function ProvenanceChip({ provenance }: { provenance: any }) {
 function Transcripts({ state }: { state?: any }) {
   const runs = state?.runs ?? [];
   // Newest run first, so an in-progress run is at the top of the sidebar.
-  const orderedRuns = [...runs].reverse();
+  const orderedRuns = [...runs].sort(compareRuns);
   const [events, setEvents] = useState<any[] | null>(null);
   const [report, setReport] = useState<string>('');
+  const [recommendation, setRecommendation] = useState<string>('');
   const [selected, setSelected] = useState<string>('');
+  const [changes, setChanges] = useState<RunChanges | null>(null);
+  const [workingChange, setWorkingChange] = useState<SessionChange | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const selectedSession = useMemo(() => findSessionByRef(runs, selected), [runs, selected]);
   const selectedRun = useMemo(() => findRunBySessionRef(runs, selected), [runs, selected]);
+  const selectedNextStart = useMemo(
+    () => selectedRun && selectedSession ? nextSessionStart(selectedRun.sessions ?? [], selectedSession) : undefined,
+    [selectedRun, selectedSession],
+  );
+  const activeTickSession = useMemo(() => activeRunSessionKey(selectedRun), [selectedRun]);
   const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Load the deterministic per-session change view for the selected run (diff +
+  // sorry delta computed server-side from the ledger). Refetched when the run
+  // changes; the payload is small and static-mode reads it from a precomputed file.
+  const selectedRunId = selectedRun?.id;
+  useEffect(() => {
+    if (!selectedRunId) { setChanges(null); return; }
+    let cancelled = false;
+    getRunChanges(selectedRunId)
+      .then((c) => { if (!cancelled) setChanges(c); })
+      .catch(() => { if (!cancelled) setChanges(null); });
+    return () => { cancelled = true; };
+  }, [selectedRunId]);
+  const committedChange = useMemo(
+    () => changes?.sessions.find((s) => s.session === selectedSession?.session),
+    [changes, selectedSession],
+  );
+  // A running session hasn't committed yet: show the live working-tree diff
+  // (current uncommitted state vs the run's last committed session) instead,
+  // polled while it stays running.
+  const sessionRunning = selectedSession?.status === 'running';
+  useEffect(() => {
+    if (!selectedRunId || !sessionRunning) { setWorkingChange(null); return; }
+    let cancelled = false;
+    const load = () => {
+      getWorkingChanges(selectedRunId, selectedSession?.session)
+        .then((c) => { if (!cancelled) setWorkingChange({ ...c, session: selectedSession?.session }); })
+        .catch(() => { if (!cancelled) setWorkingChange(null); });
+    };
+    load();
+    const id = setInterval(load, 4000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [selectedRunId, sessionRunning, selectedSession?.session]);
+  const sessionChange = sessionRunning ? (workingChange ?? undefined) : committedChange;
 
   // Deep-link / selection: keep `selected` in sync with the URL.
   useEffect(() => {
@@ -1482,11 +1885,23 @@ function Transcripts({ state }: { state?: any }) {
   // Live-tail the open transcript + its report: fetch on select, then poll so
   // new events and the final report appear without a manual page refresh.
   useEffect(() => {
-    if (!selected) { setEvents(null); setReport(''); return; }
+    if (!selected) { setEvents(null); setReport(''); setRecommendation(''); return; }
     let cancelled = false;
     const load = () => {
       getTranscript(selected).then((e) => { if (!cancelled) setEvents(e); }).catch(() => { if (!cancelled) setEvents([]); });
-      getReport(selected).then((r) => { if (!cancelled) setReport(r?.markdown ?? ''); }).catch(() => { if (!cancelled) setReport(''); });
+      getReport(selected)
+        .then((r) => {
+          if (!cancelled) {
+            setReport(r?.markdown ?? '');
+            setRecommendation(r?.recommendation ?? '');
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setReport('');
+            setRecommendation('');
+          }
+        });
     };
     load();
     const id = setInterval(load, 3000);
@@ -1503,7 +1918,7 @@ function Transcripts({ state }: { state?: any }) {
             <RunGroup key={run.id} run={run} selected={selected} onSelect={(ref) => {
               setSelected(ref);
               setSearchParams({ ref });
-            }} />
+            }} now={now} />
           ))}
         </div>
       </aside>
@@ -1511,9 +1926,14 @@ function Transcripts({ state }: { state?: any }) {
         events={events}
         harnesses={state?.harnesses ?? {}}
         report={report}
+        recommendation={recommendation}
         run={selectedRun}
         selected={selected}
         session={selectedSession}
+        change={sessionChange}
+        changesRunId={selectedRunId}
+        nextSessionStart={selectedNextStart}
+        activeTickSession={activeTickSession}
       />
     </div>
   );
@@ -1537,6 +1957,37 @@ function subagentLabel(event: any): string {
 type LogGroup =
   | { sub: false; item: { event: any; idx: number } }
   | { sub: true; id: string; label: string; items: { event: any; idx: number }[] };
+
+function sumUsage(usages: any[]) {
+  let hasCost = false;
+  const total = usages.reduce((acc, usage) => {
+    if (!usage) return acc;
+    const values = usageNumbers(usage);
+    acc.tokens_in += values.tokensIn;
+    acc.tokens_out += values.tokensOut;
+    acc.cached_tokens_in += values.cachedIn;
+    acc.reasoning_tokens_out += values.reasoningOut;
+    if (values.cost !== null) {
+      acc.cost_usd += values.cost;
+      hasCost = true;
+    }
+    return acc;
+  }, {
+    tokens_in: 0,
+    tokens_out: 0,
+    cached_tokens_in: 0,
+    reasoning_tokens_out: 0,
+    cost_usd: 0,
+  });
+  return {
+    ...total,
+    cost_usd: hasCost ? total.cost_usd : null,
+  };
+}
+
+function subagentGroupUsage(items: { event: any; idx: number }[]) {
+  return sumUsage(items.map(({ event }) => event.usage ?? (event.kind === 'usage' ? event.data : null)));
+}
 
 function groupSubagents(ordered: { event: any; idx: number }[] | null | undefined): LogGroup[] {
   // Collect ALL events sharing a subagent id into one sublog placed at the id's
@@ -1566,20 +2017,331 @@ function groupSubagents(ordered: { event: any; idx: number }[] | null | undefine
   return groups;
 }
 
+// A signed count with a +/− sign, coloured green when it means progress.
+function Delta({ value, goodWhenNegative = false }: { value: number; goodWhenNegative?: boolean }) {
+  const good = goodWhenNegative ? value < 0 : value > 0;
+  const cls = value === 0 ? 'zero' : good ? 'good' : 'bad';
+  return <span className={`delta ${cls}`}>{value > 0 ? `+${value}` : value === 0 ? '±0' : `−${Math.abs(value)}`}</span>;
+}
+
+// An "after (Δ)" stat, e.g. 6 (+1) — the resulting value with its signed change.
+function AfterDelta({ after, delta, goodWhenNegative = false }: { after: number; delta: number; goodWhenNegative?: boolean }) {
+  return (
+    <span className="after-delta">
+      <strong>{after}</strong>
+      {delta !== 0 && <> (<Delta value={delta} goodWhenNegative={goodWhenNegative} />)</>}
+    </span>
+  );
+}
+
+const DECL_KIND_LABELS: Record<string, string> = {
+  theorem: 'thm',
+  proposition: 'prop',
+  corollary: 'cor',
+  definition: 'def',
+  lemma: 'lemma',
+  def: 'def',
+  abbrev: 'abbrev',
+  instance: 'inst',
+  structure: 'struct',
+  inductive: 'ind',
+  class: 'class',
+  example: 'ex',
+  conjecture: 'conj',
+  remark: 'rem',
+  notation: 'notn',
+  convention: 'conv',
+};
+
+const DECL_KIND_ORDER = [
+  'theorem', 'lemma', 'proposition', 'corollary', 'definition', 'def',
+  'abbrev', 'instance', 'structure', 'inductive', 'class', 'example',
+  'conjecture', 'remark', 'notation', 'convention',
+];
+
+function declEntries(delta?: Record<string, number>) {
+  if (!delta) return [];
+  return Object.entries(delta)
+    .filter(([, value]) => value !== 0)
+    .sort(([a], [b]) => {
+      const ai = DECL_KIND_ORDER.indexOf(a);
+      const bi = DECL_KIND_ORDER.indexOf(b);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      return a.localeCompare(b);
+    });
+}
+
+function DeclarationDelta({ delta, compact = false }: { delta?: Record<string, number>; compact?: boolean }) {
+  const entries = declEntries(delta);
+  if (!entries.length) return null;
+  return (
+    <span className={`decl-delta ${compact ? 'compact' : ''}`} title="Declaration/environment count changes">
+      {entries.map(([kind, value]) => (
+        <span key={kind} className="decl-delta-item">
+          <Delta value={value} /> {DECL_KIND_LABELS[kind] ?? kind}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function GitUnifiedDiff({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <pre className="change-diff"><code>{lines.map((line, i) => {
+      const cls = line.startsWith('+') && !line.startsWith('+++') ? 'add'
+        : line.startsWith('-') && !line.startsWith('---') ? 'del'
+        : line.startsWith('@@') ? 'hunk'
+        : line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('+++') || line.startsWith('---') ? 'meta'
+        : '';
+      return <div key={i} className={`diff-line ${cls}`}>{line || ' '}</div>;
+    })}</code></pre>
+  );
+}
+
+// One file row: click the name to lazily load and expand its diff. Only the
+// base file name is shown (paths are often very long); hover reveals the path.
+function FileChangeRow({ runId, session, file, showComments, initial, worktree }: {
+  runId: string; session: string; file: SessionChangeFile; showComments: boolean; initial?: boolean; worktree?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [diff, setDiff] = useState<FileDiff | null>(null);
+  const before = showComments ? file.loc_before ?? 0 : file.loc_code_before ?? 0;
+  const after = showComments ? file.loc_after ?? 0 : file.loc_code_after ?? 0;
+  const name = file.path.split('/').pop() || file.path;
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && diff === null) {
+      getSessionFileDiff(runId, session, file.path, worktree).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
+    }
+  };
+  return (
+    <>
+      <tr className={open ? 'change-row open' : 'change-row'}>
+        <td className="change-file">
+          <button className="change-file-btn" onClick={toggle} title={file.path}>
+            <span className="change-caret">{open ? '▾' : '▸'}</span>
+            <span className="change-fname">{name}</span>
+            {/* Suppress "new" on the run's initial snapshot, where every file is trivially new. */}
+            {!initial && file.added && <span className="file-tag added">new</span>}
+            {file.deleted && <span className="file-tag deleted">del</span>}
+            <DeclarationDelta delta={file.decl_delta} compact />
+          </button>
+        </td>
+        {file.category === 'lean' && (
+          <td className="change-sorry">
+            <AfterDelta after={file.sorry_after ?? 0} delta={file.sorry_delta ?? 0} goodWhenNegative /> sorry
+          </td>
+        )}
+        <td className="change-loc"><AfterDelta after={after} delta={after - before} /> {showComments ? 'loc' : 'code'}</td>
+        <td className="change-churn muted" title="raw line churn (git)"><span className="delta good">+{file.add ?? 0}</span>/<span className="delta bad">−{file.del ?? 0}</span></td>
+      </tr>
+      {open && (
+        <tr className="change-diff-row">
+          <td colSpan={file.category === 'lean' ? 4 : 3}>
+            {diff === null ? <p className="empty">Loading diff…</p>
+              : !diff.available ? <p className="empty">Diff unavailable (no VCS history for this session).</p>
+              : <GitUnifiedDiff text={diff.diff} />}
+            {diff?.truncated && <p className="empty">Diff truncated (large file).</p>}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// Deterministic per-session change view: agent sessions show only files from
+// agent-authored semantic commits; system/integration commits remain visible as
+// ledger metadata. Lean and blueprint files get their own tabs.
+const EMPTY_CHANGE_ROLLUP = {
+  files: 0,
+  add: 0,
+  del: 0,
+  loc_after: 0,
+  loc_code_after: 0,
+  loc_delta: 0,
+  loc_code_delta: 0,
+  sorry_after: 0,
+  sorry_delta: 0,
+};
+
+function changeRollup(change: SessionChange, key: 'lean' | 'blueprint') {
+  const roll = (change as any)[key] ?? {};
+  const merged = { ...EMPTY_CHANGE_ROLLUP, ...roll };
+  if (key === 'lean') {
+    return {
+      ...merged,
+      files: roll.files ?? change.lean_files_changed ?? merged.files,
+      loc_delta: roll.loc_delta ?? change.loc_add ?? merged.loc_delta,
+      loc_code_delta: roll.loc_code_delta ?? change.loc_add ?? merged.loc_code_delta,
+      sorry_delta: roll.sorry_delta ?? change.sorry_delta ?? merged.sorry_delta,
+    };
+  }
+  return merged;
+}
+
+// One-line caveat about how faithfully the diff attributes files to this session.
+function attributionNote(change: SessionChange): string {
+  if (change.worktree) {
+    const excluded = change.excluded_count ? ` Pre-existing dirty files excluded: ${change.excluded_count}.` : '';
+    return `Live working-tree view: current uncommitted changes vs this run's baseline or last committed session.${excluded}`;
+  }
+  if (change.change_source === 'agent-commits') return 'Shows only files from this session\'s agent-authored semantic commits. Deterministic integration commits are listed separately and do not add files here.';
+  if (change.change_source === 'no-agent-commits') return 'No agent-authored semantic commits were recorded for this session; deterministic integration commits are listed separately.';
+  if (change.change_source === 'deterministic-commits') return 'System view: deterministic ledger commits for this session.';
+  return 'Fallback view from the integration ledger; commit provenance was incomplete for this older session.';
+}
+
+function attributionWarning(change: SessionChange): string {
+  const detail = attributionNote(change);
+  return `Change attribution is approximate and may be inaccurate with parallel runs or workspaces that used older commit conventions. ${detail}`;
+}
+
+function SessionChanges({ change, runId }: {
+  change: SessionChange; runId: string;
+}) {
+  const [tab, setTab] = useState<'lean' | 'blueprint'>('lean');
+  const [showComments, setShowComments] = useState(true);
+  const leanRoll = changeRollup(change, 'lean');
+  const blueprintRoll = changeRollup(change, 'blueprint');
+  const filesAll = change.files ?? [];
+  const otherCount = change.other_count ?? 0;
+  const excludedCount = change.excluded_count ?? 0;
+  const initial = Boolean(change.initial);
+  const worktree = Boolean(change.worktree);
+  const hasBlueprint = blueprintRoll.files > 0;
+  const active = (!hasBlueprint || tab === 'lean') ? 'lean' : 'blueprint';
+  const roll = active === 'lean' ? leanRoll : blueprintRoll;
+  const files = filesAll.filter((f) => f.category === active);
+
+  return (
+    <details className="log-panel change-panel" open>
+      <summary>
+        {worktree ? 'Changes (live)' : 'Changes'}
+        <span className="change-scorecard-col">
+          <span className="change-scorecard">
+            {change.available ? (
+              <>
+                {active === 'lean' && (
+                  <span className="change-stat" title="Open sorries after this session (change)">
+                    <AfterDelta after={roll.sorry_after} delta={roll.sorry_delta} goodWhenNegative /> sorry
+                  </span>
+                )}
+                <span className="change-stat" title={showComments ? 'total lines after (change)' : 'code lines after (change)'}>
+                  <AfterDelta after={showComments ? roll.loc_after : roll.loc_code_after} delta={showComments ? roll.loc_delta : roll.loc_code_delta} /> {showComments ? 'loc' : 'code'}
+                </span>
+                <span className="change-stat muted" title="raw line churn (git)"><span className="delta good">+{roll.add}</span>/<span className="delta bad">−{roll.del}</span></span>
+                <span className="change-stat">{roll.files} file{roll.files === 1 ? '' : 's'}</span>
+              </>
+            ) : (change as any).reason === 'no-changes' ? (
+              <span className="change-stat muted">No file changes in this session.</span>
+            ) : (
+              <span className="change-stat muted">{filesAll.length} file{filesAll.length === 1 ? '' : 's'} changed · diff unavailable (no VCS history)</span>
+            )}
+          </span>
+          {change.available && <DeclarationDelta delta={roll.decl_delta} />}
+        </span>
+      </summary>
+
+      <div className="change-controls">
+        {hasBlueprint && (
+          <div className="change-tabs">
+            <button className={active === 'lean' ? 'on' : ''} onClick={() => setTab('lean')}>Lean ({leanRoll.files})</button>
+            <button className={active === 'blueprint' ? 'on' : ''} onClick={() => setTab('blueprint')}>Blueprint ({blueprintRoll.files})</button>
+          </div>
+        )}
+        <label className="change-toggle" title="Count comment/blank lines in the LOC figures (raw churn always includes them)">
+          <input type="checkbox" checked={showComments} onChange={(e) => setShowComments(e.target.checked)} /> count comments in LOC
+        </label>
+        {otherCount > 0 && (
+          <span className="change-other muted" title="Shared workspace state committed alongside the code (events log, roadmap, config…); excluded from the code stats">
+            +{otherCount} shared-state file{otherCount === 1 ? '' : 's'}
+          </span>
+        )}
+        {excludedCount > 0 && (
+          <span className="change-other muted" title="Files that were already dirty when this session started; excluded from this live attribution">
+            {excludedCount} pre-existing dirty file{excludedCount === 1 ? '' : 's'} excluded
+          </span>
+        )}
+      </div>
+
+      <p className="change-attr-note warning" title={attributionWarning(change)}>
+        <strong>Warning:</strong> {attributionWarning(change)}
+      </p>
+      {change.commits && change.commits.length > 0 && (
+        <div className="change-commits">
+          {change.commits.map((c) => (
+            <div key={c.sha} className="change-commit" title={c.sha}>
+              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
+              <span className="change-commit-msg">{c.subject}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {change.system_commits && change.system_commits.length > 0 && (
+        <div className="change-commits system">
+          {change.system_commits.map((c) => (
+            <div key={c.sha} className="change-commit" title={c.sha}>
+              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
+              <span className="change-commit-msg">{c.kind ? `${c.kind}: ` : ''}{c.subject}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {initial && (
+        <p className="change-initial-note">Initial snapshot — no prior commit to compare against, so these are the current contents.</p>
+      )}
+
+      {files.length === 0 ? (
+        <p className="empty change-empty">{change.available
+          ? `No ${active} files changed in this session.`
+          : 'No diff to show.'}</p>
+      ) : (
+        <table className="change-table">
+          <tbody>
+            {files.map((f) => (
+              <FileChangeRow
+                key={f.path}
+                runId={runId}
+                session={change.session}
+                file={f}
+                showComments={showComments}
+                initial={initial}
+                worktree={worktree}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </details>
+  );
+}
+
 function TranscriptViewer({
   events,
   harnesses,
   report,
+  recommendation,
   run,
   selected,
   session,
+  change,
+  changesRunId,
+  nextSessionStart,
+  activeTickSession,
 }: {
   events: any[] | null;
   harnesses?: Record<string, any>;
   report?: string;
+  recommendation?: string;
   run?: any;
   selected: string;
   session?: any;
+  change?: SessionChange;
+  changesRunId?: string;
+  nextSessionStart?: string;
+  activeTickSession?: string;
 }) {
   const start = events?.find((event: any) => event.kind === 'session_start');
   const prompt = start?.data?.prompt ? stripAnsi(String(start.data.prompt)).trim() : '';
@@ -1599,18 +2361,32 @@ function TranscriptViewer({
     : events;
   const role = session ? sessionRole(session) : '';
   const groups = role === 'subagent' ? null : groupSubagents(ordered);
+  // Progressive rendering: paint the newest events immediately and stream the
+  // rest in over the next frames, so a long session doesn't block on rendering
+  // every event before anything shows. Reset the ramp when the session changes.
+  const renderList: any[] = groups ?? ordered ?? [];
+  const shownCount = useProgressiveCount(renderList.length, { resetKey: selected, initial: 40, step: 100 });
+  const remaining = renderList.length - shownCount;
   const title = session?.meta?.name ?? session?.session ?? 'Log';
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
   // the session meta is written at the end of the run).
   const observedModel = events?.find((event: any) => event?.data?.model)?.data?.model;
-  const model = session?.meta?.model ?? session?.meta?.effective_model ?? observedModel ?? harnessConfig?.model;
-  // The session records the kind the engine ACTUALLY ran with; prefer it over the
-  // current config (which may differ, or default to claude-code) so a Codex run
-  // doesn't mislabel itself.
-  const kind = session?.meta?.harness_kind ?? harnessConfig?.kind;
+  // Only what this run actually recorded: session meta, or the model the engine
+  // stamped onto its own event stream. Never the live harnessConfig — config.yaml
+  // drifts over time, so backfilling a past run from it would mislabel it. When
+  // nothing was captured, the chip simply doesn't render.
+  const model = session?.meta?.model ?? session?.meta?.effective_model ?? observedModel;
+  // Reasoning-effort tier the run used (Codex effort / Claude thinking budget),
+  // stamped into session meta by the harness. No config fallback (see model above).
+  const effort = session?.meta?.effort ?? session?.effort;
+  // The session records the kind the engine ACTUALLY ran with; use only that, so a
+  // past run isn't mislabeled by the current config (which may differ, or default
+  // to claude-code). Blank when the run captured nothing.
+  const kind = session?.meta?.harness_kind;
   const round = session?.meta?.round;
   const sessionId = session?.meta?.session_id ?? session?.meta?.data?.session_id;
+  const fallbackReport = !report?.trim() ? latestReportFallback(events) : '';
   return (
     <section className={`transcript-viewer role-${role || 'none'}`}>
       <div className="panel-heading transcript-heading">
@@ -1622,6 +2398,7 @@ function TranscriptViewer({
           {session && (
             <div className="transcript-meta-row">
               {model && <span className="transcript-meta-chip">model <strong>{model}</strong></span>}
+              {effort && <span className="transcript-meta-chip" title="Reasoning-effort tier this run used">effort <strong>{effort}</strong></span>}
               {harness && (
                 <span className="transcript-meta-chip">harness {harness}{kind ? ` · ${kind}` : ''}</span>
               )}
@@ -1633,13 +2410,20 @@ function TranscriptViewer({
           {selected && <p className="transcript-ref">{selected}</p>}
         </div>
       </div>
-      {report && report.trim() && (
+      {change && <SessionChanges change={change} runId={changesRunId ?? ''} />}
+      {recommendation && recommendation.trim() && (
         <details className="log-panel report-panel" open>
-          <summary>Report</summary>
-          <div className="log-md"><MarkdownBlock content={report} /></div>
+          <summary>Recommendation</summary>
+          <div className="log-md"><MarkdownBlock content={recommendation} /></div>
         </details>
       )}
-      {events === null && <p className="empty transcript-empty">Select a session to inspect its events.</p>}
+      {(report?.trim() || fallbackReport) && (
+        <details className="log-panel report-panel" open>
+          <summary>{report?.trim() ? 'Report' : 'Report fallback'}</summary>
+          <div className="log-md"><MarkdownBlock content={report?.trim() ? report : fallbackReport} /></div>
+        </details>
+      )}
+      {events === null && <p className="empty transcript-empty">{selected ? 'Loading session…' : 'Select a session to inspect its events.'}</p>}
       {events && events.length === 0 && <p className="empty transcript-empty">No events in this session.</p>}
       {run?.stop?.reason && (
         <div className="notice warning log-stop-note">
@@ -1647,7 +2431,7 @@ function TranscriptViewer({
         </div>
       )}
       <div className="log-lines">
-        {groups ? groups.map((group, i) =>
+        {groups ? groups.slice(0, shownCount).map((group, i) =>
           group.sub ? (
             <details key={`sub-${group.id}-${i}`} className="log-panel subagent-sublog" open>
               <summary>
@@ -1657,6 +2441,7 @@ function TranscriptViewer({
                   const m = group.items.find(({ event }) => event?.data?.model)?.event?.data?.model;
                   return m ? <span className="subagent-model" title="Model used by this subagent">{m}</span> : null;
                 })()}
+                <UsageChips usage={subagentGroupUsage(group.items)} />
                 <span className="subagent-count">{group.items.length} events</span>
               </summary>
               <div className="log-lines sublog-lines">
@@ -1668,11 +2453,14 @@ function TranscriptViewer({
           ) : (
             <TranscriptEvent key={group.item.idx} event={group.item.event} forceOpen={null} />
           ),
-        ) : ordered?.map(({ event, idx }: any) => (
+        ) : ordered?.slice(0, shownCount).map(({ event, idx }: any) => (
           <TranscriptEvent key={idx} event={event} forceOpen={null} />
         ))}
+        {remaining > 0 && (
+          <p className="empty transcript-empty transcript-loading-more">Rendering {remaining} more event{remaining === 1 ? '' : 's'}…</p>
+        )}
       </div>
-      {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} />}
+      {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} nextSessionStart={nextSessionStart} tick={sessionKey(session) === activeTickSession} />}
       {prompt && (
         <details className="log-panel prompt-panel" open>
           <summary>Input Prompt</summary>
@@ -1734,15 +2522,18 @@ function SessionParameters({
   session,
   harness,
   harnessConfig,
+  nextSessionStart,
+  tick = false,
 }: {
   session: any;
   harness?: string;
   harnessConfig?: any;
+  nextSessionStart?: string;
+  tick?: boolean;
 }) {
   const meta = session.meta ?? {};
   const engineSession = meta.engine_session_id ?? meta.session_id ?? meta.data?.session_id;
-  // An interrupted session never wrote an end; measure it to its last activity.
-  const durEnd = session.status === 'interrupted' ? session.last_at : session.ended_at;
+  const durEnd = boundedSessionEnd(session, Date.now(), nextSessionStart, tick);
   const rows = [
     ['Run', session.run],
     ['Session', session.session],
@@ -1759,9 +2550,13 @@ function SessionParameters({
     ['Workspace SHA', shortSha(meta.workspace_sha)],
     ['Project SHAs', formatProjectRevisions(meta.project_revisions)],
     ['Harness', harness],
-    ['Harness kind', session.meta?.harness_kind ?? harnessConfig?.kind],
-    // Prefer the model the engine actually used over the configured one.
-    ['Model', session.model ?? meta.model ?? meta.effective_model ?? harnessConfig?.model],
+    ['Harness kind', session.meta?.harness_kind],
+    // Only what this run recorded — never the live config (it drifts, so it would
+    // mislabel a past run). Blank when the run captured nothing.
+    ['Model', session.model ?? meta.model ?? meta.effective_model],
+    ['Effort', session.effort ?? meta.effort],
+    ['Auth', meta.auth],
+    ['Config dir', meta.config_dir],
     ['Command', harnessConfig?.command],
     ['Args', formatArgList(harnessConfig?.args)],
     ['Options', summarizeHarnessOptions(harnessConfig?.options)],
@@ -1789,8 +2584,8 @@ function SessionParameters({
 // pills read consistently with the rest of the dashboard. The pill bg/ring are
 // derived from this text color via color-mix in .log-pill.
 const EVENT_COLORS: Record<string, string> = {
-  thinking: '#6d28d9', text: '#1d4ed8', tool_call: '#c2410c',
-  tool_result: '#047857', error: '#b91c1c', session_start: '#475569', session_end: '#475569',
+  thinking: '#7c3aed', text: '#2563eb', tool_call: '#d97706',
+  tool_result: '#059669', error: '#dc2626', session_start: '#64748b', session_end: '#64748b',
 };
 // Render text/thinking as markdown (after stripping terminal ANSI); everything
 // else stays monospace. The input prompt is rendered by TranscriptViewer.
@@ -1826,8 +2621,8 @@ function shortModel(model?: string): string {
 // A short semantic tag for an event so the log is scannable: spot where a
 // subagent was dispatched, the inbox was touched, Lean was built, etc.
 const TAG_COLORS: Record<string, string> = {
-  subagent: '#7c3aed', inbox: '#0891b2', dag: '#c2410c', blueprint: '#1d4ed8',
-  search: '#0d9488', lean: '#15803d', git: '#9333ea', skill: '#b45309', lsp: '#047857', mcp: '#047857',
+  subagent: '#7c3aed', inbox: '#0891b2', dag: '#d97706', blueprint: '#2563eb',
+  search: '#0d9488', lean: '#15803d', git: '#9333ea', skill: '#b45309', lsp: '#059669', mcp: '#059669',
 };
 function commandTag(event: any): string | null {
   if (event.kind !== 'tool_call') return null;
@@ -1871,6 +2666,17 @@ function eventBody(event: any): string {
   if (d.command != null) return typeof d.command === 'string' ? d.command : JSON.stringify(d.command, null, 2);
   if (d.changes != null) return JSON.stringify(d.changes, null, 2);
   if (typeof d === 'object' && Object.keys(d).length) return JSON.stringify(d, null, 2);
+  return '';
+}
+
+function latestReportFallback(events: any[] | null): string {
+  if (!events) return '';
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event?.kind !== 'text') continue;
+    const text = stripAnsi(eventBody(event)).trim();
+    if (text) return text;
+  }
   return '';
 }
 
@@ -1996,9 +2802,151 @@ function UsageBlock({ usage }: { usage: any }) {
   );
 }
 
+// ── Lean LSP MCP tools: render calls/results structurally instead of raw JSON ──
+// The `lean-lsp` server drives the fast proof loop (goal / diagnostics /
+// multi_attempt) and the search arsenal (leansearch / loogle / …). Showing these
+// as compact cards makes that loop legible in the log.
+
+// `mcp__lean-lsp__lean_goal` -> `lean_goal`; null for any other tool.
+function leanLspTool(name: string): string | null {
+  return name.startsWith('mcp__lean-lsp__') ? name.slice('mcp__lean-lsp__'.length) : null;
+}
+
+function fileRef(path: any, line?: any, column?: any): string {
+  if (!path) return '';
+  const base = String(path).split('/').pop() || String(path);
+  const loc = [line, column].filter((x) => x != null && x !== '').join(':');
+  return loc ? `${base}:${loc}` : base;
+}
+
+function LeanCallCard({ tool, input }: { tool: string; input: any }) {
+  let main = '';
+  let sub = '';
+  let snippets: string[] | null = null;
+  if (input.query != null) main = `"${String(input.query)}"`;
+  else if (input.file_path != null || input.path != null)
+    main = fileRef(input.file_path ?? input.path, input.line, input.column);
+  if (input.theorem_name || input.declaration_name) sub = String(input.theorem_name ?? input.declaration_name);
+  if (Array.isArray(input.snippets)) { snippets = input.snippets.map(String); sub = `${input.snippets.length} tactics`; }
+  else if (input.code != null) snippets = [String(input.code)];
+  return (
+    <div className="lean-card">
+      <div className="lean-card-head">
+        <span className="lean-badge">lsp</span>
+        <span className="lean-tool">{tool}</span>
+        {main && <code className="lean-arg">{main}</code>}
+        {sub && <span className="lean-sub">{sub}</span>}
+      </div>
+      {snippets && snippets.length > 0 && <pre className="log-code lean-snippets">{snippets.join('\n')}</pre>}
+    </div>
+  );
+}
+
+function LeanGoals({ goals }: { goals: any[] }) {
+  if (!goals || goals.length === 0) return <div className="lean-ok">✓ no goals — complete</div>;
+  return (
+    <div className="lean-goals">
+      {goals.map((g, i) => {
+        const goalText = typeof g === 'string' ? g : String(g?.goal ?? '');
+        const hyps: string[] = typeof g === 'object' && Array.isArray(g?.hypotheses) ? g.hypotheses : [];
+        return (
+          <div className="lean-goal" key={i}>
+            {hyps.map((h, j) => <div className="lean-hyp" key={j}>{h}</div>)}
+            <div className="lean-turnstile"><span className="lean-turn">⊢</span> {goalText}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function diagSeverity(item: any): 'error' | 'warn' | 'info' {
+  const s = typeof item === 'string' ? item : JSON.stringify(item ?? '');
+  if (/severity['":\s]*1\b/.test(s)) return 'error';
+  if (/severity['":\s]*2\b/.test(s)) return 'warn';
+  return 'info';
+}
+
+function LeanDiagnostics({ result }: { result: any }) {
+  const items: any[] = result.items ?? result.diagnostics ?? [];
+  const failed: any[] = result.failed_dependencies ?? [];
+  if ((!items || items.length === 0) && (!failed || failed.length === 0)) {
+    return <div className="lean-ok">{result.success === false ? '✗ failed' : '✓ no diagnostics'}</div>;
+  }
+  return (
+    <div className="lean-diags">
+      {items.map((it, i) => (
+        <div className={`lean-diag lean-diag-${diagSeverity(it)}`} key={i}>
+          {typeof it === 'string' ? it : (it?.message ?? JSON.stringify(it))}
+        </div>
+      ))}
+      {failed.map((d, i) => <div className="lean-diag lean-diag-error" key={`f${i}`}>failed dependency: {String(d)}</div>)}
+    </div>
+  );
+}
+
+function LeanResults({ items }: { items: any[] }) {
+  return (
+    <div className="lean-results">
+      {items.slice(0, 20).map((it, i) => (
+        <div className="lean-result" key={i}>
+          <code className="lean-result-name">{String(it.name ?? '')}</code>
+          {it.module && <span className="lean-result-mod">{String(it.module)}</span>}
+          {(it.type || it.kind) && <code className="lean-result-type">{String(it.type ?? it.kind)}</code>}
+        </div>
+      ))}
+      {items.length > 20 && <div className="lean-more">+{items.length - 20} more</div>}
+    </div>
+  );
+}
+
+function LeanAttempts({ rows }: { rows: any[] }) {
+  return (
+    <div className="lean-attempts">
+      {rows.map((r, i) => {
+        const ok = Array.isArray(r?.goals) ? r.goals.length === 0 : /no goals/.test(String(r?.goals ?? ''));
+        return (
+          <div className={`lean-attempt lean-attempt-${ok ? 'ok' : 'bad'}`} key={i}>
+            <span className="lean-attempt-mark">{ok ? '✓' : '✗'}</span>
+            <code className="lean-attempt-snip">{String(r?.snippet ?? '').trim()}</code>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LeanPremises({ names }: { names: string[] }) {
+  return (
+    <div className="lean-premises">
+      {names.slice(0, 40).map((n, i) => <code className="lean-premise" key={i}>{n}</code>)}
+    </div>
+  );
+}
+
+// Detect a lean-lsp result shape and render it; null → caller falls back to raw.
+function renderLeanResult(text: string): React.ReactElement | null {
+  let v: any;
+  try { v = JSON.parse(text.trim()); } catch { return null; }
+  if (v == null || typeof v !== 'object') return null;
+  if (!Array.isArray(v)) {
+    if (Array.isArray(v.goals_after) || Array.isArray(v.goals_before)) return <LeanGoals goals={v.goals_after ?? []} />;
+    if (typeof v.success === 'boolean') return <LeanDiagnostics result={v} />;
+    if (Array.isArray(v.items) && v.items[0] && typeof v.items[0] === 'object' && v.items[0].name) return <LeanResults items={v.items} />;
+    return null;
+  }
+  if (v.length === 0) return null;
+  if (typeof v[0] === 'object' && v[0] && 'snippet' in v[0]) return <LeanAttempts rows={v} />;
+  if (typeof v[0] === 'string') return <LeanPremises names={v} />;
+  if (typeof v[0] === 'object' && v[0] && v[0].name) return <LeanResults items={v} />;
+  return null;
+}
+
 function ToolCallView({ event, text }: { event: any; text: string }) {
   const name = String(event.tool || '');
   const input = toolInput(event);
+  const leanTool = leanLspTool(name);
+  if (leanTool) return <LeanCallCard tool={leanTool} input={input} />;
   if (name === 'Bash' || name === 'command_execution') {
     const command = String(input.command ?? '');
     return (
@@ -2032,10 +2980,11 @@ function ToolCallView({ event, text }: { event: any; text: string }) {
 
 function ToolResultView({ event, text }: { event: any; text: string }) {
   const exitCode = event.data?.exit_code;
+  const lean = exitCode === undefined && text ? renderLeanResult(text) : null;
   return (
     <div className="log-tool-result">
       {exitCode !== undefined && <span className={`exit-code exit-${exitCode === 0 ? 'ok' : 'bad'}`}>exit {String(exitCode)}</span>}
-      <pre className="log-output">{text || 'no output'}</pre>
+      {lean ?? <pre className="log-output">{text || 'no output'}</pre>}
     </div>
   );
 }
@@ -2059,7 +3008,10 @@ function EventBodyView({ event, text }: { event: any; text: string }) {
   return <pre className="log-pre">{text}</pre>;
 }
 
-function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean | null }) {
+// Memoized so that progressively growing the rendered event count (see
+// useProgressiveCount) doesn't re-render rows already on screen — event objects
+// keep a stable identity across polls, so this keeps the whole list O(n).
+const TranscriptEvent = React.memo(function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean | null }) {
   const text = stripAnsi(eventBody(event)).trim();
   const hasBody = text.length > 0;
   const long = text.length > 280 || text.includes('\n');
@@ -2079,7 +3031,7 @@ function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean 
     setOpen((v) => !v);
   };
   return (
-    <div className="log-line" onClick={toggle} style={{ cursor: long ? 'pointer' : 'default' }}>
+    <div className={`log-line log-kind-${event.kind}`} onClick={toggle} style={{ cursor: long ? 'pointer' : 'default' }}>
       <span className="log-ts">{formatTime(event.at)}</span>
       <span className="log-pill" style={{ color }} title={fullLabel}><span>{label}</span></span>
       {tag && <span className="log-tag" style={{ color: TAG_COLORS[tag] ?? 'var(--text-muted)' }}>{tag}</span>}
@@ -2103,37 +3055,122 @@ function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean 
       </div>
     </div>
   );
-}
+});
 
 // A run row that collapses to just its id (e.g. "0001") by default; clicking
 // expands the whole session tree (all steps).
-function RunGroup({ run, selected, onSelect }: { run: any; selected: string; onSelect: (ref: string) => void }) {
+function TaskLinkChip({ taskId }: { taskId: string }) {
+  return (
+    <Link
+      className="meta-chip task-chip"
+      to={`/tasks?task=${encodeURIComponent(taskId)}`}
+      title={`Open task ${taskId}`}
+      onClick={(event) => event.stopPropagation()}
+    >
+      task {taskId}
+    </Link>
+  );
+}
+
+function taskIdsForRun(run: any): string[] {
+  const ids = new Set<string>();
+  const focus = run.focus ?? {};
+  if (typeof focus.task === 'string' && focus.task) ids.add(focus.task);
+  for (const taskId of focus.tasks ?? []) {
+    if (taskId) ids.add(String(taskId));
+  }
+  for (const session of flattenSessions(run.sessions ?? [])) {
+    const taskId = session.meta?.task_id;
+    if (taskId) ids.add(String(taskId));
+  }
+  return [...ids];
+}
+
+function runStartAt(run: any): string | undefined {
+  const sessions = flattenSessions(run.sessions ?? []);
+  const sessionStarts = sessions.map((session: any) => session.started_at).filter(Boolean).sort();
+  return run.created_at ?? sessionStarts[0];
+}
+
+function displayRunName(runId: string | number | undefined): string {
+  const raw = String(runId ?? '');
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? `run n°${n}` : `run ${raw}`;
+}
+
+function RunGroup({ run, selected, onSelect, now }: { run: any; selected: string; onSelect: (ref: string) => void; now: number }) {
   const [open, setOpen] = useState(false);
   const sessions = run.sessions ?? [];
+  const taskIds = taskIdsForRun(run);
+  const runDuration = runDurationSeconds(run, now);
+  const activeTickSession = activeRunSessionKey(run);
+  const toggle = (event: React.MouseEvent | React.KeyboardEvent) => {
+    if ((event.target as HTMLElement).closest('a, button')) return;
+    setOpen((v) => !v);
+  };
   return (
     <div className="transcript-run-group">
-      <button className="run-header button-reset" onClick={() => setOpen((v) => !v)}>
+      <div
+        className="run-header"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle(event);
+          }
+        }}
+        aria-expanded={open}
+      >
         <span className="ev-caret">{open ? '▾' : '▸'}</span>
-        <strong>{run.id}</strong>
+        <strong>{displayRunName(run.id)}</strong>
         <StatusIcon value={run.status} />
+        {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
+        {runDuration !== null && <span className="meta-chip">{formatSeconds(runDuration)}</span>}
         <span className="meta-chip">{run.session_count ?? 0} sessions</span>
         <UsageChips usage={run.usage} />
-      </button>
+      </div>
       {open && (
         <div className="run-sessions-tree">
-          <SelectableSessionTree sessions={sessions} selected={selected} onSelect={onSelect} />
+          <SelectableSessionTree sessions={sessions} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} activeTickSession={activeTickSession} />
         </div>
       )}
     </div>
   );
 }
 
-function SelectableSessionTree({ sessions, selected, onSelect }: { sessions: any[], selected: string, onSelect: (ref: string) => void }) {
+function SelectableSessionTree({
+  sessions,
+  selected,
+  onSelect,
+  now,
+  fallbackTaskIds = [],
+  activeTickSession = '',
+}: {
+  sessions: any[];
+  selected: string;
+  onSelect: (ref: string) => void;
+  now: number;
+  fallbackTaskIds?: string[];
+  activeTickSession?: string;
+}) {
   if (sessions.length === 0) return null;
+  const orderedSessions = [...sessions].sort(compareSessions);
+  const nextStarts = nextSessionStartMap(sessions);
   return (
     <div className="selectable-tree">
-      {sessions.map((session) => (
-        <SessionNode key={`${session.parent}-${session.session}`} session={session} selected={selected} onSelect={onSelect} />
+      {orderedSessions.map((session) => (
+        <SessionNode
+          key={`${session.parent}-${session.session}`}
+          session={session}
+          selected={selected}
+          onSelect={onSelect}
+          now={now}
+          fallbackTaskIds={fallbackTaskIds}
+          nextSessionStart={nextStarts.get(session.session)}
+          activeTickSession={activeTickSession}
+        />
       ))}
     </div>
   );
@@ -2183,15 +3220,31 @@ function RoleBadge({ role }: { role: string }) {
   return <span className={`role-badge role-${role}`} title={role}>{ROLE_LOGO[role] ?? role.charAt(0).toUpperCase()}</span>;
 }
 
-function SessionNode({ session, selected, onSelect }: { session: any; selected: string; onSelect: (ref: string) => void }) {
+function SessionNode({
+  session,
+  selected,
+  onSelect,
+  now,
+  fallbackTaskIds = [],
+  nextSessionStart,
+  activeTickSession = '',
+}: {
+  session: any;
+  selected: string;
+  onSelect: (ref: string) => void;
+  now: number;
+  fallbackTaskIds?: string[];
+  nextSessionStart?: string;
+  activeTickSession?: string;
+}) {
   const hasChildren = (session.children?.length ?? 0) > 0;
   const round = typeof session.meta?.round === 'number' ? `r${session.meta.round}` : '';
   const role = sessionRole(session);
   const displayName = displaySessionName(session);
   const model = shortModel(session.model);
-  // An interrupted session never wrote an end, so measure it to its last
-  // activity instead of leaving the duration stuck on "running".
-  const durEnd = session.status === 'interrupted' ? session.last_at : session.ended_at;
+  const effort = session.effort ?? session.meta?.effort;
+  const durEnd = boundedSessionEnd(session, now, nextSessionStart, sessionKey(session) === activeTickSession);
+  const taskIds = session.meta?.task_id ? [String(session.meta.task_id)] : fallbackTaskIds;
   return (
     <div className="session-node">
       <div className={`session-line role-${role || 'none'} ${selected === session.ref ? 'active' : ''}`}>
@@ -2203,16 +3256,18 @@ function SessionNode({ session, selected, onSelect }: { session: any; selected: 
           </div>
           <div className="session-row2">
             {model && <span className="meta-chip model-chip" title={session.model}>{model}</span>}
+            {effort && <span className="meta-chip effort-chip" title="Reasoning-effort tier">{effort}</span>}
             {round && <span className="meta-chip">{round}</span>}
             {session.started_at && <span className="meta-chip" title={`${formatTime(session.started_at)}-${formatTime(session.ended_at)}`}>{formatTime(session.started_at)}</span>}
             {session.started_at && <span className="meta-chip">{formatDuration(session.started_at, durEnd)}</span>}
             <UsageChips usage={session.usage} />
           </div>
         </button>
+        {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
       </div>
       {hasChildren && (
         <div className="session-children">
-          <SelectableSessionTree sessions={session.children} selected={selected} onSelect={onSelect} />
+          <SelectableSessionTree sessions={session.children} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} activeTickSession={activeTickSession} />
         </div>
       )}
     </div>
@@ -2230,7 +3285,7 @@ function RunList({ runs }: { runs: any[] }) {
           <details key={run.id} className="run-card">
             <summary>
               <div className="run-main">
-                <Badge>{run.id}</Badge>
+                <Badge>{displayRunName(run.id)}</Badge>
                 <Status value={run.status} />
                 <strong>{run.focus?.task || (run.focus?.tasks ?? []).join(', ') || (run.focus?.projects ?? []).join(', ') || 'Workspace run'}</strong>
               </div>
@@ -2417,7 +3472,7 @@ function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAct
       <summary style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <div className="roadmap-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
           {!STATIC && runAction ? (
-            <select className={`chip-select state ${visibleStatus}`} style={{ color: statusColor(visibleStatus), borderColor: statusColor(visibleStatus) }} value={visibleStatus} onChange={(e) => updateStatus(e.target.value)}>
+            <select className={`chip-select state ${visibleStatus}`} value={visibleStatus} onChange={(e) => updateStatus(e.target.value)}>
               <option className="state-active" value="active">active</option>
               <option className="state-pending" value="pending">pending</option>
               <option className="state-blocked" value="blocked">blocked</option>
@@ -2568,14 +3623,18 @@ function InlineMarkdown({ content }: { content: string }) {
 }
 
 // Compact status as a glyph: ✓ done, ✕ failed, ◌ running (spins),
-// ⊘ interrupted (stopped early, not active), ○ otherwise.
+// Ⅱ interrupted/paused (stopped early, not active), ⏱ timed out, ⧖ throttled
+// (transient API backoff — not a crash), ○ otherwise.
 function StatusIcon({ value, title }: { value: string; title?: string }) {
   const map: Record<string, { glyph: string; cls: string }> = {
     completed: { glyph: '✓', cls: 'ok' },
     done: { glyph: '✓', cls: 'ok' },
     failed: { glyph: '✕', cls: 'fail' },
     running: { glyph: '', cls: 'run' },
-    interrupted: { glyph: '⊘', cls: 'interrupted' },
+    interrupted: { glyph: 'Ⅱ', cls: 'interrupted' },
+    // Not crashes: waited out a timeout, or backed off on a transient API error.
+    timed_out: { glyph: '⏱', cls: 'timed-out' },
+    throttled: { glyph: '⧖', cls: 'throttled' },
   };
   const s = map[value] ?? { glyph: '○', cls: 'idle' };
   return <span className={`status-icon ${s.cls}`} title={title ?? value} aria-label={value}>{s.glyph}</span>;
@@ -2596,9 +3655,107 @@ function formatTime(value: string | undefined) {
 function formatDuration(start?: string, end?: string): string {
   if (!start) return '';
   if (!end) return 'running';
-  const secs = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const secs = durationSeconds(start, end);
+  return secs === null ? '' : formatSeconds(secs);
+}
+
+function formatSeconds(secs: number): string {
+  const safe = Math.max(0, Math.round(secs));
+  if (safe < 60) return `${safe}s`;
+  return `${Math.floor(safe / 60)}m ${safe % 60}s`;
+}
+
+function durationSeconds(start?: string, end?: string): number | null {
+  if (!start || !end) return null;
+  const s = Date.parse(start);
+  const e = Date.parse(end);
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+  return Math.max(0, Math.round((e - s) / 1000));
+}
+
+function boundedSessionEnd(session: any, now: number, nextStart?: string, tick = false): string | undefined {
+  if (session.ended_at) return session.ended_at;
+  if (tick && session.status === 'running') return new Date(now).toISOString();
+  const childStart = firstChildStart(session);
+  if (childStart) return childStart;
+  if (nextStart) return nextStart;
+  return session.last_at;
+}
+
+function firstChildStart(session: any): string | undefined {
+  const children = sessionsInRunOrder(session.children ?? []);
+  return children.find((child: any) => child.started_at)?.started_at;
+}
+
+function sessionKey(session: any): string {
+  return String(session?.ref || session?.session || '');
+}
+
+function isAgenticSession(session: any): boolean {
+  const role = sessionRole(session);
+  return role === 'ground' || role === 'horizon';
+}
+
+function latestAgenticSession(sessions: any[]): any | undefined {
+  const agentic = sessionsInRunOrder(sessions).filter(isAgenticSession);
+  return agentic[agentic.length - 1];
+}
+
+function activeRunSessionKey(run: any): string {
+  if (!run || run.status !== 'running') return '';
+  const session = latestAgenticSession(run.sessions ?? []);
+  if (!session || session.status !== 'running') return '';
+  return sessionKey(session);
+}
+
+function sessionOrderValue(session: any): number {
+  const match = String(session.session ?? '').match(/^(\d+)/);
+  if (match) return Number.parseInt(match[1], 10);
+  return Date.parse(session.started_at ?? '') || 0;
+}
+
+function sessionsInRunOrder(sessions: any[]): any[] {
+  return [...sessions].sort((a, b) => {
+    const ao = sessionOrderValue(a);
+    const bo = sessionOrderValue(b);
+    if (ao !== bo) return ao - bo;
+    return String(a.session).localeCompare(String(b.session), undefined, { numeric: true });
+  });
+}
+
+function nextSessionStartMap(sessions: any[]): Map<string, string | undefined> {
+  const ordered = sessionsInRunOrder(sessions);
+  return new Map(ordered.map((session, index) => [String(session.session), ordered[index + 1]?.started_at]));
+}
+
+function nextSessionStart(sessions: any[], target: any): string | undefined {
+  const direct = nextSessionStartMap(sessions).get(String(target.session));
+  if (direct) return direct;
+  for (const session of sessions ?? []) {
+    const child = nextSessionStart(session.children ?? [], target);
+    if (child) return child;
+  }
+  return undefined;
+}
+
+function runDurationSeconds(run: any, now: number): number | null {
+  const sessions = sessionsInRunOrder(run.sessions ?? []);
+  if (!sessions.length) return null;
+  const nextStarts = nextSessionStartMap(sessions);
+  const active = activeRunSessionKey(run);
+  let total = 0;
+  let seen = false;
+  for (const session of sessions) {
+    const secs = durationSeconds(
+      session.started_at,
+      boundedSessionEnd(session, now, nextStarts.get(String(session.session)), sessionKey(session) === active),
+    );
+    if (secs !== null) {
+      total += secs;
+      seen = true;
+    }
+  }
+  return seen ? total : null;
 }
 
 function formatDateTime(value: string | undefined): string {
@@ -2616,10 +3773,75 @@ function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
 }
 
 function compareInboxItems(a: any, b: any) {
-  const aTime = Date.parse(a.created_at || a.updated_at || '') || 0;
-  const bTime = Date.parse(b.created_at || b.updated_at || '') || 0;
+  const aTime = Date.parse(inboxActivityAt(a) || '') || 0;
+  const bTime = Date.parse(inboxActivityAt(b) || '') || 0;
   if (aTime !== bTime) return bTime - aTime;
   return String(a.id).localeCompare(String(b.id));
+}
+
+function compareTasks(a: any, b: any) {
+  const aTime = Date.parse(taskActivityAt(a) || '') || 0;
+  const bTime = Date.parse(taskActivityAt(b) || '') || 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return String(a.id).localeCompare(String(b.id));
+}
+
+function compareRuns(a: any, b: any) {
+  const aTime = Date.parse(runActivityAt(a) || '') || 0;
+  const bTime = Date.parse(runActivityAt(b) || '') || 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
+}
+
+function compareSessions(a: any, b: any) {
+  const aTime = Date.parse(sessionActivityAt(a) || '') || 0;
+  const bTime = Date.parse(sessionActivityAt(b) || '') || 0;
+  if (aTime !== bTime) return bTime - aTime;
+  return String(b.session).localeCompare(String(a.session), undefined, { numeric: true });
+}
+
+function taskActivityAt(task: any): string | undefined {
+  return task.updated_at ?? task.metadata?.updated_at ?? task.created_at ?? task.metadata?.created_at;
+}
+
+function inboxActivityAt(item: any): string | undefined {
+  return item.updated_at ?? item.created_at;
+}
+
+function runActivityAt(run: any): string | undefined {
+  const sessions = flattenSessions(run.sessions ?? []);
+  const sessionTimes = sessions.flatMap((session: any) => [session.last_at, session.ended_at, session.started_at]).filter(Boolean);
+  const sortedSessionTimes = sessionTimes.sort();
+  return run.updated_at ?? run.ended_at ?? run.created_at ?? sortedSessionTimes[sortedSessionTimes.length - 1];
+}
+
+function sessionActivityAt(session: any): string | undefined {
+  return session.last_at ?? session.ended_at ?? session.started_at;
+}
+
+function flattenSessions(sessions: any[]): any[] {
+  return sessions.flatMap((session) => [session, ...flattenSessions(session.children ?? [])]);
+}
+
+function normalizedInboxStatus(status: string | undefined) {
+  if (status === 'completed') return 'closed';
+  if (status === 'closed') return 'closed';
+  if (status === 'archived') return 'archived';
+  return status || 'open';
+}
+
+function filterLabel(value: string) {
+  if (value === 'completed') return 'closed';
+  if (value === 'archived') return 'archived';
+  if (value === 'accept') return gateLabel(value);
+  if (value === 'pending') return gateLabel(value);
+  if (value === 'reject') return gateLabel(value);
+  if (value === 'clear') return gateLabel(value);
+  return value;
+}
+
+function filterToken(value: string | undefined) {
+  return filterLabel(String(value || '')).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
 function inboxGate(labels: string[]) {
@@ -2651,6 +3873,13 @@ function inboxAuthor(item: any) {
   return '';
 }
 
+// The finer-grained sub-identity behind a role author (e.g. the subagent
+// descriptor name), kept in metadata so the author itself stays a clean role.
+function inboxAgent(item: any) {
+  const agent = item.metadata?.agent;
+  return typeof agent === 'string' && agent.trim() ? agent.trim() : '';
+}
+
 function inboxTitleAndBody(item: any) {
   const text = String(item.body ?? '').trim();
   if (!text) return { title: item.id, body: '' };
@@ -2673,12 +3902,14 @@ function inboxSourceUrl(item: any, repo?: string | null) {
 
 function matchesInboxFilters(
   item: any,
-  filters: { query: string; providerFilter: string; statusFilter: string; gateFilter: string },
+  filters: { query: string; providerFilter: Set<string>; statusFilter: Set<string>; gateFilter: Set<string>; kinds?: Set<string>; audienceFilter?: Set<string> },
 ) {
-  if (filters.providerFilter !== 'all' && item.provider !== filters.providerFilter) return false;
-  if (filters.statusFilter !== 'all' && item.status !== filters.statusFilter) return false;
+  if (!filters.providerFilter.has(item.provider)) return false;
+  if (!filters.statusFilter.has(normalizedInboxStatus(item.status))) return false;
+  if (filters.kinds && filters.kinds.size > 0 && !filters.kinds.has(item.kind)) return false;
+  if (filters.audienceFilter && !filters.audienceFilter.has(String(item.audience || 'general'))) return false;
   const gate = inboxGate(item.labels ?? []);
-  if (filters.gateFilter !== 'all' && gate !== filters.gateFilter) return false;
+  if (!filters.gateFilter.has(gate)) return false;
   const query = filters.query.trim().toLowerCase();
   if (!query) return true;
   const comments = inboxComments(item).map((comment: any) => comment.body ?? '').join(' ');
@@ -2688,6 +3919,7 @@ function matchesInboxFilters(
     item.kind,
     item.status,
     item.body,
+    item.audience,
     inboxAuthor(item),
     item.source_ref,
     ...(item.labels ?? []),

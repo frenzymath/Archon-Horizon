@@ -12,6 +12,8 @@ code.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from archon_horizon.core.inbox import InboxItem, InboxKind
 from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.tasks import HorizonTask, WriteSet
@@ -23,6 +25,63 @@ from .base import HorizonContext, GroundContext
 
 _MAX_INBOX_ITEMS_IN_PROMPT = 10
 _MAX_INBOX_BODY_CHARS = 700
+
+# Bundled default prompt bodies (the static role/policy prose). A workspace can
+# override any of them by dropping its own edited copy at
+# ``<state_dir>/prompts/<name>.md`` — `horizon init`/`update` installs the bundled
+# defaults there, and the composer prefers the workspace copy so users can tune the
+# agents' instructions without touching code. Only the STATIC prose lives here; the
+# dynamic sections (roadmap, inbox, task, write scope, skills, …) are still injected
+# by the compose functions below.
+PROMPT_TEMPLATE_DIR = Path(__file__).parent / "prompt_templates"
+
+
+def workspace_prompt_path(workspace: Workspace, name: str) -> Path:
+    """Where a workspace keeps its editable override of prompt body ``name``."""
+    return workspace.state_path / "prompts" / f"{name}.md"
+
+
+def bundled_prompt_names() -> tuple[str, ...]:
+    """The prompt bodies shipped with the package (installed into a workspace)."""
+    return tuple(sorted(p.stem for p in PROMPT_TEMPLATE_DIR.glob("*.md")))
+
+
+def install_prompts(root: Path, *, state_dir: str = ".archon-horizon", overwrite=None) -> list[str]:
+    """Copy the bundled prompt bodies into ``<root>/<state_dir>/prompts/<name>.md``
+    so a human can edit the agents' role/policy prose. Same keep-vs-overwrite
+    semantics as ``install_skills``: an identical destination is skipped; a differing
+    one is overwritten unless the ``overwrite(name, dest, new_text)`` callback returns
+    False. Returns the names actually written."""
+    installed: list[str] = []
+    dest_dir = root / state_dir / "prompts"
+    for src in sorted(PROMPT_TEMPLATE_DIR.glob("*.md")):
+        dest = dest_dir / src.name
+        new_text = src.read_text("utf-8")
+        if dest.exists():
+            if dest.read_text("utf-8") == new_text:
+                continue
+            if overwrite is not None and not overwrite(src.stem, dest, new_text):
+                continue
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest.write_text(new_text, "utf-8")
+        installed.append(src.stem)
+    return installed
+
+
+def _load_prompt_body(workspace: Workspace, name: str) -> str:
+    """The static prompt body for ``name``, preferring the workspace override over
+    the bundled default so a human edit to ``<state_dir>/prompts/<name>.md`` takes
+    effect on the next run. Falls back to the bundled copy if the override is
+    missing or empty."""
+    override = workspace_prompt_path(workspace, name)
+    try:
+        if override.is_file():
+            text = override.read_text("utf-8")
+            if text.strip():
+                return text.rstrip()
+    except OSError:
+        pass
+    return (PROMPT_TEMPLATE_DIR / f"{name}.md").read_text("utf-8").rstrip()
 
 
 def _state_file(context: GroundContext | HorizonContext, name: str) -> str:
@@ -60,14 +119,39 @@ def _skills_block() -> str:
 
 
 def _report_guidance(role: str) -> str:
+    # Horizon owns its task's terminal status; the machine only ever writes
+    # queued/running, so `done` is never inferred from the report or a clean exit —
+    # the agent must record it explicitly. See the task-status skill.
+    status_line = (
+        "You OWN your task's status: the machine only ever leaves it queued/running, "
+        "so nothing marks it done for you and the report is NOT parsed for completion. "
+        "Only when the assigned objective is FULLY complete (not merely mostly), run "
+        "`\"$HORIZON_BIN\" task set <task_id> --status done`; use `--status blocked` or "
+        "`--status failed` if you are genuinely stuck. If it is only partly advanced, "
+        "set nothing — the task returns to the queue for the next round. Leave a "
+        "`\"$HORIZON_BIN\" task comment <task_id> --body …` whenever you hit a "
+        "significant step or change the status. "
+        if role == "Horizon" else ""
+    )
     return (
-        f"Finish with a brief run-local report. Recommended sections: `## Summary`, "
-        "`## Progress`, `## Issues`, and `## Next`; add or rename sections if another "
-        "shape is clearer. Prefer short bullets, and keep each bullet around 20 words "
-        "or fewer. Always mention bugs, build failures, broken proofs, suspicious code "
-        "issues, blocked dependencies, unresolved assumptions, and checks that failed "
-        f"or were not run. For this {role} session, make the report complete enough "
-        "that a human or Ground can understand the session before opening raw logs."
+        "Finish with a brief run-local report. Recommended sections: `## Summary`, "
+        "`## Progress`, `## Issues`, `## Why I stopped`, and `## Next`; add or rename "
+        "other sections if another shape is clearer, but keep `## Progress` and "
+        "`## Why I stopped`. In `## Progress`, use only inline `-` bullets, one per "
+        "relevant file or target, e.g. `- FileA.lean: 4 sorries -> 3 sorries; closed "
+        "the base case.` or `- FileB.lean: No change because dependency X is blocked.` "
+        "Do not use nested bullets or wrapped multi-line bullets there. "
+        "In `## Why I stopped`, state plainly whether the assigned objective is fully "
+        "complete, partly advanced, or blocked, and why. "
+        + status_line +
+        "If there is a plausible next action inside the session's scope and budget, "
+        "take it before stopping; a clean commit or green partial check is not by "
+        "itself a reason to stop. Prefer short bullets, and keep each bullet around "
+        "20 words or fewer. Always mention bugs, build failures, broken proofs, "
+        "suspicious code issues, blocked dependencies, unresolved assumptions, and "
+        f"checks that failed or were not run. For this {role} session, make the report "
+        "complete enough that a human or Ground can understand the session before "
+        "opening raw logs."
     )
 
 
@@ -179,8 +263,8 @@ def _protected_block(items: tuple[InboxItem, ...]) -> str:
         f"- {item.id}{_scope_suffix(item)}: {item.body.strip()}" for item in prot
     )
     return (
-        "# Protected — DO NOT modify these; they are standing constraints (respect "
-        "them, including semantic ones like a declaration's signature):\n"
+        "# Protected standing constraints — leave these unchanged, including semantic "
+        "constraints like a declaration's signature:\n"
         f"{lines}"
     )
 
@@ -256,9 +340,11 @@ def _ground_recommendation_block(context: HorizonContext) -> str:
     if not recommendation:
         return ""
     return (
-        "# Latest Ground recommendation\n"
-        "This was saved as `recommendation.md` by the last Ground session; treat it as "
-        "fresh guidance, not as a hard command if the live state contradicts it.\n"
+        "# Latest Ground orientation\n"
+        "This was saved as `recommendation.md` by the last Ground session. Treat it as "
+        "lightweight orientation: useful files, recent context, and possible consistency "
+        "concerns. It is not a plan, command, or boundary; use your own judgment from the "
+        "live Lean state.\n"
         f"{recommendation}"
     )
 
@@ -277,70 +363,85 @@ def _subagent_catalog(context: GroundContext | HorizonContext) -> str:
         "divides cleanly, then wait for and reconcile their reports. Read-only "
         "subagents are sandboxed off source edits and report through the "
         "`horizon inbox` CLI. You decide whether a subagent fits — use them when "
-        "they help, skip them when they don't. Each subagent's descriptor pins "
-        "its own model, usually a cheaper one for mechanical work: prefer "
-        "delegating routine checks (diff review, reference lookup, lint) to those "
-        "cheaper subagents and keep your own (more expensive) context for the hard "
-        "reasoning. To add or change a subagent, edit its descriptor under "
-        "`.archon-horizon/subagents/` — it recompiles on the next run."
+        "they help, skip them when they don't. To add or change a subagent, edit "
+        "its descriptor under `.archon-horizon/subagents/` — it recompiles on the "
+        "next run.\n\n"
+        "YOU own the model choice for every piece of delegated work — a subagent "
+        "spawned by name, a bare Task/Agent spawn, or a Workflow/orchestration if "
+        "your engine offers one (including any automatic fan-out your session mode "
+        "does for you). By default a helper inherits YOUR model, which is the "
+        "expensive one, so choosing is not optional: match each helper's model AND "
+        "reasoning effort to the difficulty of ITS slice, not to yours. Search, "
+        "file-finding, transcription, lint, diff review, reference lookup, and other "
+        "mechanical work want a small, cheap model at low effort — pass one "
+        "explicitly; reserve the large model at high effort for genuinely hard proof "
+        "reasoning, and keep your own context for that. Fanning many large-model, "
+        "high-effort agents out at once is the single fastest way to exhaust your "
+        "session/rate budget and get the whole run cut off mid-work — so spend the "
+        "expensive tier deliberately."
+    )
+
+
+def _ground_phase_block(context: GroundContext) -> str:
+    """Tell Ground which phase it is in, so the opening session does not flail
+    looking for a Horizon diff that does not exist yet."""
+    if context.is_opening:
+        return (
+            "# This is the OPENING Ground of the run\n"
+            "No Horizon agent has run yet, so there is NO prior Horizon diff to "
+            "review. Your job right now is a short orientation pass: read the roadmap, "
+            "blueprints, and open inbox; check that the selected task's scope and "
+            "dependency picture are sane; and leave compact notes pointing Horizon to "
+            "the relevant files, references, and recent context."
+        )
+    return (
+        "# This is a RECONCILE Ground\n"
+        "A Horizon session just ran. Do a bounded but SKEPTICAL review of its report and "
+        "project diff (the `project-git` skill), then reconcile blueprints/roadmap/memory "
+        "with what actually changed. Read the report as a claim to verify against the diff "
+        "and Lean state, not a summary to take on trust: separate what was genuinely proved "
+        "from what was deferred, weakened, or stubbed. Watch for avoidance — a "
+        "`sorry`/`admit`/placeholder or new `axiom` left behind, the easy sub-goals closed "
+        "while the hard core is punted, an artificial case split that dodges the real "
+        "difficulty, or a statement quietly weakened to pass. When the report says something "
+        "like 'this is multi-session work, I stopped because …', judge from the evidence "
+        "whether that is a real mathematical blocker or a hard step being avoided, and record "
+        "your honest read (an `info`/`memory` inbox item or a roadmap comment) so the project "
+        "does not quietly stagnate behind plausible-sounding excuses. Focus on correctness, "
+        "consistency, and workspace hygiene; avoid long proof search or exhaustive theorem triage."
+    )
+
+
+def _recommendation_guidance() -> str:
+    return (
+        "# Orientation for the next agent (write `recommendation.md`)\n"
+        "Write at most 4 concise bullets. This file is not a strategy memo and not a "
+        "list of commands. It should give Horizon quick access to context: relevant "
+        "Lean files/declarations, blueprint nodes, reference locations, recent work, "
+        "environment/build notes, and any Lean/blueprint consistency concern.\n"
+        "Avoid directive language like `do`, `do not`, `must`, `safe target`, or "
+        "`avoid`, and avoid ranking targets by fear of difficulty. Prefer wording like "
+        "`Useful context:` or `Relevant files:`. Encourage ambitious progress: Horizon "
+        "may widen scope, fill infrastructure gaps, refactor strategy, or create tools "
+        "when that is the best route. If the last session avoided the hard core, deferred "
+        "it to 'a later session', or leaned on a `sorry`/placeholder where a real attempt "
+        "was tractable, say so plainly and point to that core as the highest-value next "
+        "piece — as honest orientation Horizon may commit to, never as a command. (Naming an "
+        "avoided or stagnating obligation is the opposite of ranking by difficulty: what you "
+        "must not do is steer Horizon *away* from hard work.) Human-facing notes go to an "
+        "`info` inbox item; durable dead ends go to memory."
     )
 
 
 def compose_ground_prompt(context: GroundContext) -> str:
-    """Prompt for the human-facing planning/blueprint/roadmap agent."""
+    """Prompt for the human-facing planning/blueprint/roadmap agent.
+
+    The static role/policy prose is loaded from ``ground.md`` (a workspace override
+    at ``<state_dir>/prompts/ground.md`` wins over the bundled default); the dynamic
+    phase block and context sections are injected here."""
     return (
-        "You are Archon Horizon's Ground agent: the keeper of the project's human-readable "
-        "mind. You own three things and must leave each true to the project's real state "
-        "before you finish:\n"
-        f"- the blueprints (LaTeX-subset declarations + `\\uses` dependency edges),\n"
-        "- the roadmap (the planning index that drives scheduling) — edit it ONLY via the "
-        "`\"$HORIZON_BIN\" roadmap` CLI (`set`/`add`/`remove`, `comment <id> --author ground` to log a "
-        "key advance; pass long prose with `--summary-file` and `--author` on add/set), NEVER by "
-        "hand-editing the YAML, which corrupts it; the CLI quotes safely,\n"
-        "- memory: durable facts/conventions/dead ends, kept as `memory` inbox items "
-        "(`horizon inbox add --kind memory --author ground`); prune stale ones with `inbox complete`.\n"
-        "You do NOT do long Lean proof search yourself. You set strategy, keep the blueprints "
-        "aligned with both the Lean code and the long-term plan, supervise the Horizon agent, and "
-        "leave it a clear recommendation of what to attempt next.\n\n"
-        "The Horizon agent runs free and may leave the workspace messy or its reasoning shaky — "
-        "you are its supervisor and the workspace's janitor, and you make it correct and tidy again.\n\n"
-        "How to work:\n"
-        "- Review the Horizon agent's latest work via its report and the project diff (see the "
-        "`project-git` skill — projects have no root `.git`; diff them through their out-of-tree "
-        "git). Check that the Lean definitions truly match the blueprint statements, that its "
-        "reasoning is sound, and that it left no stray files or directories.\n"
-        "- Reconcile blueprints, roadmap status, and memory with what actually changed. Fix "
-        "blueprint errors, retrieve and add missing references, and keep the DAG dependency-correct.\n"
-        "- When you find a flaw — a wrong proof, a Lean/blueprint mismatch, a dead end — raise an "
-        "inbox item or comment rather than silently papering over it (see the horizon-inbox skill); use "
-        "`--author ground` for inbox items/comments you create. ALWAYS write item bodies, comments, roadmap "
-        "summaries, and reports in Markdown — short paragraphs and `-` bullet lists (never one wall-of-text "
-        "paragraph), `**bold**` for the key claim, and backticks for ids, lemma names, and files. The inbox "
-        "is durable coordination, not a progress log: prefer one concise issue/hint over many comments, close "
-        "obsolete items, retag or merge duplicates, and add a concise closing comment when you `complete` an item.\n"
-        "- When you make a change the human should know about — you restructured projects, took an "
-        "unexpected direction, or hit something worth flagging — tell them with an `info` inbox item "
-        "(`horizon inbox add --kind info --author ground`). It is purely a notice and never affects what runs.\n"
-        "- You do not create tasks: tasks are the human's way to launch sessions. Organize pending work "
-        "through the roadmap; you may `horizon task comment` but never add/edit/remove tasks.\n"
-        "- Delegate to subagents to divide the work (blueprint review, diff analysis), preferring "
-        "a smaller/cheaper model for mechanical checks.\n"
-        "- Leave the next move as a concise recommendation: update the roadmap to account for "
-        "the opened inbox, existing tasks, blueprint state, and current Lean state. A roadmap "
-        "item marked active is advice, not a command; the Horizon agent may self-scope or choose "
-        "a better route from the same context.\n"
-        "- Treat the opened inbox below as input for this round only. Preserve frozen/protected "
-        "state; if an edit would violate it, leave it and flag it.\n\n"
-        "Blueprint constraints (legible and pure, but mathematically complete — see the "
-        "blueprint-conventions skill):\n"
-        "- One declaration's worth per node: a short statement + a COMPLETE proof (not a sketch). "
-        "Keep nodes small by splitting a hard step into its own `\\uses`-linked lemma, never by "
-        "abbreviating the proof to a hand-wave.\n"
-        "- Pure mathematics only: no Lean tactics, no semi-Lean pseudocode, no project history. "
-        "Do not restate Lean source as prose. Add a `\\uses` edge rather than re-explaining a "
-        "dependency.\n"
-        "- The roadmap is an index, not a journal: one line of summary per item; link, don't recount.\n"
-        "- Memory holds only what is non-obvious and durable: conventions, invariants, dead ends.\n\n"
+        f"{_load_prompt_body(context.workspace, 'ground')}\n\n"
+        f"{_ground_phase_block(context)}\n\n"
         f"{_skills_block()}\n\n"
         f"Workspace: {context.workspace.name}\n"
         f"Run: {context.run.id or '(new run)'}; focus: {_focus_line(context)}\n"
@@ -353,39 +454,20 @@ def compose_ground_prompt(context: GroundContext) -> str:
         f"{_section(_protected_block(context.accepted_inbox))}"
         f"# Opened inbox\n{_inbox_lines(context.accepted_inbox)}\n\n"
         f"# Memory\n{context.memory.strip() or '(empty)'}\n\n"
+        f"{_recommendation_guidance()}\n\n"
         f"{_pending_work_guidance()}\n\n"
         f"{_report_guidance('Ground')}"
     )
 
 
 def compose_horizon_prompt(context: HorizonContext) -> str:
-    """Prompt for one autonomous long-horizon formalization attempt."""
+    """Prompt for one autonomous long-horizon formalization attempt.
+
+    The static role/policy prose is loaded from ``horizon.md`` (a workspace override
+    at ``<state_dir>/prompts/horizon.md`` wins over the bundled default); the dynamic
+    context sections are injected here."""
     return (
-        "You are Archon Horizon's Horizon agent. You turn the blueprints into checked Lean: you "
-        "pick the most valuable next piece of formalization and carry it as far as you can in one "
-        "session. You self-scope from the recommendation, roadmap, and opened inbox below.\n\n"
-        "You have broad freedom at the workspace level: experiment, change the strategy "
-        "entirely, try alternative formulations, edit blueprint material when proving teaches you "
-        "something, and — when a task calls for it — work across the several projects it spans, "
-        "or create and merge projects. The one hard rule is hygiene: stay within the projects in "
-        "scope and the shared `references/`, don't leave stray directories or scratch files "
-        "behind. The Ground agent and its review subagents run after you to reconcile, check "
-        "math/blueprint alignment, and tidy — so prefer making progress over being cautious.\n\n"
-        "How to work:\n"
-        "- Read the relevant blueprint node and proof sketch before touching Lean.\n"
-        "- Run the project's build/check command (or the narrowest useful Lean check) and repair "
-        "failures you introduce. Don't bury obligations under new `sorry`s unless a hint allows it.\n"
-        "- Use the inbox to comment, close, create, and message other projects with `--author horizon` (see the "
-        "horizon-inbox skill). ALWAYS write item bodies, comments, and reports in Markdown — short paragraphs "
-        "and `-` bullet lists (never one wall-of-text paragraph), `**bold**` for the key claim, and backticks "
-        "for ids, lemma names, and files. Give every item a short title and a non-empty description. Comment at "
-        "each key advance, and add a concise closing comment (runs, LOC, files) before you `complete` an item. "
-        "Treat `[persistent]` items as standing rules; close `[temporary]` ones once consumed.\n"
-        "- Record durable dead ends as memory: `horizon inbox add --kind memory --to horizon "
-        "--author horizon --body \"...\"`, so later sessions don't repeat them.\n"
-        "- You may delegate to subagents when it helps (see the Subagents section): split a wide "
-        "search across parallel read-only subagents, hand mechanical checks to a cheaper-model "
-        "subagent, or pull references. You are free to decide whether they fit the task.\n\n"
+        f"{_load_prompt_body(context.workspace, 'horizon')}\n\n"
         f"{_skills_block()}\n\n"
         f"Workspace: {context.workspace.name}\n"
         f"{_horizon_projects_line(context)}\n"
@@ -393,7 +475,7 @@ def compose_horizon_prompt(context: HorizonContext) -> str:
         f"Log/artifact directory: {context.log_dir or '(none)'}\n\n"
         f"# Subagents\n{_subagent_catalog(context)}\n\n"
         f"{_section(_ground_recommendation_block(context))}"
-        f"# Recommended focus\n{_task_block(context.task)}\n\n"
+        f"# Task focus\n{_task_block(context.task)}\n\n"
         f"# Roadmap slice\n{_roadmap_lines(context.roadmap)}\n\n"
         f"{_section(_protected_block(context.accepted_inbox))}"
         f"# Opened inbox\n{_inbox_lines(context.accepted_inbox)}\n\n"

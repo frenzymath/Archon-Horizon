@@ -22,7 +22,7 @@ import yaml
 
 from archon_horizon.core.events import Event
 from archon_horizon.store.base import EventLog
-from archon_horizon.vcs.git import GitError, ProjectGit, git_available, neutralize_nested_git
+from archon_horizon.vcs.git import GitError, WorkspaceGit, git_available, neutralize_nested_git
 
 from .loader import CONFIG_FILENAME
 
@@ -55,11 +55,9 @@ def add_project(
     projects = data.setdefault("projects", {})
     if name in projects:
         raise ValueError(f"project {name!r} already exists")
-    git_dir = f"{data.get('workspace', {}).get('state_dir', '.archon-horizon')}/vcs/{name}.git"
     entry: dict[str, Any] = {
         "path": path,
         "type": type,
-        "vcs": {"enabled": True, "git_dir": git_dir},
     }
     if build_command:
         entry["build"] = {"command": build_command}
@@ -71,13 +69,16 @@ def add_project(
     if git_available():
         try:
             # If the project was cloned with its own in-tree .git, rename it aside
-            # so its files (not a submodule gitlink) are tracked, then give the
-            # project repo a baseline commit so its tree is tracked from
-            # registration — not left on an empty branch with "no commits yet".
+            # so its files (not a submodule gitlink) are tracked, then record the
+            # new project in the single workspace ledger so its tree is tracked
+            # from registration.
             disabled = neutralize_nested_git(project_dir)
             if disabled:
                 _emit(event_log, "workspace.project.nested_git_disabled", project=name, path=disabled)
-            ProjectGit(git_dir=root / git_dir, work_tree=project_dir).ensure_initial_commit()
+            wsgit = WorkspaceGit(root)
+            wsgit.init()
+            wsgit.unstage_gitlink(path)
+            wsgit.commit(f"workspace: register project {name}", paths=["config.yaml", path])
         except GitError as exc:
             vcs_error = str(exc)
     _emit(event_log, "workspace.project.added", project=name, path=path)

@@ -5,16 +5,63 @@ import type { GitCommit } from './hooks/useGitLog';
 const transcriptPath = (ref: string) => `/api/transcript?ref=${ref}`;
 const reportPath = (ref: string) => `/api/report?ref=${ref}`;
 
+// Conditional-GET cache: remember the ETag + parsed body per URL so a repeat
+// fetch can send `If-None-Match` and, when the server answers `304 Not Modified`,
+// reuse the cached body instead of re-downloading it. This is what keeps the 5s
+// `/api/state` poll from re-transferring several MB every tick when nothing has
+// changed. Bounded so a long session browsing many transcripts/files can't grow
+// it without limit (the hot polled endpoints stay resident because each 200
+// re-inserts them as most-recent).
+const ETAG_CACHE_MAX = 96;
+const etagCache = new Map<string, { etag: string; data: unknown }>();
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`);
-  return res.json() as Promise<T>;
+  const cached = etagCache.get(url);
+  const headers: Record<string, string> = {};
+  if (cached) headers['If-None-Match'] = cached.etag;
+  // `no-store` keeps the browser's own HTTP cache out of the way so the server
+  // alone decides 200-vs-304 based on the ETag we send.
+  const res = await fetch(url, { headers, cache: 'no-store' });
+  if (res.status === 304 && cached) {
+    // Refresh recency so it isn't evicted, then return the retained body.
+    etagCache.delete(url);
+    etagCache.set(url, cached);
+    return cached.data as T;
+  }
+  const data = await parseJsonResponse<T>(res, url);
+  const etag = res.headers.get('ETag');
+  if (etag) {
+    etagCache.delete(url);
+    etagCache.set(url, { etag, data });
+    if (etagCache.size > ETAG_CACHE_MAX) {
+      const oldest = etagCache.keys().next().value;
+      if (oldest !== undefined) etagCache.delete(oldest);
+    }
+  }
+  return data as T;
+}
+
+async function parseJsonResponse<T>(res: Response, label: string): Promise<T> {
+  const text = await res.text();
+  let data: any = null;
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      const preview = text.replace(/\s+/g, ' ').slice(0, 180);
+      throw new Error(`${label} returned non-JSON (${res.status} ${res.statusText || 'status'}): ${preview || 'empty response'}`);
+    }
+  }
+  if (!res.ok) {
+    throw new Error(data?.error || `${label} -> ${res.status}`);
+  }
+  return data as T;
 }
 
 export const getState = () => getJson<any>('/api/state');
 export const getTranscripts = () => getJson<any[]>('/api/transcripts');
 export const getTranscript = (ref: string) => getJson<any[]>(transcriptPath(ref));
-export const getReport = (ref: string) => getJson<{ markdown: string }>(reportPath(ref));
+export const getReport = (ref: string) => getJson<{ markdown: string; recommendation?: string }>(reportPath(ref));
 
 export interface BlueprintChaptersResponse {
   chapters: { slug: string; title: string; tex: string }[];
@@ -26,6 +73,17 @@ export interface BlueprintChaptersResponse {
 }
 export const getBlueprintChapters = (project: string) =>
   getJson<BlueprintChaptersResponse>(`/api/blueprint/chapters?project=${encodeURIComponent(project)}`);
+
+// Full (heavy) per-project blueprint DAG — node statements, proofs, and Lean
+// source — fetched on demand by the Blueprint and DAG pages. Kept out of
+// /api/state (which now carries only light DAG nodes) so the 5s poll stays small.
+export interface BlueprintDagResponse {
+  nodes?: any[];
+  edges?: any[];
+  [key: string]: any;
+}
+export const getBlueprintDag = (project: string) =>
+  getJson<BlueprintDagResponse>(`/api/blueprint/dag?project=${encodeURIComponent(project)}`);
 
 export interface SourceFile { path: string; size: number; sorries?: number; loc?: number; loc_code?: number }
 
@@ -39,8 +97,22 @@ export interface ProjectStat {
   blueprint_nodes: number;
   blueprint_leanok: number;
 }
+export interface ProjectTrendPoint {
+  sha: string;
+  short_sha: string;
+  date: string;
+  subject: string;
+  lean_files: number;
+  loc: number;
+  loc_code: number;
+  sorries: number;
+}
 export const getProjects = () =>
   getJson<{ projects: ProjectStat[]; totals: Omit<ProjectStat, 'name'> }>('/api/projects');
+export const getProjectHistory = (project: string, limit = 10) =>
+  getJson<{ project: string; limit?: number; history: ProjectTrendPoint[] }>(
+    `/api/project/history?project=${encodeURIComponent(project)}&limit=${encodeURIComponent(String(limit))}`,
+  );
 export const getSourceFiles = (project: string) =>
   getJson<{ files: SourceFile[] }>(`/api/source?project=${encodeURIComponent(project)}`);
 export const getSourceFile = (project: string, path: string) =>
@@ -50,6 +122,87 @@ export const getSourceFile = (project: string, path: string) =>
 
 export const getGitLog = (project: string) =>
   getJson<{ commits: GitCommit[] }>(`/api/git/log?project=${encodeURIComponent(project)}`);
+
+export type ChangeCategory = 'lean' | 'blueprint' | 'other';
+export interface SessionChangeFile {
+  path: string;
+  category: ChangeCategory;
+  add?: number;
+  del?: number;
+  loc_before?: number;
+  loc_after?: number;
+  loc_code_before?: number;
+  loc_code_after?: number;
+  sorry_before?: number;
+  sorry_after?: number;
+  sorry_delta?: number;
+  decl_before?: Record<string, number>;
+  decl_after?: Record<string, number>;
+  decl_delta?: Record<string, number>;
+  added?: boolean;
+  deleted?: boolean;
+}
+export interface ChangeRollup {
+  files: number;
+  add: number;
+  del: number;
+  loc_after: number;
+  loc_code_after: number;
+  loc_delta: number;
+  loc_code_delta: number;
+  sorry_after: number;
+  sorry_delta: number;
+  decl_after?: Record<string, number>;
+  decl_delta?: Record<string, number>;
+}
+export interface SessionChange {
+  session: string;
+  role?: string;
+  projects?: string[];
+  available: boolean;
+  reason?: string;
+  initial?: boolean;
+  worktree?: boolean;
+  base_source?: 'previous-session' | 'git-parent' | 'working-tree' | 'session-commits' | 'explicit-base' | 'none';
+  change_source?: 'agent-commits' | 'no-agent-commits' | 'deterministic-commits' | 'integration-fallback';
+  scope_files?: string[];
+  commits?: { sha: string; subject: string }[];
+  system_commits?: { sha: string; subject: string; kind?: string }[];
+  sha?: string | null;
+  files: SessionChangeFile[];
+  lean: ChangeRollup;
+  blueprint: ChangeRollup;
+  other_count: number;
+  excluded_count?: number;
+  // Back-compat Lean roll-ups (used by the run trend).
+  loc_add: number;
+  loc_del: number;
+  sorry_delta: number;
+  lean_files_changed: number;
+}
+export interface RunChanges {
+  run: string;
+  sessions: SessionChange[];
+  trend: {
+    session: string;
+    role?: string;
+    sorry_delta: number;
+    cumulative_sorry_delta: number;
+    loc_code_delta: number;
+  }[];
+  file_trends: Record<string, { session: string; sorry_after: number; loc_code_after: number }[]>;
+}
+export interface FileDiff { path: string; available: boolean; diff: string; truncated?: boolean }
+// Raw interpolation (no encode): run ids/sessions/paths are bare and the path
+// must match the Python endpoint registry exactly for static-mode hashing.
+export const getRunChanges = (runId: string) =>
+  getJson<RunChanges>(`/api/run/changes?run=${runId}`);
+// Live-only (no working tree in a static export): current uncommitted changes
+// of a running session vs the run's last committed session.
+export const getWorkingChanges = (runId: string, session?: string) =>
+  getJson<SessionChange>(`/api/run/working-changes?run=${runId}${session ? `&session=${session}` : ''}`);
+export const getSessionFileDiff = (runId: string, session: string, path: string, worktree = false) =>
+  getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}${worktree ? '&worktree=1' : ''}`);
 
 export interface SearchResult {
   name: string | null;
@@ -82,11 +235,7 @@ export async function editInbox(payload: Record<string, unknown>): Promise<any> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error || `inbox edit -> ${res.status}`);
-  }
-  return data;
+  return parseJsonResponse<any>(res, 'inbox edit');
 }
 
 export async function editRoadmap(payload: Record<string, unknown>): Promise<any> {
@@ -95,11 +244,7 @@ export async function editRoadmap(payload: Record<string, unknown>): Promise<any
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error || `roadmap edit -> ${res.status}`);
-  }
-  return data;
+  return parseJsonResponse<any>(res, 'roadmap edit');
 }
 
 export async function editTask(payload: Record<string, unknown>): Promise<any> {
@@ -108,9 +253,14 @@ export async function editTask(payload: Record<string, unknown>): Promise<any> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error || `task edit -> ${res.status}`);
-  }
-  return data;
+  return parseJsonResponse<any>(res, 'task edit');
+}
+
+export async function syncBlueprintDags(): Promise<any> {
+  const res = await fetch('/api/blueprint/sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  return parseJsonResponse<any>(res, 'blueprint sync');
 }

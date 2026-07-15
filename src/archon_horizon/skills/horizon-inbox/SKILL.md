@@ -1,6 +1,6 @@
 ---
 name: horizon-inbox
-description: Read and act on the Archon Horizon inbox — list/filter agent-ready items, understand labels/kinds, comment, close, create, and message other projects via the `horizon inbox` CLI.
+description: Read and act on the Archon Horizon inbox — list/filter agent-ready items, understand labels/kinds, comment, archive, create, and message other projects via the `horizon inbox` CLI.
 ---
 
 The inbox is the durable channel between the human, the Ground agent, the
@@ -11,12 +11,16 @@ fields.
 ## Read
 
 - `horizon inbox list` — read the inbox. Use `--json` when you need exact ids,
-  labels, scope, author, audience, timestamps, or comments.
-- Labels are the release gate. Only items labelled `agent-ready` are released to
-  agents. You should filter for `agent-ready` items when reading the inbox, so that 
-  you are not distracted by items that are not allowed for you to act on. 
-  The human can label items `not-ready` or `rejected` or not label at all, 
-  which means agents like you can't read/act on them. 
+  labels, scope, author, audience, timestamps, or comments. Use the list filters
+  to narrow without losing the overview: `--to horizon`, `--to ground`,
+  `--to human`, `--project P`, repeated `--kind K`, repeated `--label L`,
+  `--status open`, `--query TEXT`, `--limit N`, and `--comments N`.
+- Labels are the release gate. Local inbox items default to `agent-ready`, which
+  means they are visible to agents at run boundaries. Keep that default for
+  machine-addressed work, and usually keep it for human-addressed notices too:
+  it helps later agents see that the human has already been notified and avoids
+  duplicate reports. Use `not-ready`, `rejected`, or no labels only when there is
+  a concrete reason agents should not see or act on the item yet.
 - Audience says who should read the item: empty/general, `horizon`, `ground`,
   `human`, or `project:<name>`. Scope/project says what the item is about.
 - Horizon reads general items, items addressed to `horizon`, and items addressed
@@ -29,7 +33,15 @@ fields.
 
 ## Act
 
-Agents must identify their authored local inbox changes: Ground uses `--author ground`; Horizon uses `--author horizon`. The author is mandatory on every item and comment — never omit it. Items and comments you create through the CLI during a run are also auto-tagged with the run/session provenance (shown as a small chip in the UI); you do not pass this yourself.
+Authorship is automatic: every item and comment you create through the CLI is
+attributed to your role (`ground` or `horizon`) from the run environment — you do
+**not** pass `--author` (a stray `--author blueprint-reviewer` is demoted to the
+`agent` metadata, not used as the author, so the author set stays conventional).
+If you are a dispatched **subagent**, add `--agent <your-name>` (e.g. `--agent
+blueprint-reviewer`) to record your identity; it is stored in metadata and shown
+next to the role in the UI, keeping the author itself a clean role. Items and
+comments are also auto-tagged with the run/session provenance (a small chip in the
+UI); you do not pass this yourself.
 
 New inbox items use a two-part body:
 
@@ -48,17 +60,37 @@ Do not create an item whose body is only a title. If you need a `[persistent]` o
 `[temporary]` tag, put it at the start of the title paragraph and keep the rest
 of that paragraph concise.
 
-- `horizon inbox comment <id> --author ground|horizon --body "..."` — progress note on an item (record
-  what you did; not to ask the human for clarification). Do not write the author
-  into the comment body; use `--author`. Drop a comment at each **key advance**
+Before opening a new item, search the open inbox for the same topic using
+`horizon inbox list --status open --query "key words" --json` and, when relevant,
+`--project P` / `--to R`. If a live item already covers the same issue, do not
+open a duplicate: add a comment with the new evidence, or edit the body if the
+main description is stale. If you discover an open item is obsolete, already
+solved, consumed, or superseded, add a short comment when the reason is not
+obvious and then run `horizon inbox archive <id>`.
+
+- `horizon inbox comment <id> --body "..."` — progress note on an item (record
+  what you did; not to ask the human for clarification). Do not write your name
+  into the comment body; the author is set automatically. Drop a comment at each **key advance**
   while you work an item (a milestone reached, a route ruled out, a blocker hit),
   not only at the end — these comments are the item's visible progress trail.
-- `horizon inbox complete <id>` — close an item once you have acted on it. Before
-  closing, add a short **closing comment** that records the conclusion and concise
-  metadata: how many runs it took, approximate LOC changed, the files/declarations
-  involved, and the outcome. Keep it to a few bullets — a reader should see when
-  and how the item was concluded without opening the logs.
-- `horizon inbox add --author ground|horizon --body "Short title\n\nDescription with details and next action." [--to R] [--project P] [--persistent|--temporary]`
+- **Write comments as mathematics, for a human.** State the key step that
+  succeeded in human-readable mathematical language (LaTeX for formulas), naming
+  the result and the idea — e.g. "Proved $H^i(X,\mathcal{F})=0$ for $i>\dim X$ by
+  reducing to the affine case via Čech cohomology." Mention Lean declaration
+  names and file paths only as supporting detail; the substance is the maths, not
+  a code changelog. This applies to comments on **roadmap items and tasks** too:
+  when a key step lands, record it there in the same mathematical, legible style.
+- `horizon inbox archive <id>` — soft-delete: keep the item for the record but
+  hide it from the dashboard by default. Use for stale, superseded, consumed, or
+  no-longer-key context. Ground is responsible for keeping the inbox tidy this
+  way, including pruning memory/info so they remain small.
+- `horizon inbox complete <id>` — mark an item resolved only when it records work
+  you genuinely concluded and want to keep visible outside the archive. Before
+  completing, add a short **conclusion comment**: first the mathematical
+  conclusion (what was proved/established, in words + LaTeX), then concise
+  metadata (runs, approximate LOC, files/declarations involved). A reader should
+  grasp the result and how it was concluded without opening the logs.
+- `horizon inbox add --body "Short title\n\nDescription with details and next action." [--to R] [--project P] [--persistent|--temporary] [--agent <name> if a subagent]`
   — open a new item.
   - `--to` is the recipient: `horizon`, `ground`, `human`, or `project:<name>`.
     Use `--to project:<name>` to message another project (e.g. "I rewrote your
@@ -66,7 +98,7 @@ of that paragraph concise.
   - `--project` says what the item is ABOUT (its subject).
   - `--persistent` / `--temporary` just prepend a `[persistent]` / `[temporary]`
     tag to the body.
-- `horizon inbox add --kind memory --to horizon --author ground|horizon --body "Short memory title\n\nDurable fact, convention, or dead end."` — record a durable
+- `horizon inbox add --kind memory --to horizon --body "Short memory title\n\nDurable fact, convention, or dead end."` — record a durable
   note / dead end. Memory lives in the inbox, so it is rendered in the "Memory"
   section and a human can prune it like any other item.
 - `horizon inbox protect --body "..." [--project P] [--file F] [--declaration D]`
@@ -75,5 +107,6 @@ of that paragraph concise.
   "Protected" section; honour them, including semantic ones.
 
 Reading convention: an item tagged `[persistent]` is a standing rule — respect
-it every round and never close it. `[temporary]` (or untagged) is one-shot —
-`complete` it once consumed. Items in the "Protected" section are never modified.
+it every round and keep it open while relevant. `[temporary]` (or untagged) is
+one-shot — archive it once consumed. Items in the "Protected" section are never
+modified.

@@ -81,6 +81,8 @@ with a minimal header then the declarations and body:
 ## Report
 
 Report through the `horizon inbox` CLI (see the `horizon-inbox` skill), in
-Markdown, with `--author`: lead with `<slug>: pages NNNN–MMMM transcribed`, list
+Markdown, identifying yourself with `--agent page-transcriber` (the author is set
+to your dispatching role automatically; do not pass `--author`): lead with
+`<slug>: pages NNNN–MMMM transcribed`, list
 the files written and the `\source{...}` anchors, and flag any page that was
 partly illegible or any range left for a follow-up call. Keep it short.

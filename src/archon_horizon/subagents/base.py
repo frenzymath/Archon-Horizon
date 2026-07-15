@@ -110,7 +110,7 @@ class DescriptorSubagent(Subagent):
             at `.archon-horizon/blueprints/<project>.json`. Tool and format know-how
             is documented as skills under `.claude/skills/` (e.g. `leandag`,
             `blueprint-conventions`, `lean-check`, `leansearch`, `horizon-inbox`,
-            `project-git`); read the relevant skill instead of guessing how a tool
+            `project-git`, `references`); read the relevant skill instead of guessing how a tool
             or format works. In particular, a project has NO `.git` at its root —
             read the `project-git` skill before running `git diff`/`git log`.
 

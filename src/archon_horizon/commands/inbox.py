@@ -6,7 +6,7 @@ import os
 
 import typer
 
-from archon_horizon.core.inbox import InboxDraft, InboxKind, InboxScope, InboxStatus
+from archon_horizon.core.inbox import InboxDraft, InboxFilter, InboxKind, InboxScope, InboxStatus
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
 from archon_horizon.log import log
 from archon_horizon.store import serde
@@ -23,6 +23,43 @@ def _agent_author(default: str | None = None) -> str | None:
     if role in {"ground", "horizon"}:
         return role
     return default
+
+
+def _clean_agent(detail: str | None, role: str) -> str | None:
+    """Tidy a sub-identity: drop a redundant leading ``<role>-`` / ``<role> ``
+    prefix (so ``ground-diff-auditor`` under author ``ground`` reads ``diff-auditor``)."""
+    if not detail:
+        return None
+    text = detail.strip()
+    if role:
+        for prefix in (f"{role}-", f"{role} ", f"{role}/", f"{role}:"):
+            if text.lower().startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
+    return text or None
+
+
+def _resolve_authorship(author: str | None, agent: str | None = None) -> tuple[str, str | None]:
+    """Canonical author plus an optional finer-grained sub-identity.
+
+    Inbox authors are a small conventional set (human / ground / horizon / …) so
+    the UI can group and colour by them. Agents run with
+    ``ARCHON_HORIZON_AGENT_ROLE`` set to their role, and that role is authoritative
+    — it wins over any ``--author`` the model typed. A more specific identity (a
+    subagent descriptor name like ``blueprint-reviewer``, passed via ``--agent`` or
+    typed into ``--author``) is preserved separately as the ``agent`` detail rather
+    than leaking into the author field. A direct human CLI caller (no agent role in
+    the environment) keeps whatever ``--author`` they pass."""
+    detail = (agent or "").strip() or None
+    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
+    role = role if role in {"ground", "horizon"} else ""
+    if role:
+        # A subagent that typed its own name into --author: demote it to detail.
+        if detail is None and author and author.strip().lower() != role:
+            detail = author.strip()
+        return role, _clean_agent(detail, role)
+    canonical = author.strip() if author and author.strip() else "human"
+    return canonical, _clean_agent(detail, canonical.lower())
 
 
 def _inbox(ctx: typer.Context):
@@ -62,20 +99,68 @@ def _item_dict(item) -> dict:
     }
 
 
+def _latest_comments(item, cap: int | None) -> list[dict]:
+    comments = list(item.metadata.get("comments", []))
+    if cap is None:
+        return comments
+    if cap <= 0:
+        return []
+    return comments[-cap:]
+
+
+def _item_dict_capped(item, comments: int | None = None) -> dict:
+    data = _item_dict(item)
+    data["comments"] = _latest_comments(item, comments)
+    return data
+
+
 @app.command("list")
-def list_items(ctx: typer.Context, as_json: bool = _JSON) -> None:
-    """List local inbox items."""
-    items = _inbox(ctx).list_items()
+def list_items(
+    ctx: typer.Context,
+    status: InboxStatus | None = typer.Option(None, "--status", help="Only show this status: open, closed, or archived."),
+    kind: list[InboxKind] = typer.Option((), "--kind", help="Only show this kind. Repeat for several kinds."),
+    label: list[str] = typer.Option((), "--label", help="Require this label. Repeat to require several labels."),
+    project: str | None = typer.Option(None, "--project", help="Only show items scoped to this project."),
+    to: str | None = typer.Option(None, "--to", help="Only show items addressed to this audience; use '' for general items."),
+    query: str = typer.Option("", "--query", "-q", help="Case-insensitive search across ids, body, labels, audience, author, and scope."),
+    limit: int | None = typer.Option(None, "--limit", "-n", min=1, help="Show only the N most recently updated matching items."),
+    comments: int | None = typer.Option(None, "--comments", min=0, help="Include only the N latest comments per item; 0 hides comments."),
+    as_json: bool = _JSON,
+) -> None:
+    """List local inbox items, optionally narrowed for triage."""
+    filters = InboxFilter(
+        status=status,
+        kinds=tuple(kind),
+        labels=tuple(label),
+        project=project,
+        audience=to if to is not None else None,
+        query=query,
+    )
+    items = sorted(_inbox(ctx).list_items(filters), key=lambda item: item.updated_at, reverse=True)
+    if limit is not None:
+        items = items[:limit]
     if as_json:
-        emit_json({"items": [_item_dict(i) for i in items]})
+        emit_json({"items": [_item_dict_capped(i, comments) for i in items]})
         return
     if not items:
         log.info("(empty)")
         return
-    rows = [
-        (item.id, item.status.value, f"{item.kind.value} [{','.join(item.labels)}] {item.body[:80]}")
-        for item in items
-    ]
+    rows = []
+    for item in items:
+        labels = ",".join(item.labels) or "unlabeled"
+        audience_text = f" to:{item.audience}" if item.audience else ""
+        scope_projects = item.scope.targets("projects")
+        scope_text = f" project:{','.join(scope_projects)}" if scope_projects else ""
+        summary = f"{item.kind.value} [{labels}]{audience_text}{scope_text} {item.body[:80]}"
+        capped_comments = _latest_comments(item, comments)
+        if capped_comments:
+            comment_bits = []
+            for comment in capped_comments:
+                author = str(comment.get("author") or "local")
+                body = str(comment.get("body") or "").replace("\n", " ")[:90]
+                comment_bits.append(f"{author}: {body}")
+            summary = f"{summary}\n  comments: " + " | ".join(comment_bits)
+        rows.append((item.id, item.status.value, summary))
     log.results_table(rows, title="Local Inbox")
 
 
@@ -89,6 +174,12 @@ def add(
         None, "--to", help="Recipient the item is FOR: horizon | ground | human | project:<name>."
     ),
     author: str | None = typer.Option(None, "--author", help="Who is writing it (human / horizon / ground)."),
+    agent: str | None = typer.Option(
+        None, "--agent",
+        help="Finer-grained author identity (e.g. a subagent descriptor name like "
+             "'blueprint-reviewer'); recorded in metadata so the author stays the "
+             "conventional role.",
+    ),
     persistent: bool = typer.Option(False, "--persistent", help="Tag a standing hint the agent never closes."),
     temporary: bool = typer.Option(False, "--temporary", help="Tag a one-shot hint the agent closes once used."),
     pending: bool = typer.Option(False, "--pending", help="Mark not-ready (withheld from the agents) instead of agent-ready."),
@@ -110,10 +201,13 @@ def add(
         body = f"[temporary] {body}"
     labels = (NOT_READY,) if pending else (AGENT_READY,)
     scope = InboxScope(projects=(project,) if project else ())
+    author_val, agent_val = _resolve_authorship(author, agent)
+    metadata = with_provenance()
+    if agent_val:
+        metadata["agent"] = agent_val
     created = _inbox(ctx).create_item(
         InboxDraft(kind=kind, body=body, labels=labels, scope=scope, audience=(to or ""),
-                   author=_agent_author("human") if author is None else author,
-                   metadata=with_provenance())
+                   author=author_val, metadata=metadata)
     )
     if as_json:
         emit_json(_item_dict(created))
@@ -130,7 +224,8 @@ def comment(
     as_json: bool = _JSON,
 ) -> None:
     """Add a progress comment to an inbox item (track work, not ask the human)."""
-    _inbox(ctx).add_comment(id, body, author=author or _agent_author())
+    author_val, _ = _resolve_authorship(author)
+    _inbox(ctx).add_comment(id, body, author=author_val)
     if as_json:
         emit_json({"id": id, "commented": True})
         return
@@ -163,7 +258,7 @@ def protect(
             labels=(AGENT_READY,),
             scope=scope,
             audience="horizon",
-            author=_agent_author("human") or "human",
+            author=_resolve_authorship(None)[0],
             metadata=with_provenance(),
         )
     )
@@ -235,6 +330,17 @@ def complete(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
         emit_json({"id": id, "status": InboxStatus.CLOSED.value})
         return
     log.success(f"completed {id}")
+
+
+@app.command()
+def archive(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
+    """Archive an inbox item: a soft-delete that keeps the record but hides it
+    from the dashboard by default (the human can opt to show archived items)."""
+    _inbox(ctx).update_status(id, InboxStatus.ARCHIVED, _agent_author())
+    if as_json:
+        emit_json({"id": id, "status": InboxStatus.ARCHIVED.value})
+        return
+    log.success(f"archived {id}")
 
 
 @app.command(hidden=True)

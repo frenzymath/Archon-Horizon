@@ -51,6 +51,44 @@ def test_inbox_json_roundtrip(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     assert completed == {"id": item_id, "status": "closed"}
 
 
+def test_inbox_list_filters_and_comment_cap(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _workspace(tmp_path)
+
+    first = _run(
+        tmp_path,
+        "inbox", "add",
+        "--body", "Horizon target\n\nfirst body",
+        "--to", "horizon",
+        "--project", "p",
+        "--json",
+        capsys=capsys,
+    )
+    _run(tmp_path, "inbox", "comment", first["id"], "--body", "old comment", "--json", capsys=capsys)
+    _run(tmp_path, "inbox", "comment", first["id"], "--body", "new comment", "--json", capsys=capsys)
+    _run(
+        tmp_path,
+        "inbox", "add",
+        "--body", "Human notice\n\nsecond body",
+        "--to", "human",
+        "--json",
+        capsys=capsys,
+    )
+
+    listed = _run(
+        tmp_path,
+        "inbox", "list",
+        "--to", "horizon",
+        "--project", "p",
+        "--query", "target",
+        "--comments", "1",
+        "--json",
+        capsys=capsys,
+    )
+
+    assert [item["id"] for item in listed["items"]] == [first["id"]]
+    assert [comment["body"] for comment in listed["items"][0]["comments"]] == ["new comment"]
+
+
 def test_blueprint_json_no_blueprints(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _workspace(tmp_path)
     payload = _run(tmp_path, "blueprint", "--json", capsys=capsys)

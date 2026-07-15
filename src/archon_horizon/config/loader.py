@@ -51,25 +51,40 @@ from .manifest import find_package_revs
 from .schema import WorkspaceConfig
 
 CONFIG_FILENAME = "config.yaml"
-_WARNED_LIBRARY_MISMATCHES: set[tuple[str, str, str, str, str]] = set()
+_WARNED_LIBRARY_MISMATCHES: set[tuple[str, str, str, tuple[str, ...], str]] = set()
 
 
 def _warn_library_mismatches(cfg: WorkspaceConfig, root: Path) -> None:
     """Warn when a project's ``lake-manifest.json`` pins a rev that differs from
-    the rev declared for that library in ``external_libraries``."""
+    the rev declared for that library in ``external_libraries``.
+
+    A declared tag matches a manifest that resolves it: ``rev`` (SHA) *and*
+    ``inputRev`` (tag/branch) are both accepted, so declaring ``v4.31.0`` does not
+    warn against a manifest whose ``inputRev`` is ``v4.31.0`` (even though its
+    ``rev`` is the SHA that tag points at)."""
+    # Only warn on drift inside registered projects: a Lake manifest in some
+    # non-project directory (a vendored paper, a scratch experiment) is out of
+    # scope and must not raise.
+    project_dirs = tuple(
+        (root / project.path).resolve() for project in cfg.projects.values()
+    )
+    if not project_dirs:
+        return
     for lib in cfg.external_libraries:
         if not lib.rev:
             continue
-        for project_dir, actual in find_package_revs(root, lib.name).items():
-            if actual != lib.rev:
-                key = (str(root.resolve()), lib.name, str(project_dir), actual, lib.rev)
-                if key in _WARNED_LIBRARY_MISMATCHES:
-                    continue
-                _WARNED_LIBRARY_MISMATCHES.add(key)
-                log.warn(
-                    f"Library {lib.name!r} is pinned to {actual!r} in {project_dir}/lake-manifest.json, "
-                    f"but external_libraries declares {lib.rev!r}."
-                )
+        for project_dir, actual_ids in find_package_revs(root, lib.name, project_dirs).items():
+            if lib.rev in actual_ids:
+                continue
+            key = (str(root.resolve()), lib.name, str(project_dir), tuple(sorted(actual_ids)), lib.rev)
+            if key in _WARNED_LIBRARY_MISMATCHES:
+                continue
+            _WARNED_LIBRARY_MISMATCHES.add(key)
+            shown = " / ".join(repr(x) for x in sorted(actual_ids))
+            log.warn(
+                f"Library {lib.name!r} is pinned to {shown} in {project_dir}/lake-manifest.json, "
+                f"but external_libraries declares {lib.rev!r}."
+            )
 
 
 def load_config(root: Path) -> WorkspaceConfig:
@@ -220,4 +235,5 @@ def build_orchestrator(
         freeze=freeze,
         start_with=cfg.start_with,
         end_with=cfg.end_with,
+        roles=cfg.roles,
     )

@@ -111,6 +111,27 @@ def published_dags(workspace: Workspace) -> dict[str, dict]:
     return out
 
 
+def published_dag(workspace: Workspace, name: str) -> dict | None:
+    """The published (possibly rich) DAG for a single project — the cached JSON
+    if present, else a fresh parser DAG. Same source as :func:`published_dags`
+    but for one project, so an on-demand fetch of one heavy blueprint doesn't
+    read every project's cache file."""
+    if not name:
+        return None
+    cached = workspace.state_path / "blueprints" / f"{name}.json"
+    if cached.exists():
+        try:
+            return json.loads(cached.read_text("utf-8"))
+        except (OSError, ValueError):
+            pass
+    try:
+        return project_dag(workspace, name)
+    except KeyError:
+        # `name` may be an auto-discovered directory that isn't a configured
+        # project (e.g. the static-export output dir) — no blueprint to build.
+        return None
+
+
 def workspace_dags(workspace: Workspace) -> dict[str, dict]:
     """DAGs for every project that has a parseable blueprint."""
     out: dict[str, dict] = {}

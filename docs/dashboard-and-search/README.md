@@ -23,6 +23,21 @@ To launch the live dashboard server, run:
 horizon dashboard --host 127.0.0.1 --port 8765
 ```
 
+On a remote server, container, or port-forwarded environment where loopback
+forwarding is unreliable, use:
+
+```bash
+horizon dashboard --public --port 8765
+```
+
+`--public` binds the server to `0.0.0.0` (all IPv4 interfaces). Open the
+dashboard through your tunnel as `http://localhost:8765/`, or directly as
+`http://<server-host>:8765/` when the network and firewall allow it.
+
+`horizon run` starts the same live dashboard by default while a run is active.
+Pass `--host`, `--port`, or `--public` to `horizon run` to control that server,
+or `--no-dashboard` to run without the UI.
+
 The server is implemented in [`server/app.py`](../../src/archon_horizon/server/app.py) (with data assembled by [`server/service.py`](../../src/archon_horizon/server/service.py) and Git/source endpoints in [`server/git_api.py`](../../src/archon_horizon/server/git_api.py) and [`server/source_api.py`](../../src/archon_horizon/server/source_api.py)); the CLI entry point is [`commands/dashboard.py`](../../src/archon_horizon/commands/dashboard.py), and the SPA source lives under [`frontend/`](../../src/archon_horizon/frontend). It provides real-time visualization and management features:
 - **Interactive DAG Viewer**: Explore blueprint dependency graphs rendered with KaTeX and interactive node selection.
 - **Roadmap & Task Tracker**: Monitor ongoing execution runs, inspect step-by-step run logs, and view milestone progress.
@@ -53,6 +68,15 @@ horizon dashboard --static --out ./docs_site --workflow
 ```
 
 This writes a ready-to-use continuous deployment pipeline to `.github/workflows/`, allowing automated publication to `github.io`.
+
+The generated workflow retries the GitHub Pages deploy up to three times within a single run, because GitHub's Pages backend intermittently returns `Deployment failed, try again later.` for a valid upload even while Pages is fully operational. **Do not manually re-run a failed deploy** — a re-run uploads a second `github-pages` artifact onto the same run and makes `actions/deploy-pages` fail with *"Multiple artifacts named github-pages"*. Let the next push (or the retry logic) redeploy instead.
+
+### Freshness & caching
+GitHub Pages serves every file — `index.html`, the JS bundle, and each `data/api/<hash>.json` — with `Cache-Control: max-age=600` (10 minutes), and you can't change those response headers on Pages. Because the data filenames hash the API **path, not the payload**, each snapshot reuses the same URLs, so a naive browser would keep showing up-to-10-minute-old runs.
+
+To avoid that, the static-mode fetch shim ([`staticMode.ts`](../../src/archon_horizon/frontend/src/staticMode.ts)) requests the data files with `cache: 'no-cache'`, forcing a conditional request on every load: a cheap `304 Not Modified` when the snapshot is unchanged, a fresh `200` when new data was published. As a result a normal reload always shows current run data — no hard refresh or cache-clearing needed.
+
+Two caveats remain: (1) the page **shell** (HTML/JS) is still subject to the 10-minute Pages cache, so app-code changes can take up to ~10 min to appear; and (2) a hard reload does **not** reliably help stale JS-issued `fetch()` data — especially in Safari, whose "Reload From Origin" (⌘⌥R) bypasses cache for the document and its subresources but applies the default cache mode to programmatic `fetch()`. The `no-cache` shim is what makes the data current, not the keyboard shortcut.
 
 ---
 

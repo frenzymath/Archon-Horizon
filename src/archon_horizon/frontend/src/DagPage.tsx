@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DagNetwork from './components/DagNetwork';
-import BlueprintRendered from './components/BlueprintRendered';
+import { buildBlueprintModel, TexFragment } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
+import { syncBlueprintDags, getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
+import { isStaticDashboard } from './staticMode';
 
 type Query = 'all' | 'frontier' | 'unproved' | 'sorry' | 'gaps' | 'zeroEffort' | 'leanok' | 'mathlib' | 'roots' | 'leaves' | 'isolated';
 
@@ -20,6 +22,7 @@ const nodeType = (n: any) => n.type ?? n.kind ?? 'node';
 const hasRich = (n: any) => Object.prototype.hasOwnProperty.call(n, 'effort_local');
 const fileOf = (n: any) => n.lean_file ?? n.tex_file ?? '';
 const fmt = (v: number) => v.toLocaleString('en-US');
+const STATIC = isStaticDashboard();
 
 function metricVal(v: number | null | undefined, kind: 'char' | 'work') {
   if (v === undefined) return <span className="m-val">—</span>;
@@ -61,13 +64,39 @@ function DualRange({ label, max, value, onChange, infiniteTop }: {
   );
 }
 
-export default function DagPage({ state }: { state: any }) {
+export default function DagPage({ state, reload }: { state: any; reload?: () => void }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedProject = searchParams.get('project') ?? '';
   const focusNode = searchParams.get('focus') ?? '';
   const projects: string[] = Object.keys(state.blueprints ?? {});
   const [project, setProject] = useState(projects[0] ?? '');
+  // Fetch the project's blueprint chapters so node statements/proofs render
+  // through the same parser as the Blueprint page: custom macros, refs, and
+  // text-mode environments such as itemize/enumerate.
+  const [blueprintData, setBlueprintData] = useState<BlueprintChaptersResponse | null>(null);
+  useEffect(() => {
+    if (!project) { setBlueprintData(null); return; }
+    let cancelled = false;
+    getBlueprintChapters(project)
+      .then((data) => { if (!cancelled) setBlueprintData(data); })
+      .catch(() => { if (!cancelled) setBlueprintData(null); });
+    return () => { cancelled = true; };
+  }, [project]);
+  const macros = blueprintData?.macros ?? {};
+  const labelMap = useMemo(() => buildBlueprintModel(blueprintData?.chapters ?? [], true).labels, [blueprintData]);
+  // The full DAG (with node statements / proofs / Lean source) is fetched on
+  // demand rather than ridden along in the 5s /api/state poll — that heavy text
+  // is only needed here and on the Blueprint page.
+  const [fullDag, setFullDag] = useState<BlueprintDagResponse | null>(null);
+  useEffect(() => {
+    if (!project) { setFullDag(null); return; }
+    let cancelled = false;
+    getBlueprintDag(project)
+      .then((data) => { if (!cancelled) setFullDag(data); })
+      .catch(() => { if (!cancelled) setFullDag(null); });
+    return () => { cancelled = true; };
+  }, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState<Query>('all');
   const [search, setSearch] = useState('');
@@ -77,6 +106,9 @@ export default function DagPage({ state }: { state: any }) {
   const [depRange, setDepRange] = useState<[number, number]>([0, Infinity]);
   const [effRange, setEffRange] = useState<[number, number]>([0, Infinity]);
   const [statsOpen, setStatsOpen] = useState(true);
+  const [showAux, setShowAux] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
 
   useEffect(() => {
     if (requestedProject && projects.includes(requestedProject) && project !== requestedProject) {
@@ -89,7 +121,10 @@ export default function DagPage({ state }: { state: any }) {
     setDepRange([0, Infinity]); setEffRange([0, Infinity]);
   }, [project, focusNode]);
 
-  const dag = project ? state.blueprints?.[project] ?? {} : {};
+  // Prefer the freshly-fetched full DAG; fall back to the light DAG from the
+  // poll (nodes/edges without the heavy text) so the graph still draws instantly
+  // while the full payload is loading.
+  const dag: any = (project ? (fullDag ?? state.blueprints?.[project]) : null) ?? {};
   const dagSig = useMemo(() => JSON.stringify(dag?.nodes ?? []) + '|' + JSON.stringify(dag?.edges ?? []), [dag]);
   const nodes: any[] = useMemo(() => dag.nodes ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const edges: any[] = useMemo(() => dag.edges ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -106,6 +141,23 @@ export default function DagPage({ state }: { state: any }) {
     return m;
   }, [edges]);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  // `lean_aux` nodes are Lean declarations scanned from the project tree that no
+  // blueprint statement references via \lean{}; leandag emits them with no edges,
+  // so they render as isolated islands that swamp the actual blueprint DAG (e.g.
+  // thousands of them vs. ~hundred linked nodes). Hide them by default — matching
+  // leandag's own HTML exporter — behind a toggle, so the graph shows the
+  // blueprint↔Lean structure rather than a flat dump of every declaration.
+  const edgeIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of edges) { s.add(e.source); s.add(e.target); }
+    return s;
+  }, [edges]);
+  const isIsolatedAux = (n: any) => nodeType(n) === 'lean_aux' && !edgeIds.has(n.id);
+  const auxCount = useMemo(() => nodes.filter(isIsolatedAux).length, [nodes, edgeIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const graphNodes = useMemo(
+    () => (showAux ? nodes : nodes.filter((n) => !isIsolatedAux(n))),
+    [nodes, edgeIds, showAux], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const depCount = (n: any) => n.dep_count ?? (n.uses ?? depsMap.get(n.id) ?? []).length;
   const rdepCount = (n: any) => n.rdep_count ?? (usedByMap.get(n.id) ?? []).length;
   const doneIds = useMemo(() => new Set(nodes.filter(isDone).map((n) => n.id)), [nodes]);
@@ -200,7 +252,7 @@ export default function DagPage({ state }: { state: any }) {
       && matchRanges(n)).map((n) => n.id));
   }, [nodes, byId, depsMap, usedByMap, doneIds, query, search, typeSel, chapterSel, fileSel, depRange, effRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visible = highlight ? highlight.size : nodes.length;
+  const visible = highlight ? graphNodes.filter((n) => highlight.has(n.id)).length : graphNodes.length;
   const dupCount = (meta.duplicate_ids ?? []).length;
 
   const qRow = (label: string, value: number, q: Query, vClass = '') => (
@@ -227,6 +279,28 @@ export default function DagPage({ state }: { state: any }) {
     if (lean) qs.set('decl', String(lean));
     navigate(`/lean?${qs.toString()}`);
   };
+  const openBlueprintRef = (slug: string, anchor: string) => {
+    const qs = new URLSearchParams({ project });
+    if (slug) qs.set('slug', slug);
+    if (anchor) qs.set('anchor', anchor);
+    navigate(`/blueprint?${qs.toString()}`);
+  };
+  const syncBlueprint = () => {
+    if (isStaticDashboard()) {
+      setSyncMessage('Blueprint sync needs the live dashboard.');
+      return;
+    }
+    setSyncMessage('');
+    setSyncing(true);
+    syncBlueprintDags()
+      .then((result) => {
+        const count = result?.projects?.length ?? 0;
+        setSyncMessage(count ? `Synced ${count} project${count === 1 ? '' : 's'}` : 'No parseable blueprints found');
+        reload?.();
+      })
+      .catch((error) => setSyncMessage(error?.message || String(error)))
+      .finally(() => setSyncing(false));
+  };
 
   return (
     <div className="page full-page" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -236,13 +310,17 @@ export default function DagPage({ state }: { state: any }) {
         <div className="dv-root" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <div className="dv-toolbar">
             <span className="dv-brand">Dependency Graph</span>
-            <span className="dv-stat">{visible}/{nodes.length} nodes · {edges.length} edges{highlight ? ` · ${highlight.size} highlighted` : ''}{meta.entry ? ` · ${String(meta.entry).split('/').pop()}` : ''}{dupCount ? ` · ⚠ ${dupCount} dup` : ''}</span>
+            <span className="dv-stat">{visible}/{graphNodes.length} nodes · {edges.length} edges{highlight ? ` · ${highlight.size} highlighted` : ''}{!showAux && auxCount ? ` · ${auxCount} unlinked Lean hidden` : ''}{meta.entry ? ` · ${String(meta.entry).split('/').pop()}` : ''}{dupCount ? ` · ⚠ ${dupCount} dup` : ''}</span>
             <span className="dv-legend">
               <span className="leg-dot" style={{ background: '#22c55e' }} /><span className="leg-txt">done</span>
               <span className="leg-dot" style={{ background: '#3b82f6' }} /><span className="leg-txt">mathlib</span>
               <span className="leg-bar" /><span className="leg-txt">more effort</span>
               <span className="leg-dot" style={{ background: '#ef4444' }} /><span className="leg-txt">∞ no proof</span>
             </span>
+            <button className="dv-sync" type="button" onClick={syncBlueprint} disabled={STATIC || syncing} title={STATIC ? 'Blueprint sync needs the live dashboard.' : 'Refresh the published rich blueprint DAG cache.'}>
+              {syncing ? 'Syncing...' : 'Sync blueprint'}
+            </button>
+            {syncMessage && <span className={`dv-sync-msg ${syncMessage.startsWith('fetch') || syncMessage.includes('->') ? 'error' : ''}`}>{syncMessage}</span>}
             <span style={{ marginLeft: 'auto' }}><ProjectPicker projects={projects} value={project} onChange={setProject} /></span>
           </div>
           <div className="dv-controls">
@@ -267,6 +345,11 @@ export default function DagPage({ state }: { state: any }) {
             )}
             <DualRange label="deps" max={maxDep} value={depRange} onChange={setDepRange} />
             <DualRange label="effort" max={maxEff} value={effRange} onChange={setEffRange} infiniteTop />
+            {auxCount > 0 && (
+              <label className="dv-check" title="Lean declarations not referenced by any blueprint \lean{} — shown as isolated nodes.">
+                <input type="checkbox" checked={showAux} onChange={(e) => setShowAux(e.target.checked)} /> show {auxCount} unlinked Lean
+              </label>
+            )}
           </div>
 
           <div className="dv-main" style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0, gap: 0 }}>
@@ -346,10 +429,20 @@ export default function DagPage({ state }: { state: any }) {
                     </div>
                   )}
                   {node.statement && (
-                    <div className="card"><div className="card-title">LaTeX statement</div><div className="latex-rendered"><BlueprintRendered tex={node.statement} /></div></div>
+                    <div className="card">
+                      <div className="card-title">LaTeX statement</div>
+                      <div className="latex-rendered">
+                        <TexFragment tex={node.statement} macros={macros} labels={labelMap} onNavigate={openBlueprintRef} />
+                      </div>
+                    </div>
                   )}
                   {node.proof_tex && (
-                    <div className="card"><div className="card-title">LaTeX proof</div><div className="latex-rendered"><BlueprintRendered tex={String(node.proof_tex).trim()} /></div></div>
+                    <div className="card">
+                      <div className="card-title">LaTeX proof</div>
+                      <div className="latex-rendered">
+                        <TexFragment tex={String(node.proof_tex).trim()} macros={macros} labels={labelMap} onNavigate={openBlueprintRef} />
+                      </div>
+                    </div>
                   )}
                   <div className="card">
                     <div className="card-title">Lean code</div>

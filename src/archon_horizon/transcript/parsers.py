@@ -130,6 +130,20 @@ def observed_model(events: list[TranscriptEvent]) -> str | None:
     return None
 
 
+def observed_effort(events: list[TranscriptEvent]) -> str | None:
+    """The reasoning-effort tier the engine actually ran with, scanned from
+    canonical events — the codex rollout parser stamps it onto session-meta from
+    the engine's own ``turn_context``. ``None`` when the engine reported none
+    (e.g. Claude Code, which takes effort as an input ``--effort`` flag it does
+    not echo back in its stream; the run view then falls back to the configured
+    tier)."""
+    for event in events:
+        effort = event.data.get("effort")
+        if isinstance(effort, str) and effort:
+            return effort
+    return None
+
+
 def _usage_data(usage: TranscriptUsage | None) -> dict[str, object]:
     if usage is None:
         return {"tokens_in": 0, "tokens_out": 0, "cost_usd": None}
@@ -407,12 +421,21 @@ def parse_codex_rollout_line(line: str) -> list[TranscriptEvent]:
     if otype == "response_item":
         events = _codex_rollout_item(payload)
     elif otype in ("session_meta", "turn_context"):
-        # Codex records its model + the spawned subagent's role/nickname here; surface
-        # them so the run view shows the real model and a friendly subagent name.
+        # Codex records its model, reasoning effort, and the spawned subagent's
+        # role/nickname here; surface them so the run view shows the real model +
+        # effort (verified from the engine's own stream, not just config) and a
+        # friendly subagent name.
         model = payload.get("model")
         meta: dict[str, object] = {}
         if isinstance(model, str) and model:
             meta["model"] = model
+        # Effort key has been renamed across codex versions (like agent_role), so
+        # try each candidate; the value is a tier string ("high"/"xhigh"/…).
+        for ekey in ("effort", "reasoning_effort", "model_reasoning_effort"):
+            val = payload.get(ekey)
+            if isinstance(val, str) and val:
+                meta["effort"] = val
+                break
         for key in ("agent_role", "agent_nickname"):
             val = payload.get(key)
             if isinstance(val, str) and val:

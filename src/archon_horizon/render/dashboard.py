@@ -16,7 +16,7 @@ from html import escape
 from typing import Any
 
 from archon_horizon.core.inbox import InboxItem
-from archon_horizon.core.roadmap import Roadmap
+from archon_horizon.core.roadmap import Roadmap, ordered_tree
 
 _KATEX = (
     '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css">'
@@ -29,14 +29,16 @@ _KATEX = (
 def _roadmap_section(roadmap: Roadmap) -> str:
     if not roadmap.items:
         return "<p class='empty-state'>No roadmap items.</p>"
+    # Render as an outline: parents above their sub-items, indented by tree depth.
     rows = "".join(
-        f"<tr><td><span class='badge'>{escape(i.id)}</span></td>"
-        f"<td><strong>{escape(i.title)}</strong></td>"
+        f"<tr><td style='padding-left:{depth * 1.4:.1f}em'>"
+        f"<span class='badge'>{escape(i.id)}</span></td>"
+        f"<td style='padding-left:{depth * 1.4:.1f}em'><strong>{escape(i.title)}</strong></td>"
         f"<td><span class='badge status-{escape(i.status)}'>{escape(i.status)}</span></td>"
         f"<td>{escape(i.kind)}</td>"
         f"<td><span class='badge'>{escape(', '.join(i.projects))}</span></td>"
         f"<td>{escape(', '.join(i.depends_on))}</td></tr>"
-        for i in roadmap.items
+        for i, depth in ordered_tree(roadmap.items)
     )
     return (
         "<div class='table-container'><table><thead><tr><th>ID</th><th>Title</th><th>Status</th>"
@@ -71,9 +73,13 @@ def _dag_section(dag: dict[str, Any] | None) -> str:
         return "<p class='empty-state'>No blueprint DAG.</p>"
     nodes = dag.get("nodes", [])
     edges = dag.get("edges", [])
+    # The ✓ span is built outside the f-string: it contains double quotes, which
+    # can't be escaped inside an f-string expression on Python 3.11 (a backslash
+    # in an f-expression is a SyntaxError there).
+    tick = ' <span class="text-emerald-400">✓</span>'
     items = "".join(
         f"<li><span class='badge'>{escape(str(n.get('id')))}</span> "
-        f"({escape(str(n.get('kind', '')))}){' <span class=\"text-emerald-400\">✓</span>' if n.get('leanok') else ''}</li>"
+        f"({escape(str(n.get('kind', '')))}){tick if n.get('leanok') else ''}</li>"
         for n in nodes
     )
     return (

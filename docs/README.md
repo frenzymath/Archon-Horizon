@@ -36,7 +36,7 @@ Every command supports `--json` for machine-readable output on `stdout`.
 
 | Command | Purpose |
 | :--- | :--- |
-| `horizon init` | Scaffold a workspace, or refresh managed subagents/skills (`--reinit`). |
+| `horizon init` | Scaffold a workspace, or refresh managed subagents/skills (`--update`). |
 | `horizon setup` | Check and configure external tools (Claude Code, Lean 4 toolchain, …). |
 | `horizon update` | Upgrade the Archon Horizon package. |
 | `horizon run <target>` | Run autoformalization on a task/project, everything (`*`), or a single role (`ground`/`horizon`, `--backend interactive`). |

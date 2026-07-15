@@ -12,8 +12,9 @@
  *   • hides `\label{}` (anchors), KaTeX-renders math (incl. titles & align envs);
  *   • surfaces `% SOURCE` / `% NOTE` comments as expandable chips.
  */
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import katex from 'katex';
+import { useProgressiveCount } from '../hooks/useProgressiveCount';
 import 'katex/dist/katex.min.css';
 import styles from './BlueprintDoc.module.css';
 
@@ -702,7 +703,10 @@ function parseCommentEntries(value: string): { tag: string; text: string }[] {
   return entries.filter(e => e.text.trim() || e.tag);
 }
 
-function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
+// Memoized so a chapter can stream its blocks in progressively (see ChapterView)
+// without re-running KaTeX on the blocks already rendered — block objects and
+// `ctx` keep a stable identity, so growing the visible count stays O(n).
+const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
   if (b.t === 'para') return <p className={styles.p}><Inlines nodes={b.c} ctx={ctx} k={k} /></p>;
   if (b.t === 'paragraph') return <h5 className={styles.paragraphHead}><Inlines nodes={b.title} ctx={ctx} k={k} /></h5>;
   if (b.t === 'displaymath') return <div className={styles.dblock} dangerouslySetInnerHTML={{ __html: renderMath(cleanDisplay(b.v), true, ctx.macros) }} />;
@@ -738,6 +742,10 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
   }
   // env
   const isProof = b.name === 'proof';
+  // Prose environments (remark, notation, …) are not formalisation obligations:
+  // they carry no DAG node worth focusing, so a "graph" chip on them just lands
+  // on the DAG page with nothing selected. Suppress the graph/diff chips for them.
+  const isProse = ['remark', 'notation', 'convention', 'example', 'note'].includes(b.name);
   const labelText = ENV_LABELS[b.name] ?? (b.name[0]?.toUpperCase() + b.name.slice(1));
   const klass = `${styles.env} ${styles[`env_${b.name}`] ?? ''} ${isProof ? styles.envProof : ''}`;
   return (
@@ -750,11 +758,11 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
         {b.meta.leanok && <span className={styles.badgeOk} title="\leanok">✓ leanok</span>}
         {b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
         {b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
-        {b.meta.label && ctx.onOpenInGraph && (
+        {b.meta.label && ctx.onOpenInGraph && !isProse && (
           <button className={styles.graphChip} title="Show this node on the DAG page"
             onClick={() => ctx.onOpenInGraph!(b.meta.label!)}>⬡ graph</button>
         )}
-        {b.meta.label && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
+        {b.meta.label && !isProse && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
           <button className={styles.graphChip} title="Open this declaration's Lean file on the Diffs page"
             onClick={() => ctx.onOpenInDiffs!(ctx.diffSlugFor!(b.meta.label!)!)}>± diff</button>
         )}
@@ -769,7 +777,7 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
       </div>
     </div>
   );
-}
+});
 
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
@@ -794,13 +802,22 @@ export function ChapterView({
     () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs }),
     [macros, labels, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
   );
+  // Progressive rendering: paint the top of the chapter immediately and stream
+  // the remaining (KaTeX-heavy) blocks in over the next frames, so opening a big
+  // chapter doesn't freeze until every theorem has typeset. Reset per chapter.
+  const shown = useProgressiveCount(chapter.blocks.length, {
+    resetKey: chapter.anchor,
+    initial: 12,
+    step: 24,
+  });
   return (
     <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>
       <h2 className={styles.chapterTitle}>
         <span className={styles.chapNum}>{chapter.num}</span> <Inlines nodes={chapter.title} ctx={ctx} k={`ch${chapter.num}`} />
         <IterChip kind="Chapter .tex (statements & proofs)" mod={chapterMod} onOpenLogs={onOpenLogs} />
       </h2>
-      {chapter.blocks.map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${chapter.num}-${j}`} />)}
+      {chapter.blocks.slice(0, shown).map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${chapter.num}-${j}`} />)}
+      {shown < chapter.blocks.length && <p className={styles.fragEmpty}>Rendering the rest of this chapter…</p>}
     </section>
   );
 }

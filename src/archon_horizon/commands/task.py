@@ -1,10 +1,14 @@
 """Typer command group for tasks — safe YAML writes, like inbox and roadmap.
 
-Tasks are the human's lever for launching sessions (`horizon run`); the rest are
-derived from the roadmap by the orchestrator. Agents never author tasks — they
-organize pending work through the roadmap — so ``add``/``set``/``remove`` refuse
-the ground/horizon agent (see :func:`refuse_agents`); only ``comment`` is open to
-them, and it has no effect on what runs. They live as YAML files under
+Tasks are the human's lever for launching sessions (`horizon run <task_id>`), or
+inferred on demand from a roadmap milestone (`horizon run <roadmap_id>`). Agents
+have full access here — they may ``add``, ``set`` (including status), ``comment``,
+and ``remove`` — and are encouraged to leave a ``comment`` when they hit a
+significant step and to update ``status`` themselves (``done`` only when the work
+is *fully* complete). The machine (scheduler/orchestrator) only ever writes
+``queued``/``running``; every terminal status (``done``/``blocked``/``failed``) is
+the agent's own word, recorded here. Writes are stamped with agent provenance so
+the ledger shows who changed what. They live as YAML files under
 ``.archon-horizon/tasks/``; every write here goes through the store's
 ``yaml.safe_dump``, so it is always valid no matter what text is passed.
 """
@@ -16,12 +20,14 @@ import dataclasses
 import typer
 
 from archon_horizon.core.clock import utc_now
+from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.scope import ItemScope
+from archon_horizon.core.status_sync import roadmap_status_for_task_status
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.store import serde
 from archon_horizon.log import log
 
-from .shared import agent_author, emit_json, history_entry, load_workspace, refuse_agents, task_store, with_provenance
+from .shared import agent_author, emit_json, history_entry, load_workspace, roadmap_store, task_store, with_provenance
 
 app = typer.Typer(help="Read and update Horizon tasks (safe YAML writes).", no_args_is_help=True)
 
@@ -31,6 +37,11 @@ _JSON = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout
 def _store(ctx: typer.Context):
     _, workspace = load_workspace(ctx.obj["root"])
     return task_store(workspace)
+
+
+def _stores(ctx: typer.Context):
+    _, workspace = load_workspace(ctx.obj["root"])
+    return task_store(workspace), roadmap_store(workspace)
 
 
 def _task_dict(task: HorizonTask) -> dict:
@@ -91,9 +102,13 @@ def set_task(
     author: str | None = typer.Option(None, "--author", help="Who is making the change (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
-    """Update fields of an existing task (safe YAML write). Human-only."""
-    refuse_agents("edit a task")
-    store = _store(ctx)
+    """Update fields of an existing task (safe YAML write).
+
+    Open to agents and humans alike: the machine only ever writes queued/running,
+    so a task reaches a terminal status (done/blocked/failed) only when an agent
+    (or human) records it here. Declare ``done`` only when the work is *fully*
+    complete."""
+    store, rstore = _stores(ctx)
     try:
         task = store.get(task_id)
     except Exception:
@@ -101,10 +116,14 @@ def set_task(
         raise typer.Exit(1)
     actor = author or agent_author() or task.metadata.get("author")
     changes: dict[str, object] = {"updated_at": utc_now()}
+    new_status: TaskStatus | None = None
     if status is not None:
-        changes["status"] = TaskStatus(status.lower())
-        store.append_history(task_id, history_entry(actor, "status",
-                             before=task.status.value, after=status.lower()))
+        new_status = TaskStatus(status.lower())
+        changes["status"] = new_status
+        if task.status != new_status:
+            store.append_history(task_id, history_entry(actor, "status",
+                                 before=task.status.value, after=new_status.value))
+            _sync_roadmap_refs_from_task(rstore, task, new_status, actor)
     if priority is not None:
         changes["priority"] = priority
     if objective is not None:
@@ -116,6 +135,45 @@ def set_task(
         store.append_history(task_id, history_entry(actor, "edited", note=", ".join(edited) + " updated"))
     updated = store.put(dataclasses.replace(task, **changes))
     emit_json(_task_dict(updated)) if as_json else log.success(f"Updated task {task_id}.")
+
+
+def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, actor: str | None) -> None:
+    target = roadmap_status_for_task_status(status)
+    if target is None or not task.roadmap_refs:
+        return
+    roadmap = store.load()
+    wanted = set(task.roadmap_refs)
+    changed = False
+    items = []
+    for item in roadmap.items:
+        if item.id not in wanted or item.status == target:
+            items.append(item)
+            continue
+        store.append_history(
+            item.id,
+            history_entry(
+                actor,
+                "status",
+                before=item.status.value,
+                after=target.value,
+                note=f"synced from task {task.id}",
+            ),
+        )
+        store.add_comment(
+            item.id,
+            f"**Status synced from task `{task.id}`.**\n\n"
+            f"- Task status changed to `{status.value}`.\n"
+            f"- Roadmap item moved from `{item.status.value}` to `{target.value}`.",
+            actor,
+        )
+        items.append(dataclasses.replace(
+            item,
+            status=target,
+            metadata={**item.metadata, "updated_at": utc_now().isoformat()},
+        ))
+        changed = True
+    if changed:
+        store.save(Roadmap(items=tuple(items), updated_at=utc_now()))
 
 
 @app.command("add")
@@ -132,8 +190,7 @@ def add_task(
     author: str | None = typer.Option(None, "--author", help="Who is adding the task (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
-    """Add a new task (safe YAML write). Human-only."""
-    refuse_agents("add a task")
+    """Add a new task (safe YAML write). Open to agents and humans alike."""
     store = _store(ctx)
     actor = author or agent_author("human")
     project_tuple = tuple(projects) if projects else (project,)
@@ -178,7 +235,6 @@ def comment_task(
 
 @app.command("remove")
 def remove_task(ctx: typer.Context, task_id: str = typer.Argument(...)) -> None:
-    """Remove a task (deletes its YAML file). Human-only."""
-    refuse_agents("remove a task")
+    """Remove a task (deletes its YAML file). Open to agents and humans alike."""
     _store(ctx).delete(task_id)
     log.success(f"Removed task {task_id}.")

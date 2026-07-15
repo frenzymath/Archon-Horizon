@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deploy-1.outputs.page_url || steps.deploy-2.outputs.page_url || steps.deploy-3.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,13 +61,41 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      # Upload the already-built dashboard exactly once. The artifact is always
+      # named "github-pages"; a manual re-run would upload a SECOND artifact onto
+      # the same run and make deploy-pages fail with "Multiple artifacts named
+      # github-pages". Don't re-run this workflow -- the deploy step below already
+      # retries transient failures, and the next push redeploys anyway.
       - name: Upload dashboard
         uses: actions/upload-pages-artifact@v3
         with:
           path: __UPLOAD_PATH__
 
+      # GitHub's Pages backend intermittently returns "Deployment failed, try
+      # again later." for a perfectly valid upload while Pages is fully
+      # operational. Retry up to three times within the same run so a transient
+      # blip doesn't leave the site stale until the next push. Only the last
+      # attempt is allowed to fail the job.
       - name: Deploy to GitHub Pages
-        id: deployment
+        id: deploy-1
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Wait before deploy retry 2
+        if: steps.deploy-1.outcome == 'failure'
+        run: sleep 45
+      - name: Deploy to GitHub Pages (retry 2)
+        id: deploy-2
+        if: steps.deploy-1.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Wait before deploy retry 3
+        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
+        run: sleep 90
+      - name: Deploy to GitHub Pages (retry 3)
+        id: deploy-3
+        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
         uses: actions/deploy-pages@v4
 """
 

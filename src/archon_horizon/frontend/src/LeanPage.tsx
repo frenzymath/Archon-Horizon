@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getSourceFiles, getSourceFile, getGitLog, type SourceFile } from './api';
-import type { GitCommit } from './hooks/useGitLog';
+import { getSourceFiles, getSourceFile, type SourceFile } from './api';
 import LeanCodeLine from './components/LeanCodeLine';
-import { GitTimeline } from './components/GitTimeline';
 import ProjectPicker from './components/ProjectPicker';
+import { useProgressiveCount } from './hooks/useProgressiveCount';
 import { highlightLeanLines } from './utils/leanHighlight';
 import { scanLinesForSorry } from './utils/sorryScanner';
 import { extractLeanStructureFromLines, groupStructureCounts } from './utils/leanStructure';
@@ -99,6 +98,20 @@ function stripComments(src: string): string {
 
 const KIND_ORDER = ['theorem', 'lemma', 'def', 'instance', 'structure', 'class', 'inductive', 'abbrev', 'example', 'sorry'];
 
+// Memoized so streaming the file in progressively (see useProgressiveCount)
+// doesn't re-render the lines already on screen — token arrays keep a stable
+// identity, so growing the visible count stays O(n) overall.
+const LeanSourceRow = React.memo(function LeanSourceRow({
+  n, text, tokens, isSorry, flash,
+}: { n: number; text: string; tokens: any; isSorry: boolean; flash: boolean }) {
+  return (
+    <div id={`lean-line-${n}`} className={`lean-source-line${isSorry ? ' has-sorry' : ''}${flash ? ' flash' : ''}`}>
+      <span className="lean-gutter">{n}</span>
+      <span className="lean-line-text"><LeanCodeLine text={text} tokens={tokens} /></span>
+    </div>
+  );
+});
+
 export default function LeanPage({ state }: { state: any }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -112,20 +125,7 @@ export default function LeanPage({ state }: { state: any }) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [stripped, setStripped] = useState(false);
-  const [commits, setCommits] = useState<GitCommit[]>([]);
   const [flash, setFlash] = useState<number | null>(null);
-
-  const gitRef = useRef<HTMLDivElement>(null);
-  const [gitW, setGitW] = useState(800);
-  const [gitH, setGitH] = useState(64); // minimal by default; drag the handle to grow
-  const onGitDrag = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const start = { y: e.clientY, h: gitH };
-    const onMove = (ev: MouseEvent) => setGitH(Math.max(40, Math.min(560, start.h - (ev.clientY - start.y))));
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
 
   useEffect(() => {
     if (requestedProject && projects.includes(requestedProject) && project !== requestedProject) {
@@ -135,10 +135,9 @@ export default function LeanPage({ state }: { state: any }) {
   }, [projects.join('|'), requestedProject, project]);
 
   useEffect(() => {
-    if (!project) { setFiles([]); setCommits([]); return; }
+    if (!project) { setFiles([]); return; }
     setSelected(requestedFile); setContent(null);
     getSourceFiles(project).then((r) => setFiles(r.files ?? [])).catch(() => setFiles([]));
-    getGitLog(project).then((r) => setCommits(r.commits ?? [])).catch(() => setCommits([]));
   }, [project, requestedFile]);
 
   useEffect(() => {
@@ -149,14 +148,6 @@ export default function LeanPage({ state }: { state: any }) {
       .catch(() => setContent('-- failed to load file'))
       .finally(() => setLoading(false));
   }, [project, selected]);
-
-  useEffect(() => {
-    const el = gitRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setGitW(el.clientWidth));
-    ro.observe(el); setGitW(el.clientWidth);
-    return () => ro.disconnect();
-  }, [project]);
 
   const tree = useMemo(() => buildTree(files), [files]);
   const rawLines = useMemo(() => (content ?? '').split('\n'), [content]);
@@ -203,6 +194,15 @@ export default function LeanPage({ state }: { state: any }) {
     return out;
   }, [state.blueprints, project, selected]);
   const counts = useMemo(() => groupStructureCounts(outline), [outline]);
+  // Progressive rendering: show the first lines immediately and stream the rest
+  // in over the next frames, so a large file's syntax-highlighted view doesn't
+  // block until every line is built. Reset when the file / strip toggle changes.
+  const shownRows = useProgressiveCount(rows.length, {
+    resetKey: `${project}|${selected}|${stripped}`,
+    initial: 200,
+    step: 400,
+  });
+  const rowsRemaining = rows.length - shownRows;
   const loc = content === null ? 0 : rawLines.length;
   const locCode = useMemo(() => strippedLines.filter((l) => l.trim() !== '').length, [strippedLines]);
   const totals = useMemo(() => ({
@@ -219,14 +219,22 @@ export default function LeanPage({ state }: { state: any }) {
     window.setTimeout(() => setFlash((f) => (f === line ? null : f)), 1200);
   };
 
+  const jumpedDecl = useRef<string>('');
+  useEffect(() => { jumpedDecl.current = ''; }, [requestedDecl, selected]);
   useEffect(() => {
     if (!requestedDecl || !selected || content === null) return;
+    if (jumpedDecl.current === requestedDecl) return;
     const short = requestedDecl.split('.').pop();
     const match = outline.find((item) => item.label === requestedDecl || item.label === short || requestedDecl.endsWith(`.${item.label}`));
     if (!match) return;
+    // The target line may not be painted yet while the file streams in
+    // progressively; keep waiting (this effect re-runs as shownRows grows) until
+    // its row exists, then jump exactly once.
+    if (!document.getElementById(`lean-line-${match.line}`)) return;
+    jumpedDecl.current = requestedDecl;
     const tid = window.setTimeout(() => jumpTo(match.line), 0);
     return () => window.clearTimeout(tid);
-  }, [requestedDecl, selected, content, outline]);
+  }, [requestedDecl, selected, content, outline, shownRows]);
 
   const openBlueprint = (nodeId: string) => {
     navigate(`/blueprint?project=${encodeURIComponent(project)}&focus=${encodeURIComponent(nodeId)}`);
@@ -279,15 +287,22 @@ export default function LeanPage({ state }: { state: any }) {
                 ) : (
                   <pre className="lean-source">
                     <code>
-                      {rows.map((row, i) => {
-                        const isSorry = sorryLines.has(row.n);
-                        return (
-                          <div key={row.n} id={`lean-line-${row.n}`} className={`lean-source-line${isSorry ? ' has-sorry' : ''}${flash === row.n ? ' flash' : ''}`}>
-                            <span className="lean-gutter">{row.n}</span>
-                            <span className="lean-line-text"><LeanCodeLine text={row.text} tokens={highlighted[i]} /></span>
-                          </div>
-                        );
-                      })}
+                      {rows.slice(0, shownRows).map((row, i) => (
+                        <LeanSourceRow
+                          key={row.n}
+                          n={row.n}
+                          text={row.text}
+                          tokens={highlighted[i]}
+                          isSorry={sorryLines.has(row.n)}
+                          flash={flash === row.n}
+                        />
+                      ))}
+                      {rowsRemaining > 0 && (
+                        <div className="lean-source-line">
+                          <span className="lean-gutter" />
+                          <span className="lean-line-text" style={{ opacity: 0.55 }}>… rendering {rowsRemaining} more line{rowsRemaining === 1 ? '' : 's'}</span>
+                        </div>
+                      )}
                     </code>
                   </pre>
                 )}
@@ -329,15 +344,6 @@ export default function LeanPage({ state }: { state: any }) {
                   })
                 )}
               </div>
-            </div>
-          </div>
-
-          {/* Git history pinned at the bottom — resizable, minimal by default */}
-          <div className="lean-git-resize" onMouseDown={onGitDrag} title="Drag to resize" />
-          <div className="lean-git" style={{ height: gitH }}>
-            <div className="lean-git-head">Git history{project ? ` · ${project}` : ''} · {commits.length} commit{commits.length === 1 ? '' : 's'}</div>
-            <div ref={gitRef} className="lean-git-scroll">
-              <GitTimeline commits={commits} selectedSha="" onSelect={() => {}} containerW={gitW} />
             </div>
           </div>
         </>

@@ -38,7 +38,14 @@ export function installStaticFetch(): void {
         // the hash and never change the pathname.)
         const p = window.location.pathname;
         const basePath = p.endsWith('/') ? p : p.slice(0, p.lastIndexOf('/') + 1);
-        return orig(`${basePath}data/api/${key}.json`, init);
+        // The exported JSON is content-stable by URL (the filename hashes the
+        // API *path*, not the payload) and GitHub Pages serves everything with
+        // Cache-Control: max-age=600. Without an override the browser would keep
+        // showing up-to-10-min-old data, and a hard reload wouldn't fix it since
+        // it doesn't reliably bypass cache for JS-issued fetch() (esp. Safari).
+        // 'no-cache' forces a conditional request every load: cheap 304 when the
+        // data is unchanged, fresh 200 when a new snapshot was published.
+        return orig(`${basePath}data/api/${key}.json`, { ...init, cache: 'no-cache' });
       }
     } catch {
       /* fall through */

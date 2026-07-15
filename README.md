@@ -97,7 +97,7 @@ horizon dashboard             # live progress at http://127.0.0.1:8765
 ```
 
 > [!TIP]
-> Keep Horizon current with `horizon update` (upgrade the package) followed by `horizon init --reinit` (refresh managed subagents and skills inside a workspace).
+> Keep Horizon current with `horizon update` (upgrade the package) followed by `horizon init --update` (refresh managed subagents and skills inside a workspace).
 
 ---
 
@@ -105,7 +105,7 @@ horizon dashboard             # live progress at http://127.0.0.1:8765
 
 Every command supports `--json` for machine-readable output on `stdout`. Run `horizon -h` for all commands, and `horizon <command> -h` for command-specific flags.
 
-- `horizon init` — scaffold a workspace or refresh managed files (`--reinit`).
+- `horizon init` — scaffold a workspace or refresh managed files (`--update`).
 - `horizon run <target>` — run autoformalization on a task or project, everything (`*`), or a single role (`ground` / `horizon`, optionally `--backend interactive`).
 - `horizon discuss` — open an interactive session to talk with the workspace: status, recent runs, and edits to projects/tasks/inbox/roadmap on request.
 - `horizon dashboard` — live server, or static HTML export (`--static`).

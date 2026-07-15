@@ -114,14 +114,18 @@ class ReferenceTranscriptionConfig:
 class GithubConfig:
     enabled: bool = False
     repo: str | None = None
-    import_policy: str = "labeled-only"
+    # Import ALL issues/PRs by default so a freshly-opened, unlabelled issue is
+    # visible in the dashboard for a human to triage/label — otherwise
+    # "labeled-only" hides exactly the items that still need a label
+    # (chicken-and-egg). Set import_policy explicitly to restrict.
+    import_policy: str = "all"
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "GithubConfig":
         return cls(
             enabled=bool(data.get("enabled", False)),
             repo=data.get("repo"),
-            import_policy=data.get("import_policy", "labeled-only"),
+            import_policy=data.get("import_policy", "all"),
         )
 
 
@@ -232,16 +236,43 @@ class ProjectConfig:
         )
 
 
+_VALID_ROLES = ("ground", "horizon")
+
+
+def _parse_roles(raw: Any) -> tuple[str, ...]:
+    """Normalize ``workspace.roles`` to an ordered, de-duplicated subset of
+    ``{ground, horizon}``. Accepts a list or a single string; anything empty or
+    unrecognized falls back to both roles (the default alternation)."""
+    if raw is None:
+        return _VALID_ROLES
+    values = [raw] if isinstance(raw, str) else list(raw)
+    seen: list[str] = []
+    for value in values:
+        role = str(value).strip().lower()
+        if role in _VALID_ROLES and role not in seen:
+            seen.append(role)
+    return tuple(seen) if seen else _VALID_ROLES
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceConfig:
     name: str
     state_dir: str = ".archon-horizon"
     rounds: int = 1
-    # The run is a flat ground/horizon alternation. By default it opens and
-    # closes on ground; set either to "horizon" to skip the opening / final
-    # reconcile ground so the run starts and/or ends on horizon instead.
-    start_with: str = "ground"
+    # The run is a flat ground/horizon alternation. By default it opens on
+    # horizon and closes on ground — each round is one Horizon step followed by a
+    # reconcile Ground, giving H-G-H-G-…-G with no upfront planning Ground. Set
+    # ``start_with: ground`` to prepend an opening planning Ground (useful for
+    # unfocused runs that need work selected first), or ``end_with: horizon`` to
+    # drop the final reconcile Ground.
+    start_with: str = "horizon"
     end_with: str = "ground"
+    # Which agent roles the run loop drives. Default is both, giving the normal
+    # ground/horizon alternation. ``roles: [horizon]`` runs a Horizon-only loop
+    # (every round is a Horizon step, no Ground); ``roles: [ground]`` runs a
+    # Ground-only loop (every round is one Ground session, no Horizon). An empty or
+    # unrecognized value falls back to both.
+    roles: tuple[str, ...] = ("ground", "horizon")
     ground_harness: str | None = None
     horizon_harness: str | None = None
     ground_subagents: tuple[str, ...] | None = None
@@ -269,8 +300,9 @@ class WorkspaceConfig:
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
-            start_with=str(ws.get("start_with", "ground")).lower(),
+            start_with=str(ws.get("start_with", "horizon")).lower(),
             end_with=str(ws.get("end_with", "ground")).lower(),
+            roles=_parse_roles(ws.get("roles")),
             ground_harness=ws.get("ground_agent", {}).get("harness"),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
             ground_subagents=tuple(subagents) if subagents is not None else None,
