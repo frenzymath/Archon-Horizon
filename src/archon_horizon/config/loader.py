@@ -235,4 +235,5 @@ def build_orchestrator(
         freeze=freeze,
         start_with=cfg.start_with,
         end_with=cfg.end_with,
+        roles=cfg.roles,
     )

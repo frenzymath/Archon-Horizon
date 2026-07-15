@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getProjects, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, searchDeclarations, getBlueprintChapters, type ProjectStat, type SessionChange, type SessionChangeFile, type RunChanges, type FileDiff } from './api';
+import { editInbox, editRoadmap, editTask, getState, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type RunChanges, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
 import BlueprintRendered from './components/BlueprintRendered';
 import LeanCodeLine from './components/LeanCodeLine';
+import { useProgressiveCount } from './hooks/useProgressiveCount';
 import BlueprintPage from './BlueprintPage';
 import DagPage from './DagPage';
 import LeanPage from './LeanPage';
@@ -18,9 +19,9 @@ const ARCHON_PENDING = 'not-ready';
 const ARCHON_REJECTED = 'rejected';
 const INBOX_KIND_OPTIONS = ['hint', 'issue', 'protection', 'info', 'memory'];
 const INBOX_PROVIDER_OPTIONS = ['local', 'github'];
-const INBOX_STATUS_OPTIONS = ['open', 'completed', 'archived'];
+const INBOX_STATUS_OPTIONS = ['open', 'closed', 'archived'];
 // Archived items are soft-deleted: hidden until the user selects the filter.
-const INBOX_STATUS_DEFAULT = ['open', 'completed'];
+const INBOX_STATUS_DEFAULT = ['open', 'closed'];
 const INBOX_GATE_OPTIONS = ['accept', 'pending', 'reject', 'clear'];
 const TASK_STATUS_OPTIONS = ['queued', 'running', 'blocked', 'done', 'failed', 'cancelled'];
 const TASK_PRIORITY_OPTIONS = ['urgent', 'high', 'normal', 'low'];
@@ -120,11 +121,6 @@ export function App() {
         <h1>Archon Horizon</h1>
         <span className="version-badge" title={`Horizon dashboard v${APP_VERSION}`}>v{APP_VERSION}</span>
         <span className="project-badge" title={state.workspace_root || state.workspace}>{state.workspace}</span>
-        {state.config_dir && (
-          <span className="project-badge config-badge" title={`Config / state directory: ${state.config_dir}`}>
-            {state.config_dir}
-          </span>
-        )}
         {STATIC && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
         <nav className="header-nav" aria-label="Dashboard">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
@@ -206,11 +202,58 @@ function Overview({ state }: PageProps) {
 
 function ProjectsPanel() {
   const [data, setData] = useState<{ projects: ProjectStat[]; totals: Omit<ProjectStat, 'name'> } | null>(null);
+  const [selected, setSelected] = useState('');
+  const [historyLimit, setHistoryLimit] = useState(10);
+  const [historyByProject, setHistoryByProject] = useState<Record<string, ProjectTrendPoint[]>>({});
+  const [historyLoading, setHistoryLoading] = useState('');
   useEffect(() => { getProjects().then(setData).catch(() => setData(null)); }, []);
-  if (!data || data.projects.length === 0) return null;
+  useEffect(() => {
+    if (!data?.projects.length) return;
+    if (!selected || !data.projects.some((p) => p.name === selected)) {
+      setSelected(data.projects[0].name);
+    }
+  }, [data, selected]);
+  useEffect(() => {
+    const key = `${selected}:${historyLimit}`;
+    if (!selected || historyByProject[key]) return;
+    let cancelled = false;
+    setHistoryLoading(key);
+    getProjectHistory(selected, historyLimit)
+      .then((result) => {
+        if (cancelled) return;
+        setHistoryByProject((prev) => ({ ...prev, [key]: result.history ?? [] }));
+      })
+      .catch(() => {
+        if (!cancelled) setHistoryByProject((prev) => ({ ...prev, [key]: [] }));
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading((current) => current === key ? '' : current);
+      });
+    return () => { cancelled = true; };
+  }, [selected, historyLimit, historyByProject]);
+  if (!data) {
+    return (
+      <Panel title="Workspace" subtitle="Per-project Lean size, open sorries, and blueprint coverage">
+        <div className="project-trend-empty">Loading workspace metrics...</div>
+      </Panel>
+    );
+  }
+  if (data.projects.length === 0) return null;
+  const selectedProject = data.projects.find((p) => p.name === selected) ?? data.projects[0];
+  const historyKey = `${selectedProject.name}:${historyLimit}`;
+  const selectedHistory = historyByProject[historyKey] ?? [];
   const fmt = (n: number) => n.toLocaleString();
   return (
     <Panel title="Workspace" subtitle="Per-project Lean size, open sorries, and blueprint coverage">
+      <ProjectTrendChart
+        projects={data.projects}
+        selected={selectedProject.name}
+        onSelect={setSelected}
+        limit={historyLimit}
+        onLimitChange={setHistoryLimit}
+        points={selectedHistory}
+        loading={historyLoading === historyKey && !historyByProject[historyKey]}
+      />
       <div className="table-wrap">
         <table className="projects-table">
           <thead>
@@ -236,19 +279,113 @@ function ProjectsPanel() {
                 <td><BlueprintProgress ok={p.blueprint_leanok} total={p.blueprint_nodes} /></td>
               </tr>
             ))}
-            <tr className="projects-total">
-              <td>Total</td>
-              <td>{fmt(data.totals.lean_files)}</td>
-              <td>{fmt(data.totals.loc)}</td>
-              <td>{fmt(data.totals.loc_code)}</td>
-              <td>{data.totals.sorries > 0 ? <span className="sorry-pill">{data.totals.sorries}</span> : <span className="ok-pill">0</span>}</td>
-              <td><BlueprintProgress ok={data.totals.blueprint_leanok} total={data.totals.blueprint_nodes} /></td>
-            </tr>
           </tbody>
         </table>
       </div>
     </Panel>
   );
+}
+
+function ProjectTrendChart({
+  projects,
+  selected,
+  onSelect,
+  limit,
+  onLimitChange,
+  points,
+  loading,
+}: {
+  projects: ProjectStat[];
+  selected: string;
+  onSelect: (name: string) => void;
+  limit: number;
+  onLimitChange: (limit: number) => void;
+  points: ProjectTrendPoint[];
+  loading: boolean;
+}) {
+  const project = projects.find((p) => p.name === selected) ?? projects[0];
+  const datedPoints = points.filter((p) => p.date);
+  const latest = datedPoints[datedPoints.length - 1];
+  return (
+    <div className="project-trend">
+      <div className="project-trend-toolbar">
+        <select value={project?.name ?? ''} onChange={(e) => onSelect(e.target.value)} aria-label="Project trend">
+          {projects.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+        </select>
+        <div className="project-trend-limit" role="group" aria-label="Commit history length">
+          {[10, 25, 50].map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={value === limit ? 'active' : ''}
+              onClick={() => onLimitChange(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+        <div className="project-trend-stats">
+          <span>{(latest?.sorries ?? project?.sorries ?? 0).toLocaleString()} open sorries</span>
+          {datedPoints.length > 0 && <span>{datedPoints.length.toLocaleString()} commits sampled</span>}
+          {loading && <span>loading history...</span>}
+        </div>
+      </div>
+      {datedPoints.length >= 2 ? (
+        <SorryTrendSvg points={datedPoints} />
+      ) : (
+        <div className="project-trend-empty">{loading ? 'Loading sorry history...' : 'No commit history for this project yet.'}</div>
+      )}
+    </div>
+  );
+}
+
+function SorryTrendSvg({ points }: { points: ProjectTrendPoint[] }) {
+  const w = 760;
+  const h = 210;
+  const pad = { left: 42, right: 18, top: 18, bottom: 34 };
+  const times = points.map((p) => Date.parse(p.date)).filter((n) => Number.isFinite(n));
+  const minT = Math.min(...times);
+  const maxT = Math.max(...times);
+  const sorries = points.map((p) => p.sorries);
+  const maxS = Math.max(1, ...sorries);
+  const x = (p: ProjectTrendPoint, i: number) => {
+    const t = Date.parse(p.date);
+    if (!Number.isFinite(t) || minT === maxT) {
+      return pad.left + (i / Math.max(1, points.length - 1)) * (w - pad.left - pad.right);
+    }
+    return pad.left + ((t - minT) / (maxT - minT)) * (w - pad.left - pad.right);
+  };
+  const ySorry = (value: number) => pad.top + (1 - value / maxS) * (h - pad.top - pad.bottom);
+  const barBase = h - pad.bottom;
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p, i).toFixed(1)} ${ySorry(p.sorries).toFixed(1)}`).join(' ');
+  const firstDate = formatShortDate(points[0]?.date);
+  const lastDate = formatShortDate(points[points.length - 1]?.date);
+  return (
+    <svg className="project-trend-chart" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Open sorries over commit history">
+      <line className="trend-axis" x1={pad.left} y1={barBase} x2={w - pad.right} y2={barBase} />
+      <line className="trend-axis" x1={pad.left} y1={pad.top} x2={pad.left} y2={barBase} />
+      {[0, 0.5, 1].map((n) => {
+        const y = ySorry(maxS * n);
+        return <line key={n} className="trend-grid" x1={pad.left} y1={y} x2={w - pad.right} y2={y} />;
+      })}
+      <path className="trend-sorry-line" d={path} />
+      {points.map((p, i) => (
+        <circle key={p.sha} className="trend-sorry-node" cx={x(p, i)} cy={ySorry(p.sorries)} r={4}>
+          <title>{formatDateTime(p.date)} · {p.sorries.toLocaleString()} open sorries · {p.short_sha} · {p.subject}</title>
+        </circle>
+      ))}
+      <text className="trend-label" x={pad.left} y={13}>{maxS.toLocaleString()} sorry</text>
+      <text className="trend-label" x={pad.left} y={h - 10}>{firstDate}</text>
+      <text className="trend-label trend-label-end" x={w - pad.right} y={h - 10}>{lastDate}</text>
+    </svg>
+  );
+}
+
+function formatShortDate(value: string | undefined) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return '';
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 function BlueprintProgress({ ok, total }: { ok: number; total: number }) {
@@ -261,17 +398,17 @@ function BlueprintProgress({ ok, total }: { ok: number; total: number }) {
   );
 }
 
-// Shared status → colour for roadmap + task chips.
-function statusColor(status: string) {
-  switch (status) {
-    case 'active': case 'running': return 'var(--blue)';
-    case 'pending': case 'queued': return 'var(--orange)';
-    case 'blocked': return 'var(--red)';
-    case 'done': return 'var(--green)';
-    case 'failed': case 'rejected': case 'cancelled': return 'var(--red)';
-    case 'timed_out': case 'throttled': return 'var(--orange)';
-    default: return 'var(--text-muted)';
+function chipTone(value: string) {
+  const normalized = filterToken(value);
+  if (INBOX_KIND_OPTIONS.includes(value)) return `kind-${normalized}`;
+  if (SEARCH_KINDS.includes(value)) return `kind-${normalized}`;
+  if (INBOX_PROVIDER_OPTIONS.includes(value)) return `provider-${normalized}`;
+  if (INBOX_GATE_OPTIONS.includes(value)) return `gate-${normalized}`;
+  if (TASK_PRIORITY_OPTIONS.includes(value)) return `priority-${normalized}`;
+  if ([...TASK_STATUS_OPTIONS, ...ROADMAP_STATUS_OPTIONS, ...INBOX_STATUS_OPTIONS, 'completed', 'closed'].includes(value)) {
+    return `state-${normalized}`;
   }
+  return 'project';
 }
 
 // Pick one or more projects: a checkbox per known project, plus free-text add for
@@ -283,7 +420,7 @@ function MultiProjectSelect({ value, onChange, projects }: { value: string[]; on
   return (
     <div className="project-multiselect">
       {[...projects, ...extras].map((p) => (
-        <label key={p} className={`project-chip ${value.includes(p) ? 'on' : ''}`}>
+        <label key={p} className={`project-chip tag-chip tag-project ${value.includes(p) ? 'on' : ''}`}>
           <input type="checkbox" checked={value.includes(p)} onChange={() => toggle(p)} />
           {p}
         </label>
@@ -580,7 +717,7 @@ function TaskCard({ task, runAction, projects = [], roadmapIds = [], focused = f
       <summary style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <div className="task-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
           {!STATIC && runAction ? (
-            <select className="chip-select state" style={{ color: statusColor(status), borderColor: statusColor(status) }} value={status} onChange={(e) => updateStatus(e.target.value)}>
+            <select className={`chip-select state ${status}`} value={status} onChange={(e) => updateStatus(e.target.value)}>
               <option value="queued">queued</option>
               <option value="running">running</option>
               <option value="blocked">blocked</option>
@@ -735,7 +872,14 @@ function ChipMultiSelect({ options, selected, onToggle, label }: { options: stri
   return (
     <div className="search-facet" aria-label={label}>
       {options.map((opt) => (
-        <button key={opt} type="button" className={`search-facet-chip ${selected.has(opt) ? 'on' : ''}`} onClick={() => onToggle(opt)}>{filterLabel(opt)}</button>
+        <button
+          key={opt}
+          type="button"
+          className={`search-facet-chip tag-chip tag-${chipTone(opt)} ${selected.has(opt) ? 'on' : ''}`}
+          onClick={() => onToggle(opt)}
+        >
+          {filterLabel(opt)}
+        </button>
       ))}
     </div>
   );
@@ -848,6 +992,44 @@ export function Panel({ title, subtitle, to, children }: { title: string; subtit
   );
 }
 
+// Hierarchy is stored in item.metadata (parent id and/or a depth level), mirroring
+// core/roadmap.py's ordered_tree — so the dashboard renders the same outline the
+// CLI does: parents above their sub-items, ordered by id, one row per item.
+function roadmapDepth(item: any): number {
+  const d = Number(item?.metadata?.depth);
+  return Number.isFinite(d) && d > 0 ? Math.floor(d) : 0;
+}
+function roadmapParent(item: any): string {
+  const p = item?.metadata?.parent;
+  return typeof p === 'string' ? p.trim() : '';
+}
+function orderedRoadmapTree(items: any[]): Array<{ item: any; depth: number }> {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const children = new Map<string, any[]>();
+  const roots: any[] = [];
+  for (const it of items) {
+    const parent = roadmapParent(it);
+    if (parent && byId.has(parent) && parent !== it.id) {
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent)!.push(it);
+    } else roots.push(it);
+  }
+  const byId3 = (a: any, b: any) => String(a.id).localeCompare(String(b.id));
+  for (const kids of children.values()) kids.sort(byId3);
+  roots.sort(byId3);
+  const out: Array<{ item: any; depth: number }> = [];
+  const seen = new Set<string>();
+  const walk = (node: any, depth: number) => {
+    if (seen.has(node.id)) return;
+    seen.add(node.id);
+    out.push({ item: node, depth });
+    for (const child of children.get(node.id) ?? []) walk(child, depth + 1);
+  };
+  for (const root of roots) walk(root, roadmapDepth(root));
+  for (const it of items) if (!seen.has(it.id)) { seen.add(it.id); out.push({ item: it, depth: roadmapDepth(it) }); }
+  return out;
+}
+
 function RoadmapPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const items = state.roadmap?.items ?? [];
@@ -888,6 +1070,8 @@ function RoadmapPage({ state, reload }: PageProps) {
   });
   // An item shared across projects appears under each of its project groups.
   const filteredProjects = [...new Set(filteredItems.flatMap(itemProjects))].sort();
+  // Tree order (parents above sub-items) computed once over the visible items.
+  const orderedFiltered = orderedRoadmapTree(filteredItems);
 
   return (
     <div className="page">
@@ -895,7 +1079,7 @@ function RoadmapPage({ state, reload }: PageProps) {
         {!STATIC && (
           <details className="local-create">
             <summary>New roadmap item</summary>
-            <RoadmapComposer runAction={runAction} projects={allProjects} />
+            <RoadmapComposer runAction={runAction} projects={allProjects} parentOptions={items.map((i: any) => i.id)} />
           </details>
         )}
         <div className="filter-stack">
@@ -914,8 +1098,10 @@ function RoadmapPage({ state, reload }: PageProps) {
             <div key={proj as string} className="roadmap-project-group">
               <h3>{proj}</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {filteredItems.filter((i: any) => itemProjects(i).includes(proj)).map((item: any) => (
-                  <RoadmapItemCard key={item.id} item={item} runAction={runAction} projects={allProjects} />
+                {orderedFiltered.filter(({ item }) => itemProjects(item).includes(proj)).map(({ item, depth }) => (
+                  <div key={item.id} style={{ marginLeft: `${Math.min(depth, 6) * 1.5}rem` }}>
+                    <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                  </div>
                 ))}
               </div>
             </div>
@@ -927,11 +1113,12 @@ function RoadmapPage({ state, reload }: PageProps) {
   );
 }
 
-function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>, projects: string[] }) {
+function RoadmapComposer({ runAction, projects, parentOptions = [] }: { runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>, projects: string[], parentOptions?: string[] }) {
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
   const [selProjects, setSelProjects] = useState<string[]>([]);
   const [author, setAuthor] = useState('');
+  const [parent, setParent] = useState('');
   const [busy, setBusy] = useState(false);
 
   const submit = (event: React.FormEvent) => {
@@ -943,7 +1130,8 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
       title: title.trim(),
       summary: summary.trim(),
       projects: selProjects,
-      author: author.trim()
+      author: author.trim(),
+      ...(parent.trim() ? { parent: parent.trim() } : {})
     }, 'Roadmap item added.')
       .then((ok) => {
         if (!ok) return;
@@ -951,6 +1139,7 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
         setSummary('');
         setAuthor('');
         setSelProjects([]);
+        setParent('');
       })
       .finally(() => setBusy(false));
   };
@@ -961,6 +1150,8 @@ function RoadmapComposer({ runAction, projects }: { runAction: (payload: Record<
       <MultiProjectSelect value={selProjects} onChange={setSelProjects} projects={projects} />
       <input value={author} placeholder="Author (required)" onChange={(event) => setAuthor(event.target.value)} />
       <input value={title} placeholder="Title" onChange={(event) => setTitle(event.target.value)} />
+      <input value={parent} placeholder="Parent item id (optional — nests this under it)" list="roadmap-parent-ids" onChange={(event) => setParent(event.target.value)} />
+      <datalist id="roadmap-parent-ids">{parentOptions.map((id) => <option key={id} value={id} />)}</datalist>
       <textarea value={summary} placeholder="Summary (Markdown / LaTeX supported)" onChange={(event) => setSummary(event.target.value)} rows={3} />
       <button className="primary" type="submit" disabled={!title.trim() || !author.trim() || busy}>Add roadmap item</button>
     </form>
@@ -1008,7 +1199,7 @@ function InboxPage({ state, reload }: PageProps) {
 
   return (
     <div className="page">
-      <Panel title="Inbox" subtitle="Search, review, and close inbox items">
+      <Panel title="Inbox" subtitle="Search, review, and archive inbox items">
         <div className="inbox-topbar">
           <div className="inbox-searchbar">
             <input value={query} placeholder="Search inbox..." onChange={(event) => setQuery(event.target.value)} />
@@ -1131,6 +1322,7 @@ function InboxCard({
   const caps = new Set(provider.capabilities ?? []);
   const editable = !STATIC;
   const isGithub = item.provider === 'github';
+  const canArchive = item.provider === 'local';
   const sourceUrl = inboxSourceUrl(item, provider.repo ?? undefined);
   const comments = inboxComments(item);
   const gate = inboxGate(item.labels ?? []);
@@ -1138,7 +1330,7 @@ function InboxCard({
   const itemNumber = item.metadata?.number ? `#${item.metadata.number}` : item.id;
   const author = inboxAuthor(item);
   const agent = inboxAgent(item);
-  const itemStatus = (item.status === 'archived' || item.status === 'closed') ? 'completed' : item.status;
+  const itemStatus = normalizedInboxStatus(item.status);
   const [visibleKind, setVisibleKind] = useState(item.kind);
   const [visibleStatus, setVisibleStatus] = useState(itemStatus);
   const [visibleGate, setVisibleGate] = useState(gate);
@@ -1180,11 +1372,17 @@ function InboxCard({
   const updateStatus = (nextStatus: string) => {
     const previous = visibleStatus;
     setVisibleStatus(nextStatus);
+    const nextAction = nextStatus === 'open'
+      ? (isArchived ? 'unarchive' : 'reopen')
+      : nextStatus === 'archived' ? 'archive' : 'complete';
     runAction({
-      action: nextStatus === 'open' ? 'reopen' : 'complete',
+      action: nextAction,
       provider: item.provider,
       id: item.id,
-    }, nextStatus === 'open' ? 'Inbox item reopened.' : 'Inbox item closed.').then((ok) => {
+    }, nextStatus === 'open'
+      ? 'Inbox item reopened.'
+      : nextStatus === 'archived' ? 'Inbox item archived (hidden by default).' : 'Inbox item closed.'
+    ).then((ok) => {
       if (!ok) setVisibleStatus(previous);
     });
   };
@@ -1221,7 +1419,8 @@ function InboxCard({
             {editable && caps.has('status') ? (
               <select className={`chip-select state ${visibleStatus}`} value={visibleStatus} onClick={stop} onChange={(event) => updateStatus(event.target.value)} aria-label="State">
                 <option className="state-open" value="open">open</option>
-                <option className="state-completed" value="completed">closed</option>
+                <option className="state-closed" value="closed">closed</option>
+                {canArchive && <option className="state-archived" value="archived">archived</option>}
               </select>
             ) : <Status value={normalizedInboxStatus(item.status)} label={filterLabel(normalizedInboxStatus(item.status))} />}
             {editable && caps.has('label') ? (
@@ -1239,7 +1438,7 @@ function InboxCard({
             {comments.length > 0 && (
               <span className="comment-count" title={`${comments.length} comment${comments.length === 1 ? '' : 's'}`}>{comments.length}</span>
             )}
-            {editable && (
+            {editable && canArchive && (
               <button className="text-action" onClick={(event) => { stop(event); toggleArchive(); }} title={isArchived ? 'Restore from archive' : 'Archive (soft-delete: kept but hidden by default)'}>
                 {isArchived ? 'Unarchive' : 'Archive'}
               </button>
@@ -1498,17 +1697,22 @@ function historyOf(item: any): any[] {
 
 // One-line, human description of a history transition.
 function describeHistory(e: any): string {
-  const from = e.from ? `${e.from}` : '—';
+  const from = e.from ? historyValueLabel(e.from) : '—';
+  const to = e.to ? historyValueLabel(e.to) : '—';
   switch (e.field) {
     case 'created': return 'opened this item';
     case 'deleted': return 'deleted this item';
-    case 'status': return `status ${from} → ${e.to || '—'}`;
+    case 'status': return `status ${from} → ${to}`;
     case 'label': return `labels ${from} → ${e.to || '—'}`;
     case 'kind': return `type ${from} → ${e.to || '—'}`;
     case 'body': return e.note || 'edited the description';
     case 'edited': return e.note || 'edited fields';
     default: return e.note || e.field || 'changed';
   }
+}
+
+function historyValueLabel(value: unknown) {
+  return filterLabel(String(value || ''));
 }
 
 function HistoryRow({ entry }: { entry: any }) {
@@ -1627,6 +1831,11 @@ function Transcripts({ state }: { state?: any }) {
   const [now, setNow] = useState(() => Date.now());
   const selectedSession = useMemo(() => findSessionByRef(runs, selected), [runs, selected]);
   const selectedRun = useMemo(() => findRunBySessionRef(runs, selected), [runs, selected]);
+  const selectedNextStart = useMemo(
+    () => selectedRun && selectedSession ? nextSessionStart(selectedRun.sessions ?? [], selectedSession) : undefined,
+    [selectedRun, selectedSession],
+  );
+  const activeTickSession = useMemo(() => activeRunSessionKey(selectedRun), [selectedRun]);
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
@@ -1658,7 +1867,7 @@ function Transcripts({ state }: { state?: any }) {
     if (!selectedRunId || !sessionRunning) { setWorkingChange(null); return; }
     let cancelled = false;
     const load = () => {
-      getWorkingChanges(selectedRunId)
+      getWorkingChanges(selectedRunId, selectedSession?.session)
         .then((c) => { if (!cancelled) setWorkingChange({ ...c, session: selectedSession?.session }); })
         .catch(() => { if (!cancelled) setWorkingChange(null); });
     };
@@ -1723,6 +1932,8 @@ function Transcripts({ state }: { state?: any }) {
         session={selectedSession}
         change={sessionChange}
         changesRunId={selectedRunId}
+        nextSessionStart={selectedNextStart}
+        activeTickSession={activeTickSession}
       />
     </div>
   );
@@ -1940,9 +2151,9 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree }
   );
 }
 
-// Deterministic per-session change view: what the session's ledger commit
-// changed, per file (LOC before→after, sorries, clickable diff), read straight
-// from git — not an AI report. Lean and blueprint files get their own tabs.
+// Deterministic per-session change view: agent sessions show only files from
+// agent-authored semantic commits; system/integration commits remain visible as
+// ledger metadata. Lean and blueprint files get their own tabs.
 const EMPTY_CHANGE_ROLLUP = {
   files: 0,
   add: 0,
@@ -1972,11 +2183,19 @@ function changeRollup(change: SessionChange, key: 'lean' | 'blueprint') {
 
 // One-line caveat about how faithfully the diff attributes files to this session.
 function attributionNote(change: SessionChange): string {
-  if (change.worktree) return 'Live working-tree view — current uncommitted changes vs the run\'s last committed session.';
-  // Committed sessions diff against the commit's git parent (the ledger state
-  // right before it) — exactly what that commit changed. Still approximate
-  // because the ledger commits the whole scoped tree.
-  return 'This is what the session\'s commit changed vs the previous ledger commit. Attribution is approximate: a session commits its whole scoped tree, so a file here isn\'t proof this session authored it (concurrent tasks, manual edits, or commit order can shift it).';
+  if (change.worktree) {
+    const excluded = change.excluded_count ? ` Pre-existing dirty files excluded: ${change.excluded_count}.` : '';
+    return `Live working-tree view: current uncommitted changes vs this run's baseline or last committed session.${excluded}`;
+  }
+  if (change.change_source === 'agent-commits') return 'Shows only files from this session\'s agent-authored semantic commits. Deterministic integration commits are listed separately and do not add files here.';
+  if (change.change_source === 'no-agent-commits') return 'No agent-authored semantic commits were recorded for this session; deterministic integration commits are listed separately.';
+  if (change.change_source === 'deterministic-commits') return 'System view: deterministic ledger commits for this session.';
+  return 'Fallback view from the integration ledger; commit provenance was incomplete for this older session.';
+}
+
+function attributionWarning(change: SessionChange): string {
+  const detail = attributionNote(change);
+  return `Change attribution is approximate and may be inaccurate with parallel runs or workspaces that used older commit conventions. ${detail}`;
 }
 
 function SessionChanges({ change, runId }: {
@@ -1984,20 +2203,17 @@ function SessionChanges({ change, runId }: {
 }) {
   const [tab, setTab] = useState<'lean' | 'blueprint'>('lean');
   const [showComments, setShowComments] = useState(true);
-  const scopeFiles = change.scope_files ?? [];
-  const [onlyScoped, setOnlyScoped] = useState(scopeFiles.length > 0);
   const leanRoll = changeRollup(change, 'lean');
   const blueprintRoll = changeRollup(change, 'blueprint');
   const filesAll = change.files ?? [];
   const otherCount = change.other_count ?? 0;
+  const excludedCount = change.excluded_count ?? 0;
   const initial = Boolean(change.initial);
   const worktree = Boolean(change.worktree);
-  const inScope = (path: string) => scopeFiles.some((f) => path === f || path.endsWith(`/${f}`) || path.endsWith(f));
   const hasBlueprint = blueprintRoll.files > 0;
   const active = (!hasBlueprint || tab === 'lean') ? 'lean' : 'blueprint';
   const roll = active === 'lean' ? leanRoll : blueprintRoll;
-  let files = filesAll.filter((f) => f.category === active);
-  if (onlyScoped && scopeFiles.length > 0) files = files.filter((f) => inScope(f.path));
+  const files = filesAll.filter((f) => f.category === active);
 
   return (
     <details className="log-panel change-panel" open>
@@ -2038,19 +2254,21 @@ function SessionChanges({ change, runId }: {
         <label className="change-toggle" title="Count comment/blank lines in the LOC figures (raw churn always includes them)">
           <input type="checkbox" checked={showComments} onChange={(e) => setShowComments(e.target.checked)} /> count comments in LOC
         </label>
-        {scopeFiles.length > 0 && (
-          <label className="change-toggle" title={`Show only the files the task declared it would write:\n${scopeFiles.join('\n')}`}>
-            <input type="checkbox" checked={onlyScoped} onChange={(e) => setOnlyScoped(e.target.checked)} /> only expected files
-          </label>
-        )}
         {otherCount > 0 && (
           <span className="change-other muted" title="Shared workspace state committed alongside the code (events log, roadmap, config…); excluded from the code stats">
             +{otherCount} shared-state file{otherCount === 1 ? '' : 's'}
           </span>
         )}
+        {excludedCount > 0 && (
+          <span className="change-other muted" title="Files that were already dirty when this session started; excluded from this live attribution">
+            {excludedCount} pre-existing dirty file{excludedCount === 1 ? '' : 's'} excluded
+          </span>
+        )}
       </div>
 
-      {change.available && <p className="change-attr-note" title={attributionNote(change)}>ⓘ {attributionNote(change)}</p>}
+      <p className="change-attr-note warning" title={attributionWarning(change)}>
+        <strong>Warning:</strong> {attributionWarning(change)}
+      </p>
       {change.commits && change.commits.length > 0 && (
         <div className="change-commits">
           {change.commits.map((c) => (
@@ -2061,13 +2279,23 @@ function SessionChanges({ change, runId }: {
           ))}
         </div>
       )}
+      {change.system_commits && change.system_commits.length > 0 && (
+        <div className="change-commits system">
+          {change.system_commits.map((c) => (
+            <div key={c.sha} className="change-commit" title={c.sha}>
+              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
+              <span className="change-commit-msg">{c.kind ? `${c.kind}: ` : ''}{c.subject}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {initial && (
         <p className="change-initial-note">Initial snapshot — no prior commit to compare against, so these are the current contents.</p>
       )}
 
       {files.length === 0 ? (
-        <p className="empty">{change.available
-          ? (onlyScoped && scopeFiles.length > 0 ? `No expected ${active} files changed (toggle off "only expected files" to see all).` : `No ${active} files changed in this session.`)
+        <p className="empty change-empty">{change.available
+          ? `No ${active} files changed in this session.`
           : 'No diff to show.'}</p>
       ) : (
         <table className="change-table">
@@ -2100,6 +2328,8 @@ function TranscriptViewer({
   session,
   change,
   changesRunId,
+  nextSessionStart,
+  activeTickSession,
 }: {
   events: any[] | null;
   harnesses?: Record<string, any>;
@@ -2110,6 +2340,8 @@ function TranscriptViewer({
   session?: any;
   change?: SessionChange;
   changesRunId?: string;
+  nextSessionStart?: string;
+  activeTickSession?: string;
 }) {
   const start = events?.find((event: any) => event.kind === 'session_start');
   const prompt = start?.data?.prompt ? stripAnsi(String(start.data.prompt)).trim() : '';
@@ -2129,19 +2361,29 @@ function TranscriptViewer({
     : events;
   const role = session ? sessionRole(session) : '';
   const groups = role === 'subagent' ? null : groupSubagents(ordered);
+  // Progressive rendering: paint the newest events immediately and stream the
+  // rest in over the next frames, so a long session doesn't block on rendering
+  // every event before anything shows. Reset the ramp when the session changes.
+  const renderList: any[] = groups ?? ordered ?? [];
+  const shownCount = useProgressiveCount(renderList.length, { resetKey: selected, initial: 40, step: 100 });
+  const remaining = renderList.length - shownCount;
   const title = session?.meta?.name ?? session?.session ?? 'Log';
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
   // the session meta is written at the end of the run).
   const observedModel = events?.find((event: any) => event?.data?.model)?.data?.model;
-  const model = session?.meta?.model ?? session?.meta?.effective_model ?? observedModel ?? harnessConfig?.model;
+  // Only what this run actually recorded: session meta, or the model the engine
+  // stamped onto its own event stream. Never the live harnessConfig — config.yaml
+  // drifts over time, so backfilling a past run from it would mislabel it. When
+  // nothing was captured, the chip simply doesn't render.
+  const model = session?.meta?.model ?? session?.meta?.effective_model ?? observedModel;
   // Reasoning-effort tier the run used (Codex effort / Claude thinking budget),
-  // stamped into session meta by the harness. Falls back to the current config.
-  const effort = session?.meta?.effort ?? session?.effort ?? harnessConfig?.options?.effort;
-  // The session records the kind the engine ACTUALLY ran with; prefer it over the
-  // current config (which may differ, or default to claude-code) so a Codex run
-  // doesn't mislabel itself.
-  const kind = session?.meta?.harness_kind ?? harnessConfig?.kind;
+  // stamped into session meta by the harness. No config fallback (see model above).
+  const effort = session?.meta?.effort ?? session?.effort;
+  // The session records the kind the engine ACTUALLY ran with; use only that, so a
+  // past run isn't mislabeled by the current config (which may differ, or default
+  // to claude-code). Blank when the run captured nothing.
+  const kind = session?.meta?.harness_kind;
   const round = session?.meta?.round;
   const sessionId = session?.meta?.session_id ?? session?.meta?.data?.session_id;
   const fallbackReport = !report?.trim() ? latestReportFallback(events) : '';
@@ -2181,7 +2423,7 @@ function TranscriptViewer({
           <div className="log-md"><MarkdownBlock content={report?.trim() ? report : fallbackReport} /></div>
         </details>
       )}
-      {events === null && <p className="empty transcript-empty">Select a session to inspect its events.</p>}
+      {events === null && <p className="empty transcript-empty">{selected ? 'Loading session…' : 'Select a session to inspect its events.'}</p>}
       {events && events.length === 0 && <p className="empty transcript-empty">No events in this session.</p>}
       {run?.stop?.reason && (
         <div className="notice warning log-stop-note">
@@ -2189,7 +2431,7 @@ function TranscriptViewer({
         </div>
       )}
       <div className="log-lines">
-        {groups ? groups.map((group, i) =>
+        {groups ? groups.slice(0, shownCount).map((group, i) =>
           group.sub ? (
             <details key={`sub-${group.id}-${i}`} className="log-panel subagent-sublog" open>
               <summary>
@@ -2211,11 +2453,14 @@ function TranscriptViewer({
           ) : (
             <TranscriptEvent key={group.item.idx} event={group.item.event} forceOpen={null} />
           ),
-        ) : ordered?.map(({ event, idx }: any) => (
+        ) : ordered?.slice(0, shownCount).map(({ event, idx }: any) => (
           <TranscriptEvent key={idx} event={event} forceOpen={null} />
         ))}
+        {remaining > 0 && (
+          <p className="empty transcript-empty transcript-loading-more">Rendering {remaining} more event{remaining === 1 ? '' : 's'}…</p>
+        )}
       </div>
-      {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} />}
+      {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} nextSessionStart={nextSessionStart} tick={sessionKey(session) === activeTickSession} />}
       {prompt && (
         <details className="log-panel prompt-panel" open>
           <summary>Input Prompt</summary>
@@ -2277,15 +2522,18 @@ function SessionParameters({
   session,
   harness,
   harnessConfig,
+  nextSessionStart,
+  tick = false,
 }: {
   session: any;
   harness?: string;
   harnessConfig?: any;
+  nextSessionStart?: string;
+  tick?: boolean;
 }) {
   const meta = session.meta ?? {};
   const engineSession = meta.engine_session_id ?? meta.session_id ?? meta.data?.session_id;
-  // An interrupted session never wrote an end; measure it to its last activity.
-  const durEnd = session.status === 'interrupted' ? session.last_at : session.ended_at;
+  const durEnd = boundedSessionEnd(session, Date.now(), nextSessionStart, tick);
   const rows = [
     ['Run', session.run],
     ['Session', session.session],
@@ -2302,12 +2550,13 @@ function SessionParameters({
     ['Workspace SHA', shortSha(meta.workspace_sha)],
     ['Project SHAs', formatProjectRevisions(meta.project_revisions)],
     ['Harness', harness],
-    ['Harness kind', session.meta?.harness_kind ?? harnessConfig?.kind],
-    // Prefer the model the engine actually used over the configured one.
-    ['Model', session.model ?? meta.model ?? meta.effective_model ?? harnessConfig?.model],
-    ['Effort', session.effort ?? meta.effort ?? harnessConfig?.options?.effort],
+    ['Harness kind', session.meta?.harness_kind],
+    // Only what this run recorded — never the live config (it drifts, so it would
+    // mislabel a past run). Blank when the run captured nothing.
+    ['Model', session.model ?? meta.model ?? meta.effective_model],
+    ['Effort', session.effort ?? meta.effort],
     ['Auth', meta.auth],
-    ['Config dir', meta.config_dir ?? harnessConfig?.config_dir],
+    ['Config dir', meta.config_dir],
     ['Command', harnessConfig?.command],
     ['Args', formatArgList(harnessConfig?.args)],
     ['Options', summarizeHarnessOptions(harnessConfig?.options)],
@@ -2335,8 +2584,8 @@ function SessionParameters({
 // pills read consistently with the rest of the dashboard. The pill bg/ring are
 // derived from this text color via color-mix in .log-pill.
 const EVENT_COLORS: Record<string, string> = {
-  thinking: '#6d28d9', text: '#1d4ed8', tool_call: '#c2410c',
-  tool_result: '#047857', error: '#b91c1c', session_start: '#475569', session_end: '#475569',
+  thinking: '#7c3aed', text: '#2563eb', tool_call: '#d97706',
+  tool_result: '#059669', error: '#dc2626', session_start: '#64748b', session_end: '#64748b',
 };
 // Render text/thinking as markdown (after stripping terminal ANSI); everything
 // else stays monospace. The input prompt is rendered by TranscriptViewer.
@@ -2372,8 +2621,8 @@ function shortModel(model?: string): string {
 // A short semantic tag for an event so the log is scannable: spot where a
 // subagent was dispatched, the inbox was touched, Lean was built, etc.
 const TAG_COLORS: Record<string, string> = {
-  subagent: '#7c3aed', inbox: '#0891b2', dag: '#c2410c', blueprint: '#1d4ed8',
-  search: '#0d9488', lean: '#15803d', git: '#9333ea', skill: '#b45309', lsp: '#047857', mcp: '#047857',
+  subagent: '#7c3aed', inbox: '#0891b2', dag: '#d97706', blueprint: '#2563eb',
+  search: '#0d9488', lean: '#15803d', git: '#9333ea', skill: '#b45309', lsp: '#059669', mcp: '#059669',
 };
 function commandTag(event: any): string | null {
   if (event.kind !== 'tool_call') return null;
@@ -2553,9 +2802,151 @@ function UsageBlock({ usage }: { usage: any }) {
   );
 }
 
+// ── Lean LSP MCP tools: render calls/results structurally instead of raw JSON ──
+// The `lean-lsp` server drives the fast proof loop (goal / diagnostics /
+// multi_attempt) and the search arsenal (leansearch / loogle / …). Showing these
+// as compact cards makes that loop legible in the log.
+
+// `mcp__lean-lsp__lean_goal` -> `lean_goal`; null for any other tool.
+function leanLspTool(name: string): string | null {
+  return name.startsWith('mcp__lean-lsp__') ? name.slice('mcp__lean-lsp__'.length) : null;
+}
+
+function fileRef(path: any, line?: any, column?: any): string {
+  if (!path) return '';
+  const base = String(path).split('/').pop() || String(path);
+  const loc = [line, column].filter((x) => x != null && x !== '').join(':');
+  return loc ? `${base}:${loc}` : base;
+}
+
+function LeanCallCard({ tool, input }: { tool: string; input: any }) {
+  let main = '';
+  let sub = '';
+  let snippets: string[] | null = null;
+  if (input.query != null) main = `"${String(input.query)}"`;
+  else if (input.file_path != null || input.path != null)
+    main = fileRef(input.file_path ?? input.path, input.line, input.column);
+  if (input.theorem_name || input.declaration_name) sub = String(input.theorem_name ?? input.declaration_name);
+  if (Array.isArray(input.snippets)) { snippets = input.snippets.map(String); sub = `${input.snippets.length} tactics`; }
+  else if (input.code != null) snippets = [String(input.code)];
+  return (
+    <div className="lean-card">
+      <div className="lean-card-head">
+        <span className="lean-badge">lsp</span>
+        <span className="lean-tool">{tool}</span>
+        {main && <code className="lean-arg">{main}</code>}
+        {sub && <span className="lean-sub">{sub}</span>}
+      </div>
+      {snippets && snippets.length > 0 && <pre className="log-code lean-snippets">{snippets.join('\n')}</pre>}
+    </div>
+  );
+}
+
+function LeanGoals({ goals }: { goals: any[] }) {
+  if (!goals || goals.length === 0) return <div className="lean-ok">✓ no goals — complete</div>;
+  return (
+    <div className="lean-goals">
+      {goals.map((g, i) => {
+        const goalText = typeof g === 'string' ? g : String(g?.goal ?? '');
+        const hyps: string[] = typeof g === 'object' && Array.isArray(g?.hypotheses) ? g.hypotheses : [];
+        return (
+          <div className="lean-goal" key={i}>
+            {hyps.map((h, j) => <div className="lean-hyp" key={j}>{h}</div>)}
+            <div className="lean-turnstile"><span className="lean-turn">⊢</span> {goalText}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function diagSeverity(item: any): 'error' | 'warn' | 'info' {
+  const s = typeof item === 'string' ? item : JSON.stringify(item ?? '');
+  if (/severity['":\s]*1\b/.test(s)) return 'error';
+  if (/severity['":\s]*2\b/.test(s)) return 'warn';
+  return 'info';
+}
+
+function LeanDiagnostics({ result }: { result: any }) {
+  const items: any[] = result.items ?? result.diagnostics ?? [];
+  const failed: any[] = result.failed_dependencies ?? [];
+  if ((!items || items.length === 0) && (!failed || failed.length === 0)) {
+    return <div className="lean-ok">{result.success === false ? '✗ failed' : '✓ no diagnostics'}</div>;
+  }
+  return (
+    <div className="lean-diags">
+      {items.map((it, i) => (
+        <div className={`lean-diag lean-diag-${diagSeverity(it)}`} key={i}>
+          {typeof it === 'string' ? it : (it?.message ?? JSON.stringify(it))}
+        </div>
+      ))}
+      {failed.map((d, i) => <div className="lean-diag lean-diag-error" key={`f${i}`}>failed dependency: {String(d)}</div>)}
+    </div>
+  );
+}
+
+function LeanResults({ items }: { items: any[] }) {
+  return (
+    <div className="lean-results">
+      {items.slice(0, 20).map((it, i) => (
+        <div className="lean-result" key={i}>
+          <code className="lean-result-name">{String(it.name ?? '')}</code>
+          {it.module && <span className="lean-result-mod">{String(it.module)}</span>}
+          {(it.type || it.kind) && <code className="lean-result-type">{String(it.type ?? it.kind)}</code>}
+        </div>
+      ))}
+      {items.length > 20 && <div className="lean-more">+{items.length - 20} more</div>}
+    </div>
+  );
+}
+
+function LeanAttempts({ rows }: { rows: any[] }) {
+  return (
+    <div className="lean-attempts">
+      {rows.map((r, i) => {
+        const ok = Array.isArray(r?.goals) ? r.goals.length === 0 : /no goals/.test(String(r?.goals ?? ''));
+        return (
+          <div className={`lean-attempt lean-attempt-${ok ? 'ok' : 'bad'}`} key={i}>
+            <span className="lean-attempt-mark">{ok ? '✓' : '✗'}</span>
+            <code className="lean-attempt-snip">{String(r?.snippet ?? '').trim()}</code>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LeanPremises({ names }: { names: string[] }) {
+  return (
+    <div className="lean-premises">
+      {names.slice(0, 40).map((n, i) => <code className="lean-premise" key={i}>{n}</code>)}
+    </div>
+  );
+}
+
+// Detect a lean-lsp result shape and render it; null → caller falls back to raw.
+function renderLeanResult(text: string): React.ReactElement | null {
+  let v: any;
+  try { v = JSON.parse(text.trim()); } catch { return null; }
+  if (v == null || typeof v !== 'object') return null;
+  if (!Array.isArray(v)) {
+    if (Array.isArray(v.goals_after) || Array.isArray(v.goals_before)) return <LeanGoals goals={v.goals_after ?? []} />;
+    if (typeof v.success === 'boolean') return <LeanDiagnostics result={v} />;
+    if (Array.isArray(v.items) && v.items[0] && typeof v.items[0] === 'object' && v.items[0].name) return <LeanResults items={v.items} />;
+    return null;
+  }
+  if (v.length === 0) return null;
+  if (typeof v[0] === 'object' && v[0] && 'snippet' in v[0]) return <LeanAttempts rows={v} />;
+  if (typeof v[0] === 'string') return <LeanPremises names={v} />;
+  if (typeof v[0] === 'object' && v[0] && v[0].name) return <LeanResults items={v} />;
+  return null;
+}
+
 function ToolCallView({ event, text }: { event: any; text: string }) {
   const name = String(event.tool || '');
   const input = toolInput(event);
+  const leanTool = leanLspTool(name);
+  if (leanTool) return <LeanCallCard tool={leanTool} input={input} />;
   if (name === 'Bash' || name === 'command_execution') {
     const command = String(input.command ?? '');
     return (
@@ -2589,10 +2980,11 @@ function ToolCallView({ event, text }: { event: any; text: string }) {
 
 function ToolResultView({ event, text }: { event: any; text: string }) {
   const exitCode = event.data?.exit_code;
+  const lean = exitCode === undefined && text ? renderLeanResult(text) : null;
   return (
     <div className="log-tool-result">
       {exitCode !== undefined && <span className={`exit-code exit-${exitCode === 0 ? 'ok' : 'bad'}`}>exit {String(exitCode)}</span>}
-      <pre className="log-output">{text || 'no output'}</pre>
+      {lean ?? <pre className="log-output">{text || 'no output'}</pre>}
     </div>
   );
 }
@@ -2616,7 +3008,10 @@ function EventBodyView({ event, text }: { event: any; text: string }) {
   return <pre className="log-pre">{text}</pre>;
 }
 
-function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean | null }) {
+// Memoized so that progressively growing the rendered event count (see
+// useProgressiveCount) doesn't re-render rows already on screen — event objects
+// keep a stable identity across polls, so this keeps the whole list O(n).
+const TranscriptEvent = React.memo(function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean | null }) {
   const text = stripAnsi(eventBody(event)).trim();
   const hasBody = text.length > 0;
   const long = text.length > 280 || text.includes('\n');
@@ -2636,7 +3031,7 @@ function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean 
     setOpen((v) => !v);
   };
   return (
-    <div className="log-line" onClick={toggle} style={{ cursor: long ? 'pointer' : 'default' }}>
+    <div className={`log-line log-kind-${event.kind}`} onClick={toggle} style={{ cursor: long ? 'pointer' : 'default' }}>
       <span className="log-ts">{formatTime(event.at)}</span>
       <span className="log-pill" style={{ color }} title={fullLabel}><span>{label}</span></span>
       {tag && <span className="log-tag" style={{ color: TAG_COLORS[tag] ?? 'var(--text-muted)' }}>{tag}</span>}
@@ -2660,7 +3055,7 @@ function TranscriptEvent({ event, forceOpen }: { event: any; forceOpen: boolean 
       </div>
     </div>
   );
-}
+});
 
 // A run row that collapses to just its id (e.g. "0001") by default; clicking
 // expands the whole session tree (all steps).
@@ -2707,8 +3102,8 @@ function RunGroup({ run, selected, onSelect, now }: { run: any; selected: string
   const [open, setOpen] = useState(false);
   const sessions = run.sessions ?? [];
   const taskIds = taskIdsForRun(run);
-  const runStart = runStartAt(run);
-  const runEnd = run.status === 'running' ? new Date(now).toISOString() : runActivityAt(run);
+  const runDuration = runDurationSeconds(run, now);
+  const activeTickSession = activeRunSessionKey(run);
   const toggle = (event: React.MouseEvent | React.KeyboardEvent) => {
     if ((event.target as HTMLElement).closest('a, button')) return;
     setOpen((v) => !v);
@@ -2732,13 +3127,13 @@ function RunGroup({ run, selected, onSelect, now }: { run: any; selected: string
         <strong>{displayRunName(run.id)}</strong>
         <StatusIcon value={run.status} />
         {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
-        {runStart && <span className="meta-chip">{formatDuration(runStart, runEnd)}</span>}
+        {runDuration !== null && <span className="meta-chip">{formatSeconds(runDuration)}</span>}
         <span className="meta-chip">{run.session_count ?? 0} sessions</span>
         <UsageChips usage={run.usage} />
       </div>
       {open && (
         <div className="run-sessions-tree">
-          <SelectableSessionTree sessions={sessions} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} />
+          <SelectableSessionTree sessions={sessions} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} activeTickSession={activeTickSession} />
         </div>
       )}
     </div>
@@ -2751,15 +3146,18 @@ function SelectableSessionTree({
   onSelect,
   now,
   fallbackTaskIds = [],
+  activeTickSession = '',
 }: {
   sessions: any[];
   selected: string;
   onSelect: (ref: string) => void;
   now: number;
   fallbackTaskIds?: string[];
+  activeTickSession?: string;
 }) {
   if (sessions.length === 0) return null;
   const orderedSessions = [...sessions].sort(compareSessions);
+  const nextStarts = nextSessionStartMap(sessions);
   return (
     <div className="selectable-tree">
       {orderedSessions.map((session) => (
@@ -2770,6 +3168,8 @@ function SelectableSessionTree({
           onSelect={onSelect}
           now={now}
           fallbackTaskIds={fallbackTaskIds}
+          nextSessionStart={nextStarts.get(session.session)}
+          activeTickSession={activeTickSession}
         />
       ))}
     </div>
@@ -2826,12 +3226,16 @@ function SessionNode({
   onSelect,
   now,
   fallbackTaskIds = [],
+  nextSessionStart,
+  activeTickSession = '',
 }: {
   session: any;
   selected: string;
   onSelect: (ref: string) => void;
   now: number;
   fallbackTaskIds?: string[];
+  nextSessionStart?: string;
+  activeTickSession?: string;
 }) {
   const hasChildren = (session.children?.length ?? 0) > 0;
   const round = typeof session.meta?.round === 'number' ? `r${session.meta.round}` : '';
@@ -2839,11 +3243,7 @@ function SessionNode({
   const displayName = displaySessionName(session);
   const model = shortModel(session.model);
   const effort = session.effort ?? session.meta?.effort;
-  // An interrupted session never wrote an end, so measure it to its last
-  // activity instead of leaving the duration stuck on "running".
-  const durEnd = session.status === 'running'
-    ? new Date(now).toISOString()
-    : session.status === 'interrupted' ? session.last_at : session.ended_at;
+  const durEnd = boundedSessionEnd(session, now, nextSessionStart, sessionKey(session) === activeTickSession);
   const taskIds = session.meta?.task_id ? [String(session.meta.task_id)] : fallbackTaskIds;
   return (
     <div className="session-node">
@@ -2867,7 +3267,7 @@ function SessionNode({
       </div>
       {hasChildren && (
         <div className="session-children">
-          <SelectableSessionTree sessions={session.children} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} />
+          <SelectableSessionTree sessions={session.children} selected={selected} onSelect={onSelect} now={now} fallbackTaskIds={taskIds} activeTickSession={activeTickSession} />
         </div>
       )}
     </div>
@@ -3072,7 +3472,7 @@ function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAct
       <summary style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <div className="roadmap-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}>
           {!STATIC && runAction ? (
-            <select className={`chip-select state ${visibleStatus}`} style={{ color: statusColor(visibleStatus), borderColor: statusColor(visibleStatus) }} value={visibleStatus} onChange={(e) => updateStatus(e.target.value)}>
+            <select className={`chip-select state ${visibleStatus}`} value={visibleStatus} onChange={(e) => updateStatus(e.target.value)}>
               <option className="state-active" value="active">active</option>
               <option className="state-pending" value="pending">pending</option>
               <option className="state-blocked" value="blocked">blocked</option>
@@ -3255,9 +3655,107 @@ function formatTime(value: string | undefined) {
 function formatDuration(start?: string, end?: string): string {
   if (!start) return '';
   if (!end) return 'running';
-  const secs = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  const secs = durationSeconds(start, end);
+  return secs === null ? '' : formatSeconds(secs);
+}
+
+function formatSeconds(secs: number): string {
+  const safe = Math.max(0, Math.round(secs));
+  if (safe < 60) return `${safe}s`;
+  return `${Math.floor(safe / 60)}m ${safe % 60}s`;
+}
+
+function durationSeconds(start?: string, end?: string): number | null {
+  if (!start || !end) return null;
+  const s = Date.parse(start);
+  const e = Date.parse(end);
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+  return Math.max(0, Math.round((e - s) / 1000));
+}
+
+function boundedSessionEnd(session: any, now: number, nextStart?: string, tick = false): string | undefined {
+  if (session.ended_at) return session.ended_at;
+  if (tick && session.status === 'running') return new Date(now).toISOString();
+  const childStart = firstChildStart(session);
+  if (childStart) return childStart;
+  if (nextStart) return nextStart;
+  return session.last_at;
+}
+
+function firstChildStart(session: any): string | undefined {
+  const children = sessionsInRunOrder(session.children ?? []);
+  return children.find((child: any) => child.started_at)?.started_at;
+}
+
+function sessionKey(session: any): string {
+  return String(session?.ref || session?.session || '');
+}
+
+function isAgenticSession(session: any): boolean {
+  const role = sessionRole(session);
+  return role === 'ground' || role === 'horizon';
+}
+
+function latestAgenticSession(sessions: any[]): any | undefined {
+  const agentic = sessionsInRunOrder(sessions).filter(isAgenticSession);
+  return agentic[agentic.length - 1];
+}
+
+function activeRunSessionKey(run: any): string {
+  if (!run || run.status !== 'running') return '';
+  const session = latestAgenticSession(run.sessions ?? []);
+  if (!session || session.status !== 'running') return '';
+  return sessionKey(session);
+}
+
+function sessionOrderValue(session: any): number {
+  const match = String(session.session ?? '').match(/^(\d+)/);
+  if (match) return Number.parseInt(match[1], 10);
+  return Date.parse(session.started_at ?? '') || 0;
+}
+
+function sessionsInRunOrder(sessions: any[]): any[] {
+  return [...sessions].sort((a, b) => {
+    const ao = sessionOrderValue(a);
+    const bo = sessionOrderValue(b);
+    if (ao !== bo) return ao - bo;
+    return String(a.session).localeCompare(String(b.session), undefined, { numeric: true });
+  });
+}
+
+function nextSessionStartMap(sessions: any[]): Map<string, string | undefined> {
+  const ordered = sessionsInRunOrder(sessions);
+  return new Map(ordered.map((session, index) => [String(session.session), ordered[index + 1]?.started_at]));
+}
+
+function nextSessionStart(sessions: any[], target: any): string | undefined {
+  const direct = nextSessionStartMap(sessions).get(String(target.session));
+  if (direct) return direct;
+  for (const session of sessions ?? []) {
+    const child = nextSessionStart(session.children ?? [], target);
+    if (child) return child;
+  }
+  return undefined;
+}
+
+function runDurationSeconds(run: any, now: number): number | null {
+  const sessions = sessionsInRunOrder(run.sessions ?? []);
+  if (!sessions.length) return null;
+  const nextStarts = nextSessionStartMap(sessions);
+  const active = activeRunSessionKey(run);
+  let total = 0;
+  let seen = false;
+  for (const session of sessions) {
+    const secs = durationSeconds(
+      session.started_at,
+      boundedSessionEnd(session, now, nextStarts.get(String(session.session)), sessionKey(session) === active),
+    );
+    if (secs !== null) {
+      total += secs;
+      seen = true;
+    }
+  }
+  return seen ? total : null;
 }
 
 function formatDateTime(value: string | undefined): string {
@@ -3313,7 +3811,8 @@ function inboxActivityAt(item: any): string | undefined {
 function runActivityAt(run: any): string | undefined {
   const sessions = flattenSessions(run.sessions ?? []);
   const sessionTimes = sessions.flatMap((session: any) => [session.last_at, session.ended_at, session.started_at]).filter(Boolean);
-  return run.updated_at ?? run.ended_at ?? run.created_at ?? sessionTimes.sort().at(-1);
+  const sortedSessionTimes = sessionTimes.sort();
+  return run.updated_at ?? run.ended_at ?? run.created_at ?? sortedSessionTimes[sortedSessionTimes.length - 1];
 }
 
 function sessionActivityAt(session: any): string | undefined {
@@ -3325,7 +3824,8 @@ function flattenSessions(sessions: any[]): any[] {
 }
 
 function normalizedInboxStatus(status: string | undefined) {
-  if (status === 'closed') return 'completed';
+  if (status === 'completed') return 'closed';
+  if (status === 'closed') return 'closed';
   if (status === 'archived') return 'archived';
   return status || 'open';
 }
@@ -3338,6 +3838,10 @@ function filterLabel(value: string) {
   if (value === 'reject') return gateLabel(value);
   if (value === 'clear') return gateLabel(value);
   return value;
+}
+
+function filterToken(value: string | undefined) {
+  return filterLabel(String(value || '')).toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
 function inboxGate(labels: string[]) {

@@ -136,6 +136,22 @@ def test_codex_rollout_session_meta_surfaces_model_and_role() -> None:
     assert event.data["model"] == "gpt-5.5" and event.data["agent_role"] == "janitor"
 
 
+def test_codex_rollout_turn_context_surfaces_effort() -> None:
+    # Codex records the reasoning-effort tier it actually ran with on turn_context;
+    # observed_effort scans it back so the run view can verify it (not just config).
+    from archon_horizon.transcript.parsers import observed_effort
+
+    line = json.dumps({
+        "type": "turn_context",
+        "payload": {"model": "gpt-5.5", "effort": "xhigh"},
+    })
+    [event] = parse_codex_rollout_line(line)
+    assert event.data["effort"] == "xhigh"
+    assert observed_effort([event]) == "xhigh"
+    # An engine that reports no effort (e.g. Claude Code) yields None.
+    assert observed_effort([TranscriptEvent(TranscriptKind.SESSION_META, data={"model": "x"})]) is None
+
+
 def test_native_session_id_extractors() -> None:
     # Claude stamps session_id on every event; codex announces it once on
     # thread.started. Both ignore unrelated lines and garbage.

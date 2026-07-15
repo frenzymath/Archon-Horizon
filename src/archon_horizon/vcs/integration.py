@@ -34,6 +34,7 @@ from .git import GitError, WorkspaceGit, git_available, neutralize_nested_git
 _ROLE_AUTHORS: dict[str, tuple[str, str]] = {
     "ground": ("Archon Horizon (Ground)", "ground@archon-horizon.local"),
     "horizon": ("Archon Horizon (Horizon)", "horizon@archon-horizon.local"),
+    "system": ("Archon Horizon (System)", "system@archon-horizon.local"),
 }
 
 
@@ -188,6 +189,7 @@ def _commit_trailers(
     round_index: int | None,
     task_id: str | None,
     projects: tuple[str, ...],
+    commit_kind: str = "",
 ) -> dict[str, str]:
     """Machine-queryable provenance appended to the commit message."""
     return {
@@ -197,6 +199,7 @@ def _commit_trailers(
         "Archon-Session": session,
         "Archon-Task": task_id or "",
         "Archon-Projects": ",".join(projects),
+        "Archon-Commit": commit_kind,
     }
 
 
@@ -208,6 +211,7 @@ def integrate_workspace_run(
     message: str | None = None,
     author: tuple[str, str] | None = None,
     trailers: dict[str, str] | None = None,
+    allow_empty: bool = False,
 ) -> CommitOutcome:
     """Commit root workspace state (shared state + scoped project worktrees)."""
     if not git_available():
@@ -233,11 +237,43 @@ def integrate_workspace_run(
                     paths=_workspace_commit_paths(workspace, projects),
                     author=author,
                     trailers=trailers,
+                    allow_empty=allow_empty,
                 )
                 files = git.files_in_commit(sha) if sha else ()
         return CommitOutcome(attempted=True, sha=sha, changed=sha is not None, files=files)
     except GitError as exc:
         return CommitOutcome(attempted=True, error=str(exc))
+
+
+def integrate_workspace_baseline(
+    workspace: Workspace,
+    *,
+    run_id: str,
+    projects: tuple[str, ...] = (),
+) -> CommitOutcome:
+    """Append a run-start baseline marker to the workspace ledger.
+
+    The baseline is allowed to be empty: it is an intuitive anchor saying
+    "compare the first agentic commit in this run against here", even when the
+    worktree already matched the previous ledger head.
+    """
+    return integrate_workspace_run(
+        workspace,
+        run_id=run_id,
+        projects=projects,
+        message=f"workspace[{run_id}] system: baseline",
+        author=author_for("system"),
+        trailers=_commit_trailers(
+            run_id=run_id,
+            session="run-baseline",
+            role="system",
+            round_index=None,
+            task_id=None,
+            projects=projects,
+            commit_kind="baseline",
+        ),
+        allow_empty=True,
+    )
 
 
 def project_checkpoint(
@@ -303,6 +339,7 @@ def integrate_workspace_session(
                 round_index=round_index,
                 task_id=task_id,
                 projects=scoped,
+                commit_kind="integration",
             ),
         )
         workspace_sha = workspace_commit.sha

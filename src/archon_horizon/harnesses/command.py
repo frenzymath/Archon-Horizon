@@ -48,7 +48,7 @@ _FAILURE_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     ("usage_limit", re.compile(r"usage limit|session limit|hit your .*limit|insufficient[_ ]quota|quota exceeded|credit balance|billing|payment required", re.I)),
     ("rate_limit", re.compile(r"rate[ _-]?limit|too many requests|\b429\b|resource[_ ]?exhausted", re.I)),
     ("overloaded", re.compile(r"overloaded|\b529\b", re.I)),
-    ("server_error", re.compile(r"internal server error|service unavailable|bad gateway|gateway timeout|\b50[0234]\b|server_error", re.I)),
+    ("server_error", re.compile(r"internal server error|service unavailable|bad gateway|gateway timeout|\b50[0234]\b|server[ _-]?error|error mid-?response|may be incomplete", re.I)),
     ("network", re.compile(r"connection reset|connection error|econnreset|etimedout|network error|temporarily unavailable", re.I)),
 )
 _RETRYABLE_REASONS = frozenset({"rate_limit", "overloaded", "server_error", "network"})
@@ -247,7 +247,13 @@ class CommandHarness(Harness):
             end_data["failure_reason"] = reason
             result.metadata["failure_reason"] = reason
             if reason in _RETRYABLE_REASONS and attempt > self.retry_max:
+                # Stamp BOTH the transcript event and the result metadata: the run
+                # loop's fatal-failure check reads ``result.metadata`` (not the
+                # transcript), so a rate/overload limit that survives every retry
+                # must carry the flag here or the run keeps respawning sessions
+                # that hit the same wall each round.
                 end_data["retries_exhausted"] = True
+                result.metadata["retries_exhausted"] = True
         sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data=end_data))
         return result
 

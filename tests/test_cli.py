@@ -78,6 +78,30 @@ def test_roadmap_command_writes_safe_yaml(tmp_path: Path) -> None:
     assert yaml.safe_load(roadmap_file.read_text("utf-8"))["status"] == "done"
 
 
+def test_roadmap_hierarchy_nests_items(tmp_path: Path) -> None:
+    import yaml
+
+    ws = tmp_path / "ws"
+    assert _run(ws, "init", "--no-interactive") == 0
+    _use_null_engines(ws)
+    assert _run(ws, "project", "add", "p", "projects/p", "--build", "lake build") == 0
+
+    assert _run(ws, "roadmap", "add", "--id", "A", "--title", "root", "--project", "p") == 0
+    assert _run(ws, "roadmap", "add", "--id", "A.1", "--title", "child", "--project", "p", "--parent", "A") == 0
+    # Parent is persisted in metadata.
+    child = yaml.safe_load((ws / ".archon-horizon" / "roadmap" / "items" / "A.1.yaml").read_text("utf-8"))
+    assert child["metadata"]["parent"] == "A"
+
+    # An unknown parent is rejected (non-zero exit), not silently detached.
+    assert _run(ws, "roadmap", "add", "--id", "Z", "--title", "z", "--project", "p", "--parent", "NOPE") != 0
+    # Self-parenting is rejected.
+    assert _run(ws, "roadmap", "set", "A", "--parent", "A") != 0
+    # `--parent ''` un-nests.
+    assert _run(ws, "roadmap", "set", "A.1", "--parent", "") == 0
+    child2 = yaml.safe_load((ws / ".archon-horizon" / "roadmap" / "items" / "A.1.yaml").read_text("utf-8"))
+    assert "parent" not in child2.get("metadata", {})
+
+
 def test_task_command_writes_safe_yaml(tmp_path: Path) -> None:
     import yaml
 
@@ -110,27 +134,32 @@ def test_task_command_writes_safe_yaml(tmp_path: Path) -> None:
     assert not task_file.exists()
 
 
-def test_agents_cannot_author_tasks(tmp_path: Path, monkeypatch: Any) -> None:
-    """Tasks are human-only: an agent run (ARCHON_HORIZON_AGENT_ROLE set) may read
-    and comment, but add/set/remove are refused. Work is organized via the roadmap."""
+def test_agents_have_full_task_access(tmp_path: Path, monkeypatch: Any) -> None:
+    """Agents are no longer hard-refused from tasks: acting as the horizon agent
+    (ARCHON_HORIZON_AGENT_ROLE set) they may add, set status, comment, and remove —
+    the machine only ever writes queued/running, so a terminal status is the
+    agent's own recorded word."""
+    import yaml
+
     ws = tmp_path / "ws"
     assert _run(ws, "init", "--no-interactive") == 0
     _use_null_engines(ws)
     assert _run(ws, "project", "add", "ag-main", "projects/ag-main", "--build", "lake build") == 0
-    # A human seeds the task.
+    # A human seeds a task.
     assert _run(ws, "task", "add", "--id", "T-1", "--project", "ag-main", "--objective", "x") == 0
     task_file = ws / ".archon-horizon" / "tasks" / "items" / "T-1.yaml"
     assert task_file.exists()
 
-    # Now act as the horizon agent: authoring is refused, reading/commenting is not.
+    # Now act as the horizon agent: every task write succeeds.
     monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
-    assert _run(ws, "task", "add", "--id", "T-2", "--project", "ag-main", "--objective", "y") != 0
-    assert not (ws / ".archon-horizon" / "tasks" / "items" / "T-2.yaml").exists()
-    assert _run(ws, "task", "set", "T-1", "--status", "done") != 0
-    assert _run(ws, "task", "remove", "T-1") != 0
-    assert task_file.exists()  # untouched
-    assert _run(ws, "task", "list") == 0
+    assert _run(ws, "task", "add", "--id", "T-2", "--project", "ag-main", "--objective", "y") == 0
+    assert (ws / ".archon-horizon" / "tasks" / "items" / "T-2.yaml").exists()
+    assert _run(ws, "task", "set", "T-1", "--status", "done") == 0
+    assert yaml.safe_load(task_file.read_text("utf-8"))["status"] == "done"
     assert _run(ws, "task", "comment", "T-1", "--body", "noted") == 0
+    assert _run(ws, "task", "list") == 0
+    assert _run(ws, "task", "remove", "T-2") == 0
+    assert not (ws / ".archon-horizon" / "tasks" / "items" / "T-2.yaml").exists()
 
 
 def test_init_refuses_to_clobber(tmp_path: Path) -> None:
@@ -143,7 +172,7 @@ def test_init_scaffolds_minimal_state_dirs(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     assert _run(ws, "init", "--no-interactive") == 0
     state_dirs = sorted(p.name for p in (ws / ".archon-horizon").iterdir() if p.is_dir())
-    assert state_dirs == ["blueprints", "inbox", "roadmap", "runs", "subagents", "tasks", "tools", "vcs"]
+    assert state_dirs == ["blueprints", "inbox", "prompts", "roadmap", "runs", "subagents", "tasks", "tools", "vcs"]
 
 
 def test_init_does_not_seed_starter_subagents(tmp_path: Path) -> None:

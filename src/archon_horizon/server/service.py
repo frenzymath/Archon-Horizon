@@ -13,18 +13,18 @@ import json
 import threading
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from datetime import datetime, timezone
 
 from archon_horizon.log import log
 
 from archon_horizon.blueprint.chapters import project_chapters
 from archon_horizon.blueprint.checks import is_countable
-from archon_horizon.blueprint.workspace import published_dags, workspace_dags, workspace_dags_rich
+from archon_horizon.blueprint.workspace import published_dag, published_dags, workspace_dags, workspace_dags_rich
 from archon_horizon.config.loader import build_stores, build_workspace, load_config
 from archon_horizon.core.inbox import InboxDraft, InboxKind, InboxStatus
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus
+from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus, apply_hierarchy
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.status_sync import roadmap_status_for_task_status
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
@@ -33,12 +33,41 @@ from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 from archon_horizon.inboxes.github import GithubInboxProvider
 from archon_horizon.runlog import RunLog, SessionLog
 from archon_horizon.store import serde
-from archon_horizon.transcript.parsers import observed_model
+from archon_horizon.transcript.parsers import observed_effort, observed_model
 from archon_horizon.transcript.sink import read_transcript
 from archon_horizon.transcript.subagents import materialize_subagent_sessions
 from archon_horizon.orchestration.locks import live_run_lock
 from archon_horizon.server.git_api import get_git_log, get_git_diff
-from archon_horizon.server.source_api import list_lean_files, read_lean_file
+from archon_horizon.server.source_api import file_stats, list_lean_files, read_lean_file
+from archon_horizon.vcs.git import WorkspaceGit, git_available
+
+
+# Per-node blueprint fields that carry full text (a declaration's LaTeX statement,
+# its proof source, and its whole Lean source). They dominate the DAG payload —
+# often >80% of it — but are only needed on the Blueprint/DAG detail views, which
+# fetch the full DAG on demand (/api/blueprint/dag). Stripping them from the 5s
+# state poll keeps that payload small while leaving the light fields the Lean page
+# and the graph itself need (ids, names, files, status, metrics, edges).
+_HEAVY_NODE_FIELDS = ("statement", "proof_tex", "lean_source")
+
+
+def _light_dags(dags: dict[str, Any]) -> dict[str, Any]:
+    """A copy of the published DAGs with the heavy per-node text fields dropped."""
+    out: dict[str, Any] = {}
+    for name, dag in dags.items():
+        if not isinstance(dag, dict):
+            out[name] = dag
+            continue
+        light = dict(dag)
+        nodes = dag.get("nodes")
+        if isinstance(nodes, list):
+            light["nodes"] = [
+                {k: v for k, v in node.items() if k not in _HEAVY_NODE_FIELDS}
+                if isinstance(node, dict) else node
+                for node in nodes
+            ]
+        out[name] = light
+    return out
 
 
 def _flatten_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -66,6 +95,8 @@ def _agentic_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # lock doesn't track) and a quiet-but-alive engine (e.g. a long Lean build);
 # past it, a still-"running" session with a dead process reads as interrupted.
 _ACTIVE_WINDOW_S = 300.0
+_PROJECT_HISTORY_LIMIT = 10
+_PROJECT_HISTORY_MAX_LIMIT = 100
 
 
 def _is_recent(iso: str, window_s: float = _ACTIVE_WINDOW_S) -> bool:
@@ -151,7 +182,10 @@ class WorkspaceService:
             "inbox_providers": self._inbox_provider_state(),
             "memory": self.stores.memory.load(),
             "reports": self.stores.reports.list(),
-            "blueprints": published_dags(self.workspace),
+            # Light DAGs only (heavy statement/proof/lean_source stripped): the
+            # Blueprint and DAG pages fetch the full per-project DAG on demand via
+            # /api/blueprint/dag, so the 5s poll doesn't re-ship several MB of text.
+            "blueprints": _light_dags(published_dags(self.workspace)),
             "projects": self._discover_projects(),
             "libraries": self._search_libraries(),
             "harnesses": self._harness_state(),
@@ -175,14 +209,65 @@ class WorkspaceService:
             return candidate
         raise KeyError(f"unknown project {name!r}")
 
+    def _project_rel_path(self, name: str) -> str:
+        project_path = self._project_path(name).resolve()
+        root = self.workspace.root.resolve()
+        if project_path == root:
+            return ""
+        return project_path.relative_to(root).as_posix()
+
+    def _project_history(self, name: str, *, limit: int = _PROJECT_HISTORY_LIMIT) -> list[dict[str, Any]]:
+        if not git_available():
+            return []
+        git = WorkspaceGit(self.workspace.root)
+        if not git.is_repo():
+            return []
+        try:
+            rel = self._project_rel_path(name)
+        except (KeyError, ValueError):
+            return []
+        paths = (rel,) if rel else ()
+        commit_limit = max(1, min(_PROJECT_HISTORY_MAX_LIMIT, int(limit)))
+        commits = list(reversed(git.log(paths=paths, limit=commit_limit)))
+        history: list[dict[str, Any]] = []
+        for commit in commits:
+            sha = commit.get("sha") or ""
+            if not sha:
+                continue
+            lean_files = [p for p in git.files_at(sha, paths) if p.endswith(".lean")]
+            sorries = 0
+            loc = 0
+            loc_code = 0
+            for path in lean_files:
+                text = git.file_at(sha, path)
+                if text is None:
+                    continue
+                stats = file_stats(text)
+                sorries += stats["sorries"]
+                loc += stats["loc"]
+                loc_code += stats["loc_code"]
+            history.append({
+                "sha": sha,
+                "short_sha": commit.get("short_sha") or sha[:7],
+                "date": commit.get("date") or "",
+                "subject": commit.get("subject") or "",
+                "lean_files": len(lean_files),
+                "loc": loc,
+                "loc_code": loc_code,
+                "sorries": sorries,
+            })
+        return history
+
     def projects_summary(self) -> dict[str, Any]:
         """Per-project metrics for the overview: Lean LOC/sorries + blueprint size."""
         dags = workspace_dags(self.workspace)
         projects: list[dict[str, Any]] = []
         for name in self._discover_projects():
             try:
-                files = list_lean_files(self._project_path(name))
+                project_path = self._project_path(name)
+                files = list_lean_files(project_path)
             except KeyError:
+                project_path = self.workspace.root / name
                 files = []
             dag = dags.get(name) or {}
             # Count only formalisation obligations (theorems/lemmas/defs, …);
@@ -250,6 +335,9 @@ class WorkspaceService:
         live_run_id: str | None = None,
     ) -> dict[str, Any]:
         sessions = [self._session_state(run.id, session, "") for session in run.sessions()]
+        baseline_session = self._baseline_session_state(run.id, events)
+        if baseline_session is not None:
+            sessions.insert(0, baseline_session)
         # Tag each top-level session with the ledger commit it produced (from its
         # integration event), so the Logs view can offer a per-session change view.
         integrated = {
@@ -271,17 +359,22 @@ class WorkspaceService:
         # holds the run lock or some session emitted activity recently (the
         # latter covers concurrent runs the single-owner lock can't see).
         run_ended = any(event.get("type") == "run.stopped" for event in events)
-        any_running = any(session["status"] == "running" for session in flat)
-        active = any_running and not run_ended and (
-            run.id == live_run_id
-            or any(_is_recent(session.get("last_at", "")) for session in flat)
-        )
-        if any_running and not active:
-            for session in flat:
-                if session["status"] == "running":
-                    session["status"] = "interrupted"
         status_basis = _agentic_sessions(sessions) or flat
-        last_status = status_basis[-1]["status"] if status_basis else "created"
+        latest_status_session = status_basis[-1] if status_basis else None
+        active = (
+            latest_status_session is not None
+            and latest_status_session["status"] == "running"
+            and not run_ended
+            and (
+                run.id == live_run_id
+                or _is_recent(latest_status_session.get("last_at", ""))
+            )
+        )
+        active_session_id = id(latest_status_session) if active else None
+        for session in flat:
+            if session["status"] == "running" and id(session) != active_session_id:
+                session["status"] = "interrupted"
+        last_status = latest_status_session["status"] if latest_status_session else "created"
         if last_status == "running" and not active:
             last_status = "interrupted"
         rounds_done = {
@@ -340,6 +433,8 @@ class WorkspaceService:
             status = "completed" if data.get("ok") else _fail_status(data.get("failure_reason"), data.get("timed_out"))
         elif any(event.kind == "error" for event in events):
             status = "failed"
+        elif meta.get("status") == "running":
+            status = "running"
         elif events:
             # Has streamed events but no terminal marker: still live (this covers a
             # session mid-retry-backoff, whose only recent event is a NOTICE).
@@ -356,12 +451,50 @@ class WorkspaceService:
             "meta": meta,
             "status": status,
             "model": observed_model(events) or meta.get("model"),
-            "effort": meta.get("effort"),
+            # Prefer the effort read back from the engine's own stream (codex stamps
+            # it on session-meta from turn_context) over the configured tier, so the
+            # UI confirms what the session actually ran with — matching model above.
+            "effort": observed_effort(events) or meta.get("effort"),
             "started_at": events[0].at.isoformat() if events else "",
             "ended_at": end.at.isoformat() if end else "",
             "last_at": events[-1].at.isoformat() if events else "",
             "usage": usage,
             "children": children,
+        }
+
+    @staticmethod
+    def _baseline_session_state(run_id: str, events: list[dict[str, Any]]) -> dict[str, Any] | None:
+        baseline = next(
+            (event for event in events if event.get("type") == "workspace.run_baseline"),
+            None,
+        )
+        if baseline is None:
+            return None
+        data = baseline.get("data", {})
+        created_at = str(baseline.get("created_at") or "")
+        sha = data.get("sha")
+        return {
+            "run": run_id,
+            "session": "0000-system-baseline",
+            "parent": "",
+            "ref": "",
+            "meta": {
+                "role": "system",
+                "name": "run baseline",
+                "workspace_sha": sha,
+                "projects": data.get("projects") or [],
+            },
+            "status": "completed" if sha else "failed",
+            "model": None,
+            "effort": None,
+            "started_at": created_at,
+            "ended_at": created_at,
+            "last_at": created_at,
+            "usage": _sum_usage(()),
+            "children": [],
+            "workspace_commit": sha,
+            "change_projects": [p for p in (data.get("projects") or []) if p],
+            "synthetic": True,
         }
 
     def _session_integrations(self, run_id: str) -> dict[str, dict[str, Any]]:
@@ -376,6 +509,47 @@ class WorkspaceService:
                 if name:
                     integrated[name] = data
         return integrated
+
+    def _run_baseline_commit(self, run_id: str) -> str | None:
+        for raw in reversed(self.stores.events.read_all()):
+            event = serde.to_jsonable(raw)
+            data = event.get("data", {})
+            if event.get("type") == "workspace.run_baseline" and data.get("run_id") == run_id:
+                sha = data.get("sha")
+                return str(sha) if sha else None
+        return None
+
+    def _last_run_commit(self, run_id: str) -> str | None:
+        last_commit: str | None = None
+        integrated = self._session_integrations(run_id)
+        try:
+            run = self.stores.run_logs.get(run_id)
+            for session in run.sessions():
+                info = integrated.get(session.name)
+                if info and info.get("workspace_commit"):
+                    last_commit = info["workspace_commit"]
+        except Exception:
+            pass
+        return last_commit or self._run_baseline_commit(run_id)
+
+    def _session_live_context(self, run_id: str, session_name: str | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        try:
+            run = self.stores.run_logs.get(run_id)
+        except Exception:
+            return (), ()
+        selected: SessionLog | None = None
+        if session_name:
+            selected = next((s for s in run.sessions() if s.name == session_name), None)
+        if selected is None:
+            selected = next((s for s in reversed(run.sessions()) if self._session_state(run_id, s, "")["status"] == "running"), None)
+        meta = selected.read_meta() if selected is not None else {}
+        projects = [p for p in (meta.get("projects") or []) if p]
+        project_paths = self._project_paths(projects) if projects else tuple(
+            self.workspace.project_path(n).relative_to(self.root).as_posix()
+            for n in self.workspace.projects
+        )
+        dirty_at_start = tuple(str(p) for p in (meta.get("dirty_at_start") or []) if p)
+        return project_paths, dirty_at_start
 
     def _project_paths(self, names: list[str]) -> tuple[str, ...]:
         paths: list[str] = []
@@ -419,31 +593,56 @@ class WorkspaceService:
             info = integrated.get(session.name) or {}
             projects = [p for p in (info.get("projects") or []) if p]
             paths = self._project_paths(projects) or tuple()
-            # A session's changes are the commits carrying its Archon-Session
-            # trailer — the agent's own semantic commits plus the orchestrator's
-            # shared-state integration commit — aggregated. Falls back to the
-            # single integration commit for pre-trailer runs; skip if neither.
-            commits = wsgit.session_commits(run_id, session.name) if wsgit is not None else []
-            if commits:
-                summary = aggregate_session_summary(self.root, paths, commits)
-            elif info.get("workspace_commit"):
-                summary = session_change_summary(
-                    self.root, info.get("workspace_commit"), paths,
-                    base=None, fallback_files=tuple(info.get("files") or ()),
-                )
-            elif info:
-                summary = session_change_summary(
-                    self.root, None, paths, base=None, fallback_files=tuple(info.get("files") or ()),
-                )
+            # Agent sessions are attributed only from agent-authored semantic
+            # commits. The orchestrator's integration sweep is deterministic
+            # ledger bookkeeping: it can capture unrelated project files that
+            # changed in the shared worktree, so it must not populate the agent
+            # file table. System sessions still report their deterministic commits.
+            commit_rows = wsgit.session_commits_detailed(run_id, session.name) if wsgit is not None else []
+            role = str(info.get("role") or session.read_meta().get("role") or "").lower()
+            agent_role = role in ("ground", "horizon")
+            agent_commits = [
+                (r["sha"], r["subject"]) for r in commit_rows
+                if r.get("kind") == "agent" and str(r.get("role") or role).lower() in ("ground", "horizon", "")
+            ]
+            deterministic_rows = [r for r in commit_rows if r.get("kind") != "agent"]
+            if agent_role:
+                if agent_commits:
+                    summary = aggregate_session_summary(self.root, paths, agent_commits)
+                    summary["change_source"] = "agent-commits"
+                elif info:
+                    summary = session_change_summary(self.root, None, paths, base=None, fallback_files=())
+                    summary["change_source"] = "no-agent-commits"
+                else:
+                    continue
             else:
-                continue
+                deterministic_commits = [(r["sha"], r["subject"]) for r in deterministic_rows or commit_rows]
+                if deterministic_commits:
+                    summary = aggregate_session_summary(self.root, paths, deterministic_commits)
+                    summary["change_source"] = "deterministic-commits"
+                elif info.get("workspace_commit"):
+                    summary = session_change_summary(
+                        self.root, info.get("workspace_commit"), paths,
+                        base=None, fallback_files=tuple(info.get("files") or ()),
+                    )
+                    summary["change_source"] = "integration-fallback"
+                elif info:
+                    summary = session_change_summary(
+                        self.root, None, paths, base=None, fallback_files=tuple(info.get("files") or ()),
+                    )
+                    summary["change_source"] = "integration-fallback"
+                else:
+                    continue
             summary["session"] = session.name
-            summary["role"] = info.get("role")
+            summary["role"] = role or info.get("role")
             summary["projects"] = projects
-            # The files the session's task *declared* it would write (when known),
-            # so the UI can filter to the expected set — the workspace commit
-            # captures the whole scoped tree, so a file here isn't proof this
-            # session authored it (concurrency / manual edits / commit order).
+            summary["system_commits"] = [
+                {"sha": r["sha"], "subject": r["subject"], "kind": r.get("kind", "")}
+                for r in deterministic_rows
+            ]
+            # Advisory task write-set, kept for API compatibility/context only.
+            # The file table itself comes from provenance-tagged commits, not this
+            # expected-file list.
             summary["scope_files"] = self._session_scope_files(info.get("task_id"))
             sessions_out.append(summary)
             cum_sorry += summary.get("sorry_delta", 0)
@@ -474,28 +673,45 @@ class WorkspaceService:
         files = getattr(getattr(task, "write_set", None), "files", ()) or ()
         return [str(f) for f in files]
 
-    def working_changes(self, run_id: str) -> dict[str, Any]:
+    def working_changes(self, run_id: str, session: str | None = None) -> dict[str, Any]:
         """Live change view for a still-running session: the current working tree
         (uncommitted) vs the run's last committed session. Live-only (no working
-        tree exists in a static export)."""
-        from archon_horizon.server.changes_api import session_change_summary
+        tree exists in a static export).
 
-        integrated = self._session_integrations(run_id)
-        last_commit: str | None = None
-        try:
-            run = self.stores.run_logs.get(run_id)
-            for session in run.sessions():
-                info = integrated.get(session.name)
-                if info and info.get("workspace_commit"):
-                    last_commit = info["workspace_commit"]
-        except Exception:
-            pass
-        project_paths = tuple(
-            self.workspace.project_path(n).relative_to(self.root).as_posix()
-            for n in self.workspace.projects
+        Scoped to the files this run's own agent commits have touched, so a
+        *parallel* run writing sibling files in the same project (the shared
+        worktree) does not leak into this run's diff. Until this run has any agent
+        commit yet (its first session, nothing committed) we fall back to the
+        session's project scope so the very first uncommitted work is still shown.
+        """
+        from archon_horizon.server.changes_api import session_change_summary
+        from archon_horizon.vcs.git import WorkspaceGit, git_available
+
+        last_commit = self._last_run_commit(run_id)
+        project_paths, dirty_at_start = self._session_live_context(run_id, session)
+        run_files: set[str] = set()
+        if git_available():
+            run_files = WorkspaceGit(self.root).run_agent_changed_files(run_id)
+        # Keep only files under the session's project dirs — the agent commit also
+        # carries shared-state bookkeeping (.archon-horizon/…) that the old
+        # project-scoped live view never showed; drop it here too.
+        if run_files and project_paths:
+            run_files = {
+                f for f in run_files
+                if any(f == p or f.startswith(p.rstrip("/") + "/") for p in project_paths)
+            }
+        scope_paths = tuple(sorted(run_files)) if run_files else project_paths
+        summary = session_change_summary(
+            self.root,
+            None,
+            scope_paths,
+            base=last_commit,
+            worktree=True,
+            exclude_paths=dirty_at_start,
         )
-        summary = session_change_summary(self.root, None, project_paths, base=last_commit, worktree=True)
         summary["run"] = run_id
+        summary["session"] = session or ""
+        summary["scope_source"] = "run-agent-files" if run_files else "project"
         return summary
 
     def session_file_diff(self, run_id: str, session: str, path: str, *, worktree: bool = False) -> dict[str, Any]:
@@ -507,27 +723,27 @@ class WorkspaceService:
 
         integrated = self._session_integrations(run_id)
         if worktree:
-            last_commit: str | None = None
-            try:
-                run = self.stores.run_logs.get(run_id)
-                for s in run.sessions():
-                    info = integrated.get(s.name)
-                    if info and info.get("workspace_commit"):
-                        last_commit = info["workspace_commit"]
-            except Exception:
-                pass
+            last_commit = self._last_run_commit(run_id)
             return session_file_diff(self.root, None, path, base=last_commit, worktree=True)
-        # Span the session's commit range: base = parent of its first commit,
-        # target = its last commit — so the file's net change over the session is
-        # shown even when it landed in an agent commit distinct from the
-        # integration commit. Falls back to the single integration commit.
+        # Span the same commit set used by ``run_changes``. For agent sessions,
+        # that means agent-authored semantic commits only; deterministic
+        # integration sweeps are not allowed to add unrelated files to the diff.
         wsgit = WorkspaceGit(self.root) if git_available() else None
-        commits = wsgit.session_commits(run_id, session) if wsgit is not None else []
-        if commits:
-            first_sha, last_sha = commits[0][0], commits[-1][0]
+        info = integrated.get(session) or {}
+        role = str(info.get("role") or "").lower()
+        rows = wsgit.session_commits_detailed(run_id, session) if wsgit is not None else []
+        if role in ("ground", "horizon"):
+            rows = [r for r in rows if r.get("kind") == "agent"]
+        else:
+            deterministic = [r for r in rows if r.get("kind") != "agent"]
+            rows = deterministic or rows
+        if rows:
+            first_sha, last_sha = rows[0]["sha"], rows[-1]["sha"]
             return session_file_diff(self.root, last_sha, path, base=wsgit.parent_sha(first_sha))
-        target_commit = (integrated.get(session) or {}).get("workspace_commit")
-        return session_file_diff(self.root, target_commit, path, base=None)
+        if role not in ("ground", "horizon"):
+            target_commit = info.get("workspace_commit")
+            return session_file_diff(self.root, target_commit, path, base=None)
+        return {"path": path, "available": False, "diff": ""}
 
     def _inbox_provider_state(self) -> dict[str, Any]:
         return {
@@ -807,11 +1023,20 @@ class WorkspaceService:
                             f"/api/session/file-diff?run={run_id}&session={session['session']}&path={f['path']}"
                         )
         for name in self._discover_projects():
-            eps.append(f"/api/blueprint/chapters?project={name}")
-            eps.append(f"/api/source?project={name}")
+            encoded_name = quote(name, safe='')
+            eps.append(f"/api/blueprint/chapters?project={encoded_name}")
+            # Full per-project DAG (heavy) — the Blueprint/DAG pages fetch this on
+            # demand now that /api/state carries only light DAG nodes, so the
+            # static export must precompute it too or those pages lose node
+            # statements / proofs / Lean source.
+            eps.append(f"/api/blueprint/dag?project={encoded_name}")
+            eps.append(f"/api/source?project={encoded_name}")
+            eps.append(f"/api/project/history?project={encoded_name}")
             try:
                 for f in list_lean_files(self._project_path(name)):
-                    eps.append(f"/api/source/file?project={name}&path={f['path']}")
+                    eps.append(
+                        f"/api/source/file?project={encoded_name}&path={quote(f['path'], safe='')}"
+                    )
             except KeyError:
                 pass
         return eps
@@ -860,7 +1085,10 @@ class WorkspaceService:
         if parsed.path == "/api/run/changes":
             return self.run_changes((query.get("run") or [""])[0])
         if parsed.path == "/api/run/working-changes":
-            return self.working_changes((query.get("run") or [""])[0])
+            return self.working_changes(
+                (query.get("run") or [""])[0],
+                (query.get("session") or [""])[0] or None,
+            )
         if parsed.path == "/api/session/file-diff":
             return self.session_file_diff(
                 (query.get("run") or [""])[0],
@@ -870,11 +1098,25 @@ class WorkspaceService:
             )
         if parsed.path == "/api/projects":
             return self.projects_summary()
+        if parsed.path == "/api/project/history":
+            proj = (query.get("project") or [""])[0]
+            try:
+                limit = int((query.get("limit") or [str(_PROJECT_HISTORY_LIMIT)])[0])
+            except ValueError:
+                limit = _PROJECT_HISTORY_LIMIT
+            if proj:
+                return {"project": proj, "limit": max(1, min(_PROJECT_HISTORY_MAX_LIMIT, limit)), "history": self._project_history(proj, limit=limit)}
+            return {"project": "", "history": []}
         if parsed.path == "/api/blueprint/chapters":
             proj = (query.get("project") or [""])[0]
             if proj:
                 return project_chapters(self.workspace, proj)
             return project_chapters(self.workspace, next(iter(self._discover_projects()), ""))
+        if parsed.path == "/api/blueprint/dag":
+            # Full (heavy) single-project DAG, fetched on demand by the Blueprint
+            # and DAG pages. Kept out of /api/state so the poll stays small.
+            proj = (query.get("project") or [""])[0]
+            return published_dag(self.workspace, proj) or {}
         if parsed.path == "/api/source":
             proj = (query.get("project") or [""])[0]
             if proj:
@@ -1052,11 +1294,15 @@ class WorkspaceService:
                 task_refs=tuple(kw.get("task_refs", [])),
                 priority=kw.get("priority", "normal"),
                 scope=ItemScope(projects=projects),
-                metadata={
-                    "author": author,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }
+                metadata=apply_hierarchy(
+                    {
+                        "author": author,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    depth=kw.get("depth"),
+                    parent=kw.get("parent"),
+                ),
             )
             items.append(new_item)
             self.stores.roadmap.save(Roadmap(version=roadmap.version, items=tuple(items)))
@@ -1105,11 +1351,15 @@ class WorkspaceService:
                     task_refs=tuple(kw.get("task_refs", old.task_refs)),
                     priority=kw.get("priority", old.priority),
                     scope=ItemScope(projects=tuple(kw.get("projects", old.projects))),
-                    metadata={
-                        **old.metadata, 
-                        "author": kw.get("author", old.metadata.get("author", "unknown")),
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }
+                    metadata=apply_hierarchy(
+                        {
+                            **old.metadata,
+                            "author": kw.get("author", old.metadata.get("author", "unknown")),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                        depth=kw.get("depth"),
+                        parent=kw.get("parent"),
+                    ),
                 )
             elif action == "status":
                 items[idx] = RoadmapItem(

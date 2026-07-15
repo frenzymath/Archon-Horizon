@@ -113,6 +113,9 @@ def callback(
         log.route_to_stderr()
     elif not version:
         log.banner(__version__)
+        from archon_horizon.core.version import warn_if_newer_available
+
+        warn_if_newer_available(json_mode=json_mode)
 
 
 # ── register commands ────────────────────────────────────────────────

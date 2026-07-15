@@ -14,6 +14,7 @@ from .integration import (
     CommitOutcome,
     SessionIntegration,
     author_for,
+    integrate_workspace_baseline,
     integrate_workspace_run,
     integrate_workspace_session,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "author_for",
     "collect_revisions",
     "git_available",
+    "integrate_workspace_baseline",
     "integrate_workspace_run",
     "integrate_workspace_session",
     "project_git_for",

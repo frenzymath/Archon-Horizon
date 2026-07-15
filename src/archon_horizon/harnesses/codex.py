@@ -19,7 +19,7 @@ from pathlib import Path
 import json
 
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
-from archon_horizon.transcript.parsers import observed_model, parse_codex_rollout_line
+from archon_horizon.transcript.parsers import observed_effort, observed_model, parse_codex_rollout_line
 from archon_horizon.transcript.sink import TranscriptSink, read_transcript
 
 from .base import HarnessRequest
@@ -94,26 +94,38 @@ class CodexHarness(CommandHarness):
                 return found
         return None
 
-    def _rollout_model(self, child: Path | None) -> str | None:
-        """The model a rollout actually used — read from its ``session_meta`` OR
-        ``turn_context`` records (codex records it on the latter), via the same
-        parser the transcript uses, so a schema quirk here can't blank the model."""
+    def _rollout_events(self, child: Path | None) -> list[TranscriptEvent]:
+        """Parse a rollout file into transcript events via the same parser the
+        transcript uses, so a schema quirk here can't blank the readback."""
         if child is None:
-            return None
-        events = []
+            return []
+        events: list[TranscriptEvent] = []
         try:
             for line in child.read_text("utf-8", errors="replace").splitlines():
                 events.extend(parse_codex_rollout_line(line))
         except OSError:
-            return None
-        return observed_model(events)
+            return []
+        return events
+
+    def _rollout_model(self, child: Path | None) -> str | None:
+        """The model a rollout actually used — read from its ``session_meta`` OR
+        ``turn_context`` records (codex records it on the latter)."""
+        return observed_model(self._rollout_events(child))
 
     def emit_parent_model(self, thread_id: str, sink: TranscriptSink) -> None:
-        """Stamp the main session's model from its own rollout (the ``exec --json``
-        stream doesn't announce it), so the run view shows e.g. ``gpt-5.5``."""
-        model = self._rollout_model(self._rollout_for(self._sessions_dir(), thread_id))
+        """Stamp the main session's model + reasoning effort from its own rollout
+        (the ``exec --json`` stream announces neither), so the run view shows e.g.
+        ``gpt-5.5`` and confirms the effort tier the engine actually applied."""
+        events = self._rollout_events(self._rollout_for(self._sessions_dir(), thread_id))
+        meta: dict[str, object] = {}
+        model = observed_model(events)
         if isinstance(model, str) and model:
-            sink.emit(TranscriptEvent(TranscriptKind.SESSION_META, data={"model": model}))
+            meta["model"] = model
+        effort = observed_effort(events)
+        if isinstance(effort, str) and effort:
+            meta["effort"] = effort
+        if meta:
+            sink.emit(TranscriptEvent(TranscriptKind.SESSION_META, data=meta))
 
     def _ingest_child(self, sessions: Path, thread_id: str, sink: TranscriptSink) -> bool:
         child = self._rollout_for(sessions, thread_id)

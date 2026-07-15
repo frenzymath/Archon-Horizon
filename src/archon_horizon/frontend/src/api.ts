@@ -5,9 +5,40 @@ import type { GitCommit } from './hooks/useGitLog';
 const transcriptPath = (ref: string) => `/api/transcript?ref=${ref}`;
 const reportPath = (ref: string) => `/api/report?ref=${ref}`;
 
+// Conditional-GET cache: remember the ETag + parsed body per URL so a repeat
+// fetch can send `If-None-Match` and, when the server answers `304 Not Modified`,
+// reuse the cached body instead of re-downloading it. This is what keeps the 5s
+// `/api/state` poll from re-transferring several MB every tick when nothing has
+// changed. Bounded so a long session browsing many transcripts/files can't grow
+// it without limit (the hot polled endpoints stay resident because each 200
+// re-inserts them as most-recent).
+const ETAG_CACHE_MAX = 96;
+const etagCache = new Map<string, { etag: string; data: unknown }>();
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  return parseJsonResponse<T>(res, url);
+  const cached = etagCache.get(url);
+  const headers: Record<string, string> = {};
+  if (cached) headers['If-None-Match'] = cached.etag;
+  // `no-store` keeps the browser's own HTTP cache out of the way so the server
+  // alone decides 200-vs-304 based on the ETag we send.
+  const res = await fetch(url, { headers, cache: 'no-store' });
+  if (res.status === 304 && cached) {
+    // Refresh recency so it isn't evicted, then return the retained body.
+    etagCache.delete(url);
+    etagCache.set(url, cached);
+    return cached.data as T;
+  }
+  const data = await parseJsonResponse<T>(res, url);
+  const etag = res.headers.get('ETag');
+  if (etag) {
+    etagCache.delete(url);
+    etagCache.set(url, { etag, data });
+    if (etagCache.size > ETAG_CACHE_MAX) {
+      const oldest = etagCache.keys().next().value;
+      if (oldest !== undefined) etagCache.delete(oldest);
+    }
+  }
+  return data as T;
 }
 
 async function parseJsonResponse<T>(res: Response, label: string): Promise<T> {
@@ -43,6 +74,17 @@ export interface BlueprintChaptersResponse {
 export const getBlueprintChapters = (project: string) =>
   getJson<BlueprintChaptersResponse>(`/api/blueprint/chapters?project=${encodeURIComponent(project)}`);
 
+// Full (heavy) per-project blueprint DAG — node statements, proofs, and Lean
+// source — fetched on demand by the Blueprint and DAG pages. Kept out of
+// /api/state (which now carries only light DAG nodes) so the 5s poll stays small.
+export interface BlueprintDagResponse {
+  nodes?: any[];
+  edges?: any[];
+  [key: string]: any;
+}
+export const getBlueprintDag = (project: string) =>
+  getJson<BlueprintDagResponse>(`/api/blueprint/dag?project=${encodeURIComponent(project)}`);
+
 export interface SourceFile { path: string; size: number; sorries?: number; loc?: number; loc_code?: number }
 
 export interface ProjectStat {
@@ -55,8 +97,22 @@ export interface ProjectStat {
   blueprint_nodes: number;
   blueprint_leanok: number;
 }
+export interface ProjectTrendPoint {
+  sha: string;
+  short_sha: string;
+  date: string;
+  subject: string;
+  lean_files: number;
+  loc: number;
+  loc_code: number;
+  sorries: number;
+}
 export const getProjects = () =>
   getJson<{ projects: ProjectStat[]; totals: Omit<ProjectStat, 'name'> }>('/api/projects');
+export const getProjectHistory = (project: string, limit = 10) =>
+  getJson<{ project: string; limit?: number; history: ProjectTrendPoint[] }>(
+    `/api/project/history?project=${encodeURIComponent(project)}&limit=${encodeURIComponent(String(limit))}`,
+  );
 export const getSourceFiles = (project: string) =>
   getJson<{ files: SourceFile[] }>(`/api/source?project=${encodeURIComponent(project)}`);
 export const getSourceFile = (project: string, path: string) =>
@@ -107,14 +163,17 @@ export interface SessionChange {
   reason?: string;
   initial?: boolean;
   worktree?: boolean;
-  base_source?: 'previous-session' | 'git-parent' | 'working-tree' | 'session-commits' | 'none';
+  base_source?: 'previous-session' | 'git-parent' | 'working-tree' | 'session-commits' | 'explicit-base' | 'none';
+  change_source?: 'agent-commits' | 'no-agent-commits' | 'deterministic-commits' | 'integration-fallback';
   scope_files?: string[];
   commits?: { sha: string; subject: string }[];
+  system_commits?: { sha: string; subject: string; kind?: string }[];
   sha?: string | null;
   files: SessionChangeFile[];
   lean: ChangeRollup;
   blueprint: ChangeRollup;
   other_count: number;
+  excluded_count?: number;
   // Back-compat Lean roll-ups (used by the run trend).
   loc_add: number;
   loc_del: number;
@@ -140,8 +199,8 @@ export const getRunChanges = (runId: string) =>
   getJson<RunChanges>(`/api/run/changes?run=${runId}`);
 // Live-only (no working tree in a static export): current uncommitted changes
 // of a running session vs the run's last committed session.
-export const getWorkingChanges = (runId: string) =>
-  getJson<SessionChange>(`/api/run/working-changes?run=${runId}`);
+export const getWorkingChanges = (runId: string, session?: string) =>
+  getJson<SessionChange>(`/api/run/working-changes?run=${runId}${session ? `&session=${session}` : ''}`);
 export const getSessionFileDiff = (runId: string, session: string, path: string, worktree = false) =>
   getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}${worktree ? '&worktree=1' : ''}`);
 

@@ -64,8 +64,18 @@ class RunCommand:
 
         with self._dashboard_server():
             # `--backend interactive` hands the terminal straight to the engine so a
-            # human can drive the agent (type follow-ups). It only makes sense for a
-            # single role, not the headless orchestrated alternation.
+            # human can drive the agent (type follow-ups). It is a single human-driven
+            # session, not the headless orchestrated alternation. The same mode is
+            # requested from config by setting `backend: interactive` on a role's
+            # harness — resolved here so it behaves like the CLI flag: whatever the
+            # target (a task, a project, `.`, or a bare role), if the role that would
+            # run declares it, we launch that one role interactively, seeded with the
+            # focus, instead of dispatching it headlessly.
+            if self.backend != "interactive":
+                role = self._config_interactive_role()
+                if role is not None:
+                    self.backend = "interactive"
+                    self._interactive_role = role
             if self.backend == "interactive":
                 self._run_interactive()
                 return
@@ -77,7 +87,7 @@ class RunCommand:
 
             if self.resume is not None:
                 run = self._resume_run(orch)
-                reports = orch.run(run, resume=True)
+                reports = orch.run(run, resume=True, rounds_override=self.rounds)
                 self._emit_reports(reports)
                 return
 
@@ -159,18 +169,126 @@ class RunCommand:
             run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
         return orch.run(run, dry_run=self.dry_run)
 
+    def _config_interactive_role(self) -> str | None:
+        """The role to launch interactively when its harness declares
+        ``backend: interactive``, else ``None``.
+
+        Interactive is a single human-driven session, so we pick the ONE role the
+        target would drive: ``horizon run ground`` → Ground; anything that dispatches
+        Horizon (a task, a project, ``.``/``*``, or ``horizon run horizon``) → Horizon
+        if the Horizon harness opts in. A ``--resume`` counts too: it continues the
+        interrupted run's role interactively (resuming the engine conversation)."""
+        try:
+            cfg, _ = load_workspace(self.root)
+        except Exception:
+            return None
+
+        def declares_interactive(name: str | None) -> bool:
+            harness = cfg.harnesses.get(name) if name else None
+            return harness is not None and str(
+                harness.options.get("backend") or ""
+            ).strip().lower() == "interactive"
+
+        # An explicit `horizon run ground` is the only way to drive Ground alone.
+        if self.targets == ("ground",):
+            return "ground" if declares_interactive(cfg.ground_harness) else None
+        # Every other target shape ends up running a Horizon step, so the Horizon
+        # harness's opt-in governs — seeded with whatever focus was requested.
+        return "horizon" if declares_interactive(cfg.horizon_harness) else None
+
+    def _recover_interactive_resume(self, role: str) -> tuple[str | None, tuple[str, ...]]:
+        """For an interactive ``--resume``, find the run's last ``role`` session and
+        return ``(engine_session_id, focus)`` — the id to hand ``claude --resume`` and
+        the task to re-seed. Either may be empty when the run recorded neither."""
+        from archon_horizon.config.loader import build_stores
+
+        run_id = (self.resume or "").strip()
+        try:
+            _, workspace = load_workspace(self.root)
+            run_logs = build_stores(workspace).run_logs
+            if run_id.lower() in ("", "latest", "last"):
+                ids = run_logs.ids()
+                run_id = ids[-1] if ids else ""
+            elif run_id.isdigit():
+                run_id = f"{int(run_id):04d}"  # normalize to the width-4 on-disk id
+            if not run_id:
+                return None, ()
+            sessions = run_logs.get(run_id).sessions()
+        except Exception:
+            return None, ()
+        # Walk newest-first for the last session of this role that pinned an engine id.
+        for session in reversed(sessions):
+            try:
+                meta = session.read_meta()
+            except Exception:
+                continue
+            if meta.get("role") != role:
+                continue
+            sid = meta.get("engine_session_id")
+            task_id = str(meta.get("task_id") or "")
+            focus = (task_id,) if task_id else ()
+            if isinstance(sid, str) and sid:
+                return sid, focus
+            if focus:
+                # No engine id (older/interrupted-before-first-turn), but we at least
+                # recovered the task — a fresh session seeded with it is still useful.
+                return None, focus
+        return None, ()
+
     def _run_interactive(self) -> None:
         """Launch the role's harness as an interactive TTY session, seeded with a
-        role prompt the human can then steer."""
-        from .interactive import interactive_launch_for_role, interactive_role_prompt, run_interactive
+        role prompt the human can then steer.
 
-        role = self.targets[0] if self.targets and self.targets[0] in ROLE_TARGETS else "ground"
-        if not self.targets or self.targets[0] not in ROLE_TARGETS:
-            log.info(f"`--backend interactive` runs a single role; defaulting to {role!r}. "
-                     "Pass `horizon run ground` or `horizon run horizon` to choose.")
-        prompt = interactive_role_prompt(self.root.resolve(), role)
+        Unlike a raw TTY launch, this tails the engine's own on-disk session file
+        into a Horizon run session as it grows, so a human-driven interactive
+        session still shows up in the Log/dashboard (parsed like a headless run) and
+        stays ``--resume``-able via the recorded engine session id."""
+        from archon_horizon.config.loader import build_stores
+        from archon_horizon.core.clock import utc_now
+
+        from .interactive import (
+            interactive_launch_for_role,
+            interactive_role_prompt,
+            run_interactive,
+            run_interactive_captured,
+        )
+
+        # `focus` = the non-role targets (task ids / projects / files) the human
+        # asked for; the interactive session is seeded to start there.
+        focus = tuple(t for t in self.targets if t not in ROLE_TARGETS)
+        # Prefer the role picked by config routing (`_config_interactive_role`); the
+        # plain `--backend interactive` CLI path falls back to the target shape.
+        role = getattr(self, "_interactive_role", None)
+        if role is None:
+            if self.targets and self.targets[0] in ROLE_TARGETS:
+                role = self.targets[0]
+            elif focus:
+                role = "horizon"  # a task/project/file focus is Horizon work
+            else:
+                role = "ground"
+                log.info("`--backend interactive` with no target defaults to the "
+                         "ground role; pass `horizon run horizon` or a task/project "
+                         "to drive Horizon instead.")
+
+        # `--resume` interactively continues the interrupted run's engine
+        # conversation: recover its last matching session's engine id (for a true
+        # `claude --resume`) and the task it was on (to seed the focus).
+        resume_session_id: str | None = None
+        if self.resume is not None:
+            resume_session_id, resume_focus = self._recover_interactive_resume(role)
+            if resume_focus and not focus:
+                focus = resume_focus
+            if resume_session_id is None:
+                log.info("No resumable engine session found for that run; starting a "
+                         "fresh interactive session seeded with its focus instead.")
+
+        prompt = interactive_role_prompt(
+            self.root.resolve(), role, focus=focus, resuming=self.resume is not None
+        )
         try:
-            launch = interactive_launch_for_role(self.root, role, prompt)
+            launch = interactive_launch_for_role(
+                self.root, role, prompt, resume_session_id=resume_session_id
+            )
         except Exception as exc:
             log.error(f"Could not launch an interactive {role} session: {exc}")
             raise typer.Exit(1)
@@ -178,7 +296,47 @@ class RunCommand:
             log.error(f"The {role} harness is 'null'; nothing to launch interactively.")
             raise typer.Exit(1)
         log.info(f"Launching an interactive {role} session using {launch.description}.")
-        run_interactive(launch, self.root)
+
+        # A generic engine has no parseable session file, so just hand over the TTY.
+        if launch.engine == "generic":
+            run_interactive(launch, self.root)
+            return
+
+        cfg, workspace = load_workspace(self.root)
+        stores = build_stores(workspace)
+        runlog = stores.run_logs.allocate()
+        run = RunRecord(id=runlog.id, focus=Focus(), rounds_requested=1)
+        try:
+            stores.runs.put(run)
+        except Exception:
+            pass
+        session = runlog.new_session(f"{role}-interactive")
+        base_meta = {
+            "role": role,
+            "interactive": True,
+            "engine": launch.engine,
+            "engine_session_id": launch.session_id,
+            "started_at": utc_now().isoformat(),
+        }
+        session.write_meta({**base_meta, "status": "running"})
+        log.info(f"Recording this interactive session under run {runlog.id} — visible in the dashboard/Log.")
+
+        returncode = run_interactive_captured(
+            launch, self.root, transcript_path=session.transcript_path, role=role, seed_prompt=prompt,
+        )
+
+        session.write_meta({
+            **base_meta,
+            "status": "ok" if returncode == 0 else "failed",
+            "ended_at": utc_now().isoformat(),
+            "returncode": returncode,
+        })
+        (session.path / "report.md").write_text(
+            f"# Interactive {role} session\n\n"
+            f"A human-driven interactive session (engine: `{launch.engine}`). Its conversation was "
+            f"mirrored into this run's transcript as it happened. Exit code {returncode}.\n",
+            "utf-8",
+        )
 
     def _install_native_subagents(self, cfg, workspace) -> None:
         """Compile descriptors into each engine's workspace-local native agents.
@@ -202,12 +360,20 @@ class RunCommand:
                 log.error("Nothing to resume: this workspace has no recorded runs.")
                 raise typer.Exit(1)
             run_id = ids[-1]
+        elif run_id.isdigit():
+            # Run ids are zero-padded width-4 dir names (see runlog._claim); a bare
+            # `--resume 3` must be normalized to `0003` so both the store lookup and
+            # the display below match the on-disk id.
+            run_id = f"{int(run_id):04d}"
         try:
             run = orch.run_store.get(run_id)
         except Exception:
             log.error(f"Cannot resume run {run_id!r}: no run record found.")
             raise typer.Exit(1)
-        log.step(f"Resuming run {run_id} from its interrupted round.")
+        # Neutral wording: the orchestrator decides from on-disk sessions whether a
+        # round was actually interrupted (recover it) or the run already finished
+        # cleanly (run a fresh batch), and its `run.started` banner reports which.
+        log.step(f"Resuming run {run_id}.")
         return run
 
     def _emit_reports(self, reports) -> None:
@@ -230,6 +396,28 @@ class RunCommand:
             return
         log.results_table(rows, title="Run")
 
+    def _guard_task_status(self, task: HorizonTask) -> None:
+        """Stop before running an explicitly-named task whose status says not to.
+
+        ``done`` is terminal — the agent declared the work fully complete, so we do
+        not silently reopen it; the human re-queues it deliberately. ``running``
+        means another session is already driving it, so starting a second would
+        double-run the same task. Either way we print the one command that unblocks
+        the situation and exit; every other status (queued/blocked/failed) runs."""
+        if task.status is TaskStatus.DONE:
+            log.warn(
+                f"Task {task.id} is marked done — not starting it. If you want to run it "
+                f"again, re-queue it first:\n    horizon task set {task.id} --status queued"
+            )
+            raise typer.Exit(0)
+        if task.status is TaskStatus.RUNNING:
+            log.warn(
+                f"Task {task.id} is detected as running in another session — not starting a "
+                f"second one. If it is actually stuck and you want to run it here, re-queue "
+                f"it first:\n    horizon task set {task.id} --status queued"
+            )
+            raise typer.Exit(0)
+
     def _resolve_focus(self, orch, targets: tuple[str, ...]) -> Focus:
         if not targets:
             return Focus()
@@ -249,6 +437,7 @@ class RunCommand:
         remaining: list[str] = []
         for target in targets:
             if target in known_tasks:
+                self._guard_task_status(known_tasks[target])
                 selected.append(target)
             elif target in roadmap_ids:
                 task = orch.ensure_roadmap_task(target)
@@ -333,11 +522,11 @@ def run(
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only; do not run Horizon."),
     resume: str | None = typer.Option(
         None, "--resume",
-        help="Resume an interrupted run from its last unfinished round: pass a run id (e.g. 0007), or 'latest' for the most recent.",
+        help="Resume a run: pass a run id (e.g. 0007), or 'latest' for the most recent. Recovers an interrupted round; if the run already finished its rounds cleanly, runs another batch of forward rounds on the same focus. Combine with --rounds N to set that batch size.",
     ),
     backend: str = typer.Option(
         "default", "--backend",
-        help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine for a single role so you can type prompts — use with `ground` or `horizon`.",
+        help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine for a single role so you can type prompts (claude/codex sessions are still parsed into the Log) — use with `ground` or `horizon`.",
     ),
     run_id: str | None = typer.Option(
         None, "--run",

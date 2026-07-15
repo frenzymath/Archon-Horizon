@@ -18,6 +18,28 @@ description: Build and check Lean in this workspace and read the errors — use 
 - A `sorry` left in place is an open obligation, not a success. Do not hide a
   hard obligation behind a new `sorry` unless a hint explicitly allows it.
 
+## Fast LSP proving loop
+
+The `lean-lsp` MCP server gives sub-second feedback — far faster than a build
+(10–30s+). Drive proofs with it, then confirm with the kernel. Key tools:
+
+- `lean_goal(file, line)` — the proof state at a line. Call before writing any
+  tactic and after each one. Empty `goals_after` = that step closes the goal.
+- `lean_diagnostic_messages(file)` — instant errors/warnings after every edit
+  (`[]` = no errors, but *not* proof-complete — confirm with `lean_goal`).
+- `lean_multi_attempt(file, line, snippets=[...])` — test 3–5 **single-line,
+  indented** candidate tactics at once and see exactly which close the goal and
+  why the others fail. The highest-leverage tool for filling a `sorry`.
+- `lean_hover_info(file, line, col)` — type/signature/docs at an identifier
+  (point at the first char). `lean_file_outline(file)` — declarations + line
+  numbers without reading the whole file. `lean_run_code("#eval …")` — quick
+  standalone `#check`/`#eval`/`#print`.
+
+Core loop: `lean_goal` (what to prove) → search a premise (see the `leansearch`
+skill: `lean_local_search` / `lean_leansearch`) → `lean_multi_attempt` (test
+candidates) → edit with the winner → `lean_diagnostic_messages` (confirm) →
+kernel-check the module at the end.
+
 ## Heavy builds — actually wait for them
 
 A cold `lake build` (or one that recompiles Mathlib) can take many minutes. The

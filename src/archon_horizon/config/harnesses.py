@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import functools
+import json
 import shutil
 import subprocess
 
@@ -72,19 +73,17 @@ def _config_dir(cfg: HarnessConfig) -> str | None:
     return cfg.config_dir
 
 
-# Claude Code has no ``model_reasoning_effort`` flag like Codex; the equivalent
-# lever is the extended-thinking token budget, which Claude Code reads from the
-# ``MAX_THINKING_TOKENS`` env var. Map the same ``options.effort`` vocabulary
-# onto a budget so effort works uniformly across harnesses. The high end is
-# capped by the model; oversized values are clamped by the CLI, not us.
-CLAUDE_EFFORT_BUDGETS: dict[str, int] = {
-    "low": 4_000,
-    "medium": 12_000,
-    "high": 24_000,
-    "xhigh": 32_000,
-    "max": 48_000,
-    "ultracode": 48_000,
-}
+# claude -p exposes a native ``--effort`` flag (low|medium|high|xhigh|max) — the
+# proper reasoning-effort control, mirroring Codex's ``model_reasoning_effort``.
+# A raw-integer effort is instead read as an explicit extended-thinking token
+# budget (``MAX_THINKING_TOKENS``), the fine-grained escape hatch. ``ultracode``
+# is NOT a --effort value: it is a Claude Code *session setting* (xhigh +
+# automatic dynamic-workflow orchestration). Per the Claude Code docs it is
+# enabled — including headlessly under ``claude -p`` — by passing
+# ``{"ultracode": true}`` through ``--settings`` (never via --effort /
+# effortLevel / CLAUDE_CODE_EFFORT_LEVEL). So it drives no ``--effort`` flag and
+# is wired in through :func:`_claude_ultracode` instead.
+CLAUDE_EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 
 # Effort values that mean "no override — let the engine pick its own default".
@@ -108,27 +107,50 @@ def _effort_label(cfg: HarnessConfig) -> str | None:
     return None if value in _EFFORT_DEFAULT_SENTINELS else value
 
 
-def _claude_thinking_budget(cfg: HarnessConfig) -> int | None:
-    """Resolve ``options.effort`` to a ``MAX_THINKING_TOKENS`` budget for Claude.
-
-    Accepts the named tiers in :data:`CLAUDE_EFFORT_BUDGETS` or a raw integer
-    token count. Returns ``None`` when effort is unset or ``default`` (leaving
-    Claude Code's own default). Raises on an unrecognised value so a typo fails
-    loudly instead of silently disabling thinking.
+def _claude_effort_flag(cfg: HarnessConfig) -> str | None:
+    """The native ``--effort`` level for claude -p, or ``None`` to leave claude's
+    own default. Named tiers pass through; ``ultracode`` is a session setting, not
+    a flag value, so it returns ``None`` here and is applied via ``--settings``
+    instead (see :func:`_claude_ultracode`); a raw-integer effort is an
+    extended-thinking budget rather than an effort level, so it also returns
+    ``None`` here (see :func:`_claude_thinking_budget`). Raises on any other value
+    so a typo fails loudly instead of being ignored.
     """
     effort = _effort_label(cfg)
-    if effort is None:
+    if effort is None or effort.isdigit():
         return None
-    if effort.isdigit():
-        return int(effort)
-    budget = CLAUDE_EFFORT_BUDGETS.get(effort)
-    if budget is None:
-        valid = ", ".join(CLAUDE_EFFORT_BUDGETS)
-        raise ValueError(
-            f"harness {cfg.name!r}: unknown effort {effort!r}; "
-            f"expected default or one of {valid}, or an integer token budget"
-        )
-    return budget
+    if effort == "ultracode":
+        # Not a --effort value: applied via --settings '{"ultracode": true}' (see
+        # _claude_ultracode). The setting already sends xhigh, so no --effort flag.
+        return None
+    if effort in CLAUDE_EFFORT_LEVELS:
+        return effort
+    raise ValueError(
+        f"harness {cfg.name!r}: unknown effort {effort!r}; expected default or one of "
+        f"{', '.join(CLAUDE_EFFORT_LEVELS)}, or an integer thinking-token budget"
+    )
+
+
+def _claude_thinking_budget(cfg: HarnessConfig) -> int | None:
+    """A raw-integer ``options.effort`` as an explicit ``MAX_THINKING_TOKENS``
+    budget — the fine-grained escape hatch that complements ``--effort``. Named
+    tiers drive the flag instead, so they yield ``None`` here. Returns ``None``
+    when effort is unset or non-numeric."""
+    effort = _effort_label(cfg)
+    if effort is None or not effort.isdigit():
+        return None
+    return int(effort)
+
+
+def _claude_ultracode(cfg: HarnessConfig) -> bool:
+    """True when ``options.effort`` is ``ultracode`` — Claude Code's session mode
+    that pairs ``xhigh`` reasoning with automatic dynamic-workflow orchestration.
+
+    It is not a ``--effort`` level; per the Claude Code docs it is enabled by
+    passing ``{"ultracode": true}`` through ``--settings``, which works in
+    headless ``claude -p``. :func:`_build_claude_code` injects that setting rather
+    than an ``--effort`` flag. Requires workflows enabled and claude >= 2.1.154."""
+    return _effort_label(cfg) == "ultracode"
 
 
 # Provider API-key env vars per engine kind: if one is set (in the harness's own
@@ -203,11 +225,25 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
     if config_dir:
         env_overrides.setdefault("CLAUDE_CONFIG_DIR", config_dir)
 
-    # Effort → extended-thinking budget. An explicit MAX_THINKING_TOKENS in the
-    # harness's `env` wins (setdefault), so the effort tier is only a default.
+    # Reasoning effort → native `--effort` flag (appended to argv below). A
+    # raw-integer effort is instead an explicit extended-thinking budget; an
+    # explicit MAX_THINKING_TOKENS in the harness `env` always wins (setdefault).
+    effort_flag = _claude_effort_flag(cfg)
     budget = _claude_thinking_budget(cfg)
     if budget is not None:
         env_overrides.setdefault("MAX_THINKING_TOKENS", str(budget))
+
+    # `ultracode` is a session setting, not an --effort level: enable it the way
+    # the Claude Code docs prescribe — `--settings '{"ultracode": true}'`, which
+    # works headlessly under `claude -p`. It already sends xhigh, so effort_flag
+    # is None for it (see _claude_effort_flag). Injected into argv below.
+    ultracode_settings = json.dumps({"ultracode": True}) if _claude_ultracode(cfg) else None
+    if ultracode_settings is not None:
+        log.info(
+            f"harness {cfg.name!r}: ultracode enabled — xhigh + automatic dynamic-workflow "
+            "orchestration via --settings (needs workflows enabled and claude >= 2.1.154; "
+            "each substantive task may fan out to many agents)."
+        )
 
     # Horizon agents run fully headless — there is no TTY to answer a permission
     # prompt, so Claude must bypass them or every `cd`/redirect/multi-op command
@@ -217,13 +253,27 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
 
     backend = str(cfg.options.get("backend") or "default").strip().lower()
     if backend == "interactive":
-        raise ValueError("claude-code backend 'interactive' is not supported by Horizon's transcript harness")
+        # Interactive is a run *mode*, not a headless transport. A single-role run
+        # (`horizon run horizon`/`ground`, or `--backend interactive`) launches this
+        # harness as an interactive TTY via commands/interactive.py; run.py routes
+        # there when the role's harness declares `backend: interactive`. When the
+        # SAME harness is built for the headless orchestrated alternation, fall back
+        # to the default transport so the run still works.
+        log.info(
+            f"harness {cfg.name!r}: backend 'interactive' applies to single-role runs "
+            "(launched as a TTY session); using the default transport for headless orchestration."
+        )
+        backend = "default"
     if backend == "claude-p":
         if shutil.which("claude-p") is None:
             log.warn(CLAUDE_P_INSTALL_HINT)
         argv = ["claude-p", PROMPT_TOKEN, "--output-format", "stream-json", "--verbose"]
         if model:
             argv += ["--model", model]
+        if effort_flag and _claude_p_supports("--effort"):
+            argv += ["--effort", effort_flag]
+        if ultracode_settings and _claude_p_supports("--settings"):
+            argv += ["--settings", ultracode_settings]
         timeout_sec = int(cfg.options.get("timeout_sec") or 1800)
         quiet_after_sec = int(cfg.options.get("quiet_after_sec") or 15)
         argv += [*cfg.args, "--timeout-sec", str(timeout_sec), "--quiet-after-sec", str(quiet_after_sec)]
@@ -252,6 +302,10 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
         argv.append("--dangerously-skip-permissions")
     if model:
         argv += ["--model", model]
+    if effort_flag:
+        argv += ["--effort", effort_flag]
+    if ultracode_settings:
+        argv += ["--settings", ultracode_settings]
     argv += [*cfg.args, PROMPT_TOKEN]
 
     if backend == "vscode":

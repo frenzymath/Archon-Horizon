@@ -12,8 +12,9 @@
  *   • hides `\label{}` (anchors), KaTeX-renders math (incl. titles & align envs);
  *   • surfaces `% SOURCE` / `% NOTE` comments as expandable chips.
  */
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import katex from 'katex';
+import { useProgressiveCount } from '../hooks/useProgressiveCount';
 import 'katex/dist/katex.min.css';
 import styles from './BlueprintDoc.module.css';
 
@@ -702,7 +703,10 @@ function parseCommentEntries(value: string): { tag: string; text: string }[] {
   return entries.filter(e => e.text.trim() || e.tag);
 }
 
-function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
+// Memoized so a chapter can stream its blocks in progressively (see ChapterView)
+// without re-running KaTeX on the blocks already rendered — block objects and
+// `ctx` keep a stable identity, so growing the visible count stays O(n).
+const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
   if (b.t === 'para') return <p className={styles.p}><Inlines nodes={b.c} ctx={ctx} k={k} /></p>;
   if (b.t === 'paragraph') return <h5 className={styles.paragraphHead}><Inlines nodes={b.title} ctx={ctx} k={k} /></h5>;
   if (b.t === 'displaymath') return <div className={styles.dblock} dangerouslySetInnerHTML={{ __html: renderMath(cleanDisplay(b.v), true, ctx.macros) }} />;
@@ -773,7 +777,7 @@ function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k: string }) {
       </div>
     </div>
   );
-}
+});
 
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
@@ -798,13 +802,22 @@ export function ChapterView({
     () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs }),
     [macros, labels, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
   );
+  // Progressive rendering: paint the top of the chapter immediately and stream
+  // the remaining (KaTeX-heavy) blocks in over the next frames, so opening a big
+  // chapter doesn't freeze until every theorem has typeset. Reset per chapter.
+  const shown = useProgressiveCount(chapter.blocks.length, {
+    resetKey: chapter.anchor,
+    initial: 12,
+    step: 24,
+  });
   return (
     <section id={chapter.anchor} className={`${styles.root} ${styles.chapter}`}>
       <h2 className={styles.chapterTitle}>
         <span className={styles.chapNum}>{chapter.num}</span> <Inlines nodes={chapter.title} ctx={ctx} k={`ch${chapter.num}`} />
         <IterChip kind="Chapter .tex (statements & proofs)" mod={chapterMod} onOpenLogs={onOpenLogs} />
       </h2>
-      {chapter.blocks.map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${chapter.num}-${j}`} />)}
+      {chapter.blocks.slice(0, shown).map((b, j) => <BlockNode key={j} b={b} ctx={ctx} k={`ch${chapter.num}-${j}`} />)}
+      {shown < chapter.blocks.length && <p className={styles.fragEmpty}>Rendering the rest of this chapter…</p>}
     </section>
   );
 }

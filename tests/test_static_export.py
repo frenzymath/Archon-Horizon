@@ -66,7 +66,11 @@ def test_pages_workflow_written_with_relative_upload_path(tmp_path: Path) -> Non
     upload = next(s for j in doc["jobs"].values() for s in j["steps"] if "upload-pages" in str(s.get("uses")))
     assert upload["with"]["path"] == "docs"
     # the GitHub expression survived templating intact (not brace-mangled).
-    assert "${{ steps.deployment.outputs.page_url }}" in path.read_text("utf-8")
+    # The deploy step retries up to 3x, so page_url falls back across attempts.
+    assert (
+        "${{ steps.deploy-1.outputs.page_url || steps.deploy-2.outputs.page_url"
+        " || steps.deploy-3.outputs.page_url }}" in path.read_text("utf-8")
+    )
 
     # Idempotent: a second call leaves the existing file untouched.
     _, status2 = write_pages_workflow(ws, out)

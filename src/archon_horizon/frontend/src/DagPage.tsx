@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import DagNetwork from './components/DagNetwork';
 import { buildBlueprintModel, TexFragment } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
-import { syncBlueprintDags, getBlueprintChapters, type BlueprintChaptersResponse } from './api';
+import { syncBlueprintDags, getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
 import { isStaticDashboard } from './staticMode';
 
 type Query = 'all' | 'frontier' | 'unproved' | 'sorry' | 'gaps' | 'zeroEffort' | 'leanok' | 'mathlib' | 'roots' | 'leaves' | 'isolated';
@@ -85,6 +85,18 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   }, [project]);
   const macros = blueprintData?.macros ?? {};
   const labelMap = useMemo(() => buildBlueprintModel(blueprintData?.chapters ?? [], true).labels, [blueprintData]);
+  // The full DAG (with node statements / proofs / Lean source) is fetched on
+  // demand rather than ridden along in the 5s /api/state poll — that heavy text
+  // is only needed here and on the Blueprint page.
+  const [fullDag, setFullDag] = useState<BlueprintDagResponse | null>(null);
+  useEffect(() => {
+    if (!project) { setFullDag(null); return; }
+    let cancelled = false;
+    getBlueprintDag(project)
+      .then((data) => { if (!cancelled) setFullDag(data); })
+      .catch(() => { if (!cancelled) setFullDag(null); });
+    return () => { cancelled = true; };
+  }, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState<Query>('all');
   const [search, setSearch] = useState('');
@@ -109,7 +121,10 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
     setDepRange([0, Infinity]); setEffRange([0, Infinity]);
   }, [project, focusNode]);
 
-  const dag = project ? state.blueprints?.[project] ?? {} : {};
+  // Prefer the freshly-fetched full DAG; fall back to the light DAG from the
+  // poll (nodes/edges without the heavy text) so the graph still draws instantly
+  // while the full payload is loading.
+  const dag: any = (project ? (fullDag ?? state.blueprints?.[project]) : null) ?? {};
   const dagSig = useMemo(() => JSON.stringify(dag?.nodes ?? []) + '|' + JSON.stringify(dag?.edges ?? []), [dag]);
   const nodes: any[] = useMemo(() => dag.nodes ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const edges: any[] = useMemo(() => dag.edges ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps

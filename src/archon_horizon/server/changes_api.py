@@ -166,6 +166,7 @@ def session_change_summary(
     base: str | None = None,
     worktree: bool = False,
     fallback_files: tuple[str, ...] = (),
+    exclude_paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Change summary for the commit ``sha`` vs ``base``, scoped to
     ``project_paths`` (workspace-relative directory prefixes).
@@ -235,7 +236,10 @@ def session_change_summary(
             base_source = "git-parent" if base is not None else "none"
     initial = base is None and not worktree
 
-    rows_raw = git.numstat(base, effective_sha, project_paths)
+    excluded = {p for p in exclude_paths if p}
+    rows_all = git.numstat(base, effective_sha, project_paths)
+    excluded_hits = {row[2] for row in rows_all if row[2] in excluded}
+    rows_raw = [row for row in rows_all if row[2] not in excluded]
     files = [_file_row(git, base, effective_sha, add, dele, path) for add, dele, path in rows_raw]
     files.sort(key=lambda r: (
         {"lean": 0, "blueprint": 1, "other": 2}[r["category"]],
@@ -255,6 +259,7 @@ def session_change_summary(
         "lean": lean,
         "blueprint": blueprint,
         "other_count": sum(1 for r in files if r["category"] == "other"),
+        "excluded_count": len(excluded_hits) if worktree else 0,
         "sorry_delta": lean["sorry_delta"],
         "loc_add": lean["add"],
         "loc_del": lean["del"],

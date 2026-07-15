@@ -6,6 +6,7 @@ import http.client
 import json
 import socket
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -372,3 +373,27 @@ def test_run_status_ignores_trailing_system_session(tmp_path: Path) -> None:
 
     assert [session["status"] for session in run_state["sessions"]] == ["failed", "completed"]
     assert run_state["status"] == "failed"
+
+
+def test_run_status_activity_comes_from_latest_agentic_session(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    run = RunLogTree(ws / ".archon-horizon" / "runs").allocate()
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    recent = datetime.now(timezone.utc)
+
+    horizon = run.new_session("horizon-R-1")
+    horizon.write_meta({"role": "horizon"})
+    sink = JsonlTranscriptSink(horizon.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, at=old, data={"role": "horizon"}))
+    sink.emit(TranscriptEvent(TranscriptKind.TEXT, at=old, text="started but stale"))
+
+    system = run.new_session("system")
+    system.write_meta({"role": "system"})
+    sink = JsonlTranscriptSink(system.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, at=recent, data={"role": "system"}))
+    sink.emit(TranscriptEvent(TranscriptKind.TEXT, at=recent, text="recent deterministic work"))
+
+    run_state = WorkspaceService(ws).state()["runs"][0]
+
+    assert [session["status"] for session in run_state["sessions"]] == ["interrupted", "interrupted"]
+    assert run_state["status"] == "interrupted"

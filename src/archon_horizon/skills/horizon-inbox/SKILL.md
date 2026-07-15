@@ -1,6 +1,6 @@
 ---
 name: horizon-inbox
-description: Read and act on the Archon Horizon inbox — list/filter agent-ready items, understand labels/kinds, comment, close, create, and message other projects via the `horizon inbox` CLI.
+description: Read and act on the Archon Horizon inbox — list/filter agent-ready items, understand labels/kinds, comment, archive, create, and message other projects via the `horizon inbox` CLI.
 ---
 
 The inbox is the durable channel between the human, the Ground agent, the
@@ -65,8 +65,8 @@ Before opening a new item, search the open inbox for the same topic using
 `--project P` / `--to R`. If a live item already covers the same issue, do not
 open a duplicate: add a comment with the new evidence, or edit the body if the
 main description is stale. If you discover an open item is obsolete, already
-solved, or superseded, add a short closing comment explaining why and then run
-`horizon inbox complete <id>`.
+solved, consumed, or superseded, add a short comment when the reason is not
+obvious and then run `horizon inbox archive <id>`.
 
 - `horizon inbox comment <id> --body "..."` — progress note on an item (record
   what you did; not to ask the human for clarification). Do not write your name
@@ -80,15 +80,16 @@ solved, or superseded, add a short closing comment explaining why and then run
   names and file paths only as supporting detail; the substance is the maths, not
   a code changelog. This applies to comments on **roadmap items and tasks** too:
   when a key step lands, record it there in the same mathematical, legible style.
-- `horizon inbox complete <id>` — close an item once you have acted on it. Before
-  closing, add a short **closing comment**: first the mathematical conclusion (what
-  was proved/established, in words + LaTeX), then a line of concise metadata
-  (runs, approximate LOC, files/declarations involved). A reader should grasp the
-  result and how it was concluded without opening the logs.
 - `horizon inbox archive <id>` — soft-delete: keep the item for the record but
-  hide it from the dashboard by default. Use for stale/superseded items that are
-  not worth a closing comment; prefer `complete` (with a comment) for work you
-  actually concluded. Ground is responsible for keeping the inbox tidy this way.
+  hide it from the dashboard by default. Use for stale, superseded, consumed, or
+  no-longer-key context. Ground is responsible for keeping the inbox tidy this
+  way, including pruning memory/info so they remain small.
+- `horizon inbox complete <id>` — mark an item resolved only when it records work
+  you genuinely concluded and want to keep visible outside the archive. Before
+  completing, add a short **conclusion comment**: first the mathematical
+  conclusion (what was proved/established, in words + LaTeX), then concise
+  metadata (runs, approximate LOC, files/declarations involved). A reader should
+  grasp the result and how it was concluded without opening the logs.
 - `horizon inbox add --body "Short title\n\nDescription with details and next action." [--to R] [--project P] [--persistent|--temporary] [--agent <name> if a subagent]`
   — open a new item.
   - `--to` is the recipient: `horizon`, `ground`, `human`, or `project:<name>`.
@@ -106,5 +107,6 @@ solved, or superseded, add a short closing comment explaining why and then run
   "Protected" section; honour them, including semantic ones.
 
 Reading convention: an item tagged `[persistent]` is a standing rule — respect
-it every round and never close it. `[temporary]` (or untagged) is one-shot —
-`complete` it once consumed. Items in the "Protected" section are never modified.
+it every round and keep it open while relevant. `[temporary]` (or untagged) is
+one-shot — archive it once consumed. Items in the "Protected" section are never
+modified.

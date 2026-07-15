@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: Own one assigned blueprint slice end-to-end — keep it pure math with complete proofs, cite references with \source{...} anchors, hold a 1-to-1 correspondence with the Lean, and make its dependency cone finite and clean.
+description: Own one assigned blueprint slice end-to-end — keep it pure math with complete proofs, cite references with \source{...} anchors, keep each node faithfully aligned with the Lean it names, and make its dependency cone finite and clean.
 write_domain: "blueprint/**, references/**"
 read_only: false
 default_enabled: true
@@ -26,20 +26,28 @@ recent Lean — don't guess.
   "our failed route"), and filler. Every `proof` must be a real, rigorous proof —
   not a sketch or TODO. Keep nodes small by *splitting* a hard step into its own
   `\uses`-linked lemma (down to sentence-sized lemmas), never by abbreviating.
-- **Stay close to the references and cite them structurally.** Every block
-  derived from a source carries a `\source{slug:page-NNNN}` anchor. The shared
-  library is at the **workspace-root `references/`**, indexed by
+- **Stay close to the references and cite them structurally** — read the
+  `references` skill. Every block derived from a source carries a `\source{...}`
+  anchor, and you must have **read the source before you cite it** — never
+  speculate an anchor from a title or memory. Anchor by what the source is: a TeX
+  source by slug (`\source{slug}`, no fabricated page number); a PDF-only source
+  by a page you have actually transcribed and read (`\source{slug:page-NNNN}`).
+  The shared library is at the **workspace-root `references/`**, indexed by
   `references/manifest.yaml`; page transcriptions live under
   `references/<slug>/tex/page-NNNN.tex`. Do not paste `% QUOTE` comments into the
-  blueprint. If a needed source or page transcription is missing, spawn the
-  `reference-retriever` subagent (by name, through your engine's native subagent
-  mechanism) with a directive naming the source/page range, and wait for it.
-- **Hold 1-to-1 with the Lean.** One blueprint node ↔ one Lean declaration, with
-  matching signatures. When Horizon's Lean has helper declarations with no math
-  counterpart, write their LaTeX statements so the correspondence is complete.
-  Flag fake/placeholder statements, `\lean{...}` signature mismatches, and proof
-  divergence — and flag where a chapter is too thin to have guided a faithful
-  formalization.
+  blueprint. If a needed source is missing, or a PDF-only source needs its LaTeX
+  extracted (vision transcription, never OCR — a cheap vision model is enough),
+  spawn the `reference-retriever` subagent (by name, through your engine's native
+  subagent mechanism) with a directive naming the source/page range, and wait for it.
+- **Keep each node faithfully aligned with the Lean it names.** The mapping need
+  NOT be 1-to-1: a node may bind several Lean declarations (`\lean{a, b}`) when
+  they jointly formalize its one mathematical statement, and Lean may carry
+  helper/auxiliary declarations with no blueprint node at all — those need no node.
+  What must hold is that every node that DOES exist is honest: its `\lean{...}`
+  names the real decl(s), the signatures match, and the proof does not diverge.
+  Flag fake/placeholder statements, `\lean{...}` mismatches, and proof divergence;
+  flag where a chapter is too thin to have guided a faithful formalization; and
+  flag where a mathematically significant Lean result has no node and deserves one.
 - **Check recent Lean against the blueprint.** Diff the Lean that changed in this
   project recently (`project-git`) and judge whether it is *mathematically*
   aligned with the blueprint. When the **blueprint** is the one that's wrong, fix

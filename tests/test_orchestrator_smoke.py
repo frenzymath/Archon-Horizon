@@ -32,12 +32,45 @@ from archon_horizon.store.filesystem import (
 )
 
 
+class _RecordingHorizon(HarnessHorizonAgent):
+    """A Horizon agent that, on a clean session, records a terminal status for its
+    task — exactly as a real agent does by running ``horizon task set <id>
+    --status <s>`` during its session. This is the ONLY way a task becomes
+    terminal now: the orchestrator no longer parses the report or invents ``done``.
+    ``status=None`` models a session that ended without declaring anything (so the
+    machine returns the task to ``queued``)."""
+
+    def __init__(self, harness, store, status):
+        super().__init__(harness)
+        self._store = store
+        self._status = status
+
+    def run_task(self, context):
+        result = super().run_task(context)
+        # A non-clean exit (harness FAILED) means the agent could not record
+        # anything; leave it to the machine (which returns the task to queued).
+        if self._status is not None and result.status is not TaskStatus.FAILED:
+            task = self._store.get(context.task.id)
+            self._store.put(dataclasses.replace(task, status=self._status))
+            self._store.append_history(context.task.id, {
+                "at": "2026-07-02T00:00:00+00:00",
+                "actor": "horizon",
+                "field": "status",
+                "from": task.status.value,
+                "to": self._status.value,
+                "note": "agent recorded status via `horizon task set`",
+            })
+        return result
+
+
 def _build(
     tmp_path: Path,
     *,
     freeze: FreezeSet | None = None,
     horizon_ok: bool = True,
     ground_ok: bool = True,
+    horizon_report: str | None = None,
+    horizon_sets_status: TaskStatus | None = TaskStatus.DONE,
 ) -> tuple[Orchestrator, FilesystemTaskStore]:
     root = tmp_path
     (root / "projects" / "ag-main").mkdir(parents=True)
@@ -54,12 +87,17 @@ def _build(
         if ground_ok
         else NullHarness(lambda req: HarnessResult(ok=False, text="", metadata={"returncode": 1}))
     )
-    horizon = HarnessHorizonAgent(
-        NullHarness(lambda req: HarnessResult(ok=horizon_ok, text="done" if horizon_ok else "boom"))
-    )
 
     task_store = FilesystemTaskStore(state / "tasks")
     roadmap_store = FilesystemRoadmapStore(state / "roadmap")
+    horizon = _RecordingHorizon(
+        NullHarness(lambda req: HarnessResult(
+            ok=horizon_ok,
+            text=(horizon_report or "## Summary\nDid work.") if horizon_ok else "boom",
+        )),
+        task_store,
+        horizon_sets_status if horizon_ok else None,
+    )
     # Tasks are human-created; seed one queued task directly (the NullHarness
     # can't). A matching ACTIVE roadmap milestone is kept for the tests that infer
     # a task from a roadmap id — but it no longer auto-creates any task.
@@ -150,34 +188,63 @@ def test_focus_runs_in_focus_work_and_excludes_others(tmp_path: Path) -> None:
     assert task_store.get("R-3").status is TaskStatus.QUEUED
 
 
-def test_focused_failed_task_retries_each_round(tmp_path: Path) -> None:
-    # A FAILED outcome is metadata, not a gate: an explicitly focused task is
-    # re-queued and retried each round (the multi-round re-run policy).
+def test_focused_crashed_session_retries_each_round(tmp_path: Path) -> None:
+    # A non-clean session recorded no terminal status, so the machine returns the
+    # task to queued and it retries each round (the multi-round re-run policy). The
+    # orchestrator never writes FAILED — only the agent can, via the CLI.
     orch, task_store = _build(tmp_path, horizon_ok=False)
 
     reports = orch.run(RunRecord(id="S-0006", focus=Focus(tasks=("R-1",)), rounds_requested=3))
 
     assert tuple(task_id for report in reports for task_id in report.tasks_run) == ("R-1", "R-1", "R-1")
-    assert task_store.get("R-1").status is TaskStatus.FAILED
+    assert task_store.get("R-1").status is TaskStatus.QUEUED
+    # Each machine return-to-queued is auditable, not a silent flip: history
+    # records the running -> queued transitions by "system".
+    history = task_store.get("R-1").metadata.get("history") or []
+    reopens = [h for h in history if h.get("field") == "status" and h.get("to") == "queued" and h.get("actor") == "system"]
+    assert reopens, "the machine's return-to-queued of a retried task should be recorded in history"
 
 
-def test_focused_task_is_reworked_every_round_even_after_done(tmp_path: Path) -> None:
-    # A focused task keeps being worked each round even though every Horizon pass
-    # returns DONE — the run works the milestone across the rounds you asked for.
+def test_focused_run_stops_early_when_task_is_done(tmp_path: Path) -> None:
+    # A focused run ends as soon as its milestone is complete: the Horizon pass
+    # returns DONE on round 1, so the remaining requested rounds are skipped
+    # rather than reworking a finished task.
     orch, task_store = _build(tmp_path)
 
     reports = orch.run(RunRecord(id="S-0007", focus=Focus(tasks=("R-1",)), rounds_requested=3))
 
-    assert tuple(task_id for report in reports for task_id in report.tasks_run) == ("R-1", "R-1", "R-1")
+    assert tuple(task_id for report in reports for task_id in report.tasks_run) == ("R-1",)
     assert task_store.get("R-1").status is TaskStatus.DONE
-    # Each round-start re-queue of the agent-completed task is auditable, not a
-    # silent status flip: history records the done -> queued reopens by "system".
+    stops = [e for e in orch.event_log.read_all() if e.type == "run.stopped"]
+    assert stops and stops[-1].data.get("reason") == "focus-complete"
+
+
+def test_focused_success_without_status_declaration_stays_queued(tmp_path: Path) -> None:
+    # A clean session that did not record a terminal status is not "done": the
+    # objective may be unfinished. The machine returns the task to queued so the
+    # next requested round can continue. The report text is irrelevant now.
+    orch, task_store = _build(tmp_path, horizon_sets_status=None)
+
+    reports = orch.run(RunRecord(id="S-0014", focus=Focus(tasks=("R-1",)), rounds_requested=1))
+
+    assert tuple(task_id for report in reports for task_id in report.tasks_run) == ("R-1",)
+    assert task_store.get("R-1").status is TaskStatus.QUEUED
     history = task_store.get("R-1").metadata.get("history") or []
-    reopens = [h for h in history if h.get("field") == "status" and h.get("to") == "queued" and h.get("actor") == "system"]
-    assert reopens, "focused re-queue of a done task should be recorded in history"
+    assert any(
+        h.get("field") == "status"
+        and h.get("actor") == "system"
+        and h.get("from") == "running"
+        and h.get("to") == "queued"
+        for h in history
+    )
+    assert any(e.type == "task.incomplete" for e in orch.event_log.read_all())
 
 
-def test_focused_task_with_recorded_done_status_is_not_requeued(tmp_path: Path) -> None:
+def test_done_task_is_terminal_and_never_reopened(tmp_path: Path) -> None:
+    # `done` is terminal: the orchestrator never reopens a done focused task, so it
+    # does not run and the run finds nothing runnable. (Re-running a finished task
+    # is a deliberate human act — `horizon task set <id> --status queued` — which
+    # the CLI guards separately.)
     orch, task_store = _build(tmp_path)
     task = task_store.get("R-1")
     task_store.put(dataclasses.replace(task, status=TaskStatus.DONE))
@@ -195,7 +262,42 @@ def test_focused_task_with_recorded_done_status_is_not_requeued(tmp_path: Path) 
 
     reports = orch.run(RunRecord(id="S-0011", focus=Focus(tasks=("R-1",)), rounds_requested=2))
 
-    assert tuple(task_id for report in reports for task_id in report.tasks_run) == ()
+    assert all("R-1" not in report.tasks_run for report in reports)
+    assert task_store.get("R-1").status is TaskStatus.DONE
+    history = task_store.get("R-1").metadata.get("history") or []
+    assert not any(
+        h.get("field") == "status" and h.get("from") == "done" and h.get("to") == "queued"
+        for h in history
+    ), "a done task must not be silently reopened by the orchestrator"
+
+
+def test_user_started_running_task_history_explains_dispatch_queue(tmp_path: Path) -> None:
+    orch, task_store = _build(tmp_path)
+    task = task_store.get("R-1")
+    task_store.put(dataclasses.replace(task, status=TaskStatus.RUNNING))
+
+    reports = orch.run(RunRecord(id="S-0015", focus=Focus(tasks=("R-1",)), rounds_requested=1))
+
+    assert reports[0].tasks_run == ("R-1",)
+    history = task_store.get("R-1").metadata.get("history") or []
+    assert any(
+        h.get("field") == "status"
+        and h.get("actor") == "system"
+        and h.get("from") == "running"
+        and h.get("to") == "queued"
+        and "dispatched by this run" in str(h.get("note"))
+        for h in history
+    )
+
+
+def test_dry_run_does_not_queue_focused_done_task(tmp_path: Path) -> None:
+    orch, task_store = _build(tmp_path)
+    task = task_store.get("R-1")
+    task_store.put(dataclasses.replace(task, status=TaskStatus.DONE))
+
+    reports = orch.run(RunRecord(id="S-0013", focus=Focus(tasks=("R-1",)), rounds_requested=1), dry_run=True)
+
+    assert reports[0].planned == ()
     assert task_store.get("R-1").status is TaskStatus.DONE
 
 
@@ -440,4 +542,3 @@ def test_auth_error_early_stop(tmp_path: Path) -> None:
     stopped = [e.data for e in orchestrator.event_log.read_all() if e.type == "run.stopped"]
     assert len(stopped) == 1
     assert stopped[0]["reason"] == "auth_error"
-

@@ -62,6 +62,30 @@ def test_horizon_commit_stamps_provenance_and_attributes_role(tmp_path: Path, mo
     assert run_tr == "0001"
 
 
+def test_horizon_commit_accepts_workspace_relative_path_from_inside_project(tmp_path: Path, monkeypatch) -> None:
+    """Regression for the I-0069 path-doubling family: an agent whose cwd is INSIDE
+    a project passes a workspace-relative path (`project/File.lean`). It must resolve
+    to that one change, not `project/project/File.lean` (which failed `git add` with
+    'pathspec did not match')."""
+    _identity()
+    ws = tmp_path / "ws"
+    assert main(["--root", str(ws), "init", "--no-interactive"]) == 0
+    assert main(["--root", str(ws), "project", "add", "proj", "projects/proj"]) == 0
+    lean = ws / "projects" / "proj" / "Foo.lean"
+    lean.parent.mkdir(parents=True, exist_ok=True)
+    lean.write_text("theorem a : True := trivial\n", "utf-8")
+
+    _agent_env(monkeypatch, ws, "0002-horizon-T1")
+    monkeypatch.chdir(lean.parent)  # cwd is the project dir, as a Horizon agent's is
+    # Workspace-relative path (project prefix) given from inside the project dir.
+    assert main(["commit", "-m", "Prove a", "projects/proj/Foo.lean"]) == 0
+
+    git = WorkspaceGit(ws)
+    commits = git.session_commits("0001", "0002-horizon-T1")
+    assert len(commits) == 1
+    assert "projects/proj/Foo.lean" in git.files_in_commit(commits[0][0])
+
+
 def test_run_changes_aggregates_agent_commits(tmp_path: Path, monkeypatch) -> None:
     _identity()
     ws = tmp_path / "ws"

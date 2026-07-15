@@ -128,6 +128,36 @@ def test_classify_failure_flags_claude_session_limit_as_usage_limit() -> None:
     assert _classify_failure("You've hit your session limit · resets 6:40am (UTC)") == "usage_limit"
 
 
+def test_classify_failure_flags_server_error_mid_response_as_retryable() -> None:
+    # Claude Code's transient stream error ("Server error", a space — not the
+    # "server_error"/"internal server error" the old regex looked for) must be a
+    # retryable server_error so the session is retried, not hard-failed.
+    from archon_horizon.harnesses.command import _RETRYABLE_REASONS
+
+    text = "API Error: Server error mid-response. The response above may be incomplete."
+    assert _classify_failure(text) == "server_error"
+    assert "server_error" in _RETRYABLE_REASONS
+
+
+def test_server_error_mid_response_is_retried_not_hard_failed(tmp_path: Path) -> None:
+    """A "Server error mid-response" exhausting its retries lands as a retryable
+    server_error (i.e. it went through the retry path), not an unclassified hard
+    stop — the reported "it stopped the session instead of trying again"."""
+    harness = CommandHarness(
+        "claude",
+        [sys.executable, "-c",
+         "import sys; sys.stderr.write('API Error: Server error mid-response. "
+         "The response above may be incomplete.'); sys.exit(1)"],
+    )
+    harness.retry_max = 1
+    harness.retry_base_seconds = 0.0  # keep the backoff sleeps out of the test
+    result = harness.run(HarnessRequest(prompt="x", cwd=tmp_path, artifact_dir=tmp_path / "a"))
+
+    assert not result.ok
+    assert result.metadata["failure_reason"] == "server_error"
+    assert result.metadata["retries_exhausted"] is True
+
+
 def test_command_harness_flags_instant_outputless_failure_as_aborted_early(tmp_path: Path) -> None:
     # An engine that exits non-zero immediately with no output (a refusal whose
     # wording we don't match) is a hard stop the run loop must halt on, not retry.
@@ -135,6 +165,29 @@ def test_command_harness_flags_instant_outputless_failure_as_aborted_early(tmp_p
     result = harness.run(HarnessRequest(prompt="x", cwd=tmp_path, artifact_dir=tmp_path / "a"))
     assert not result.ok
     assert result.metadata["failure_reason"] == "aborted_early"
+
+
+def test_rate_limit_exhausting_retries_is_fatal_on_result_metadata(tmp_path: Path) -> None:
+    """A rate/overload limit that survives every retry must halt the whole run.
+
+    The run loop's fatal-failure check reads ``result.metadata`` (never the
+    transcript), so ``retries_exhausted`` has to land there — otherwise each
+    round respawns a session that hits the same limit and fails again, exactly
+    the reported "it carries on failing each session".
+    """
+    from archon_horizon.orchestration.orchestrator import _is_fatal_failure
+
+    harness = CommandHarness(
+        "claude", [sys.executable, "-c", "import sys; sys.stderr.write('Error: 429 rate limit exceeded'); sys.exit(1)"],
+    )
+    harness.retry_max = 1
+    harness.retry_base_seconds = 0.0  # keep the backoff sleeps out of the test
+    result = harness.run(HarnessRequest(prompt="x", cwd=tmp_path, artifact_dir=tmp_path / "a"))
+
+    assert not result.ok
+    assert result.metadata["failure_reason"] == "rate_limit"
+    assert result.metadata["retries_exhausted"] is True
+    assert _is_fatal_failure(result.metadata) is True
 
 
 def test_command_harness_surfaces_effort_on_metadata_and_transcript(tmp_path: Path) -> None:

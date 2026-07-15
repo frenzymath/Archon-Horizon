@@ -8,7 +8,17 @@ from pathlib import Path
 import typer
 
 from archon_horizon.core.clock import utc_now
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus
+from archon_horizon.core.roadmap import (
+    Roadmap,
+    RoadmapItem,
+    RoadmapKind,
+    RoadmapStatus,
+    apply_hierarchy,
+    item_depth,
+    item_parent,
+    ordered_tree,
+    subtree,
+)
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.log import log
 from archon_horizon.store import serde
@@ -37,7 +47,15 @@ def _item_dict(item: RoadmapItem) -> dict:
         "depends_on": list(item.depends_on),
         "inbox_refs": list(item.inbox_refs),
         "scope": serde.to_jsonable(item.scope),
+        "parent": item_parent(item),
+        "depth": item_depth(item),
     }
+
+
+def _hierarchy_meta(base: dict, depth: int | None, parent: str | None) -> dict:
+    """Fold ``--depth`` / ``--parent`` into an item's metadata (clearing a parent
+    when passed the empty string, so an item can be un-nested)."""
+    return apply_hierarchy(base, depth=depth, parent=parent)
 
 
 def _summary_text(summary: str | None, summary_file: str | None) -> str | None:
@@ -51,19 +69,41 @@ def _save(store, items: tuple[RoadmapItem, ...]) -> None:
     store.save(Roadmap(items=items, updated_at=utc_now()))
 
 
+def _validate_parent(items: list[RoadmapItem], item_id: str, parent: str) -> None:
+    """A parent must exist and not be the item itself (a cycle). Unknown/self
+    parents are hard errors so a typo doesn't silently detach the item."""
+    if parent == item_id:
+        log.error(f"An item cannot be its own parent ({item_id}).")
+        raise typer.Exit(1)
+    if not any(it.id == parent for it in items):
+        log.error(f"Parent item {parent!r} does not exist; add it first or fix the id.")
+        raise typer.Exit(1)
+
+
 @app.command("list")
-def list_items(ctx: typer.Context, as_json: bool = _JSON) -> None:
-    """List roadmap items."""
+def list_items(
+    ctx: typer.Context,
+    focus: str | None = typer.Option(None, "--focus", help="Show only this item and its descendants (its subtree)."),
+    max_depth: int | None = typer.Option(None, "--max-depth", help="Hide items deeper than this level (0 = top-level only)."),
+    as_json: bool = _JSON,
+) -> None:
+    """List roadmap items as an indented outline (parents above their sub-items)."""
     items = _store(ctx).load().items
+    rows = subtree(items, focus) if focus else ordered_tree(items)
+    if max_depth is not None:
+        rows = [(it, d) for it, d in rows if d <= max_depth]
     if as_json:
-        emit_json({"items": [_item_dict(i) for i in items]})
+        emit_json({"items": [{**_item_dict(it), "tree_depth": d} for it, d in rows]})
         return
     if not items:
         log.info("Roadmap is empty.")
         return
+    if focus and not rows:
+        log.error(f"No roadmap item {focus!r}.")
+        raise typer.Exit(1)
     log.results_table(
-        [(i.id, i.status.value, i.title) for i in items],
-        title="Roadmap",
+        [("  " * d + i.id, i.status.value, "  " * d + i.title) for i, d in rows],
+        title="Roadmap" + (f" · {focus} subtree" if focus else ""),
     )
 
 
@@ -77,6 +117,8 @@ def set_item(
     title: str | None = typer.Option(None, "--title", help="Replace the title."),
     priority: str | None = typer.Option(None, "--priority", help="urgent|high|normal|low."),
     kind: str | None = typer.Option(None, "--kind", help="proof|blueprint|refactor|workspace|report."),
+    parent: str | None = typer.Option(None, "--parent", help="Nest under this item id; pass '' to un-nest to top level."),
+    depth: int | None = typer.Option(None, "--depth", help="Indentation level when there is no --parent (0 = top level)."),
     author: str | None = typer.Option(None, "--author", help="Who is making the change (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
@@ -89,6 +131,8 @@ def set_item(
         raise typer.Exit(1)
     item = items[idx]
     actor = author or agent_author() or item.metadata.get("author")
+    if parent and parent.strip():
+        _validate_parent(items, item_id, parent.strip())
     changes: dict[str, object] = {}
     if status is not None:
         changes["status"] = RoadmapStatus(status.lower())
@@ -103,11 +147,16 @@ def set_item(
         changes["title"] = title
     if priority is not None:
         changes["priority"] = priority
+    if parent is not None or depth is not None:
+        store.append_history(item_id, _history_entry(actor, "nested",
+                             note=(f"parent={parent.strip() or 'none'}" if parent is not None else f"depth={depth}")))
     edited_fields = [f for f in changes if f != "status"]
     if edited_fields:
         store.append_history(item_id, _history_entry(actor, "edited",
                              note=", ".join(edited_fields) + " updated"))
-    metadata = {**item.metadata, "updated_at": utc_now().isoformat()}
+    metadata = _hierarchy_meta(
+        {**item.metadata, "updated_at": utc_now().isoformat()}, depth, parent
+    )
     items[idx] = dataclasses.replace(item, metadata=metadata, **changes)
     _save(store, tuple(items))
     if as_json:
@@ -127,15 +176,20 @@ def add_item(
     status: str = typer.Option("pending", "--status"),
     kind: str = typer.Option("proof", "--kind"),
     priority: str = typer.Option("normal", "--priority"),
+    parent: str | None = typer.Option(None, "--parent", help="Nest the new item under this existing item id."),
+    depth: int | None = typer.Option(None, "--depth", help="Indentation level when there is no --parent (0 = top level)."),
     author: str | None = typer.Option(None, "--author", help="Who is adding the item (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
-    """Add a new roadmap item."""
+    """Add a new roadmap item (optionally nested under a --parent, so the roadmap
+    reads as an outline rather than a flat list)."""
     store = _store(ctx)
     items = list(store.load().items)
     if any(it.id == item_id for it in items):
         log.error(f"Roadmap item {item_id!r} already exists; use `roadmap set`.")
         raise typer.Exit(1)
+    if parent and parent.strip():
+        _validate_parent(items, item_id, parent.strip())
     actor = author or agent_author("human")
     item = RoadmapItem(
         id=item_id,
@@ -146,7 +200,9 @@ def add_item(
         kind=RoadmapKind(kind.lower()),
         priority=priority,
         scope=ItemScope(projects=tuple(projects)),
-        metadata=with_provenance({"author": actor, "created_at": utc_now().isoformat()}),
+        metadata=_hierarchy_meta(
+            with_provenance({"author": actor, "created_at": utc_now().isoformat()}), depth, parent
+        ),
     )
     items.append(item)
     _save(store, tuple(items))

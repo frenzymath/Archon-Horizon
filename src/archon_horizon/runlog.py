@@ -97,7 +97,15 @@ class SessionLog:
         self.meta_path.write_text(json.dumps(meta, indent=2), "utf-8")
 
     def read_meta(self) -> dict[str, Any]:
-        return json.loads(self.meta_path.read_text("utf-8")) if self.meta_path.exists() else {}
+        if not self.meta_path.exists():
+            return {}
+        text = self.meta_path.read_text("utf-8").strip()
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {}
 
     def new_subsession(self, label: str) -> "SessionLog":
         return SessionLog(_claim(self.path / "subagents", label))

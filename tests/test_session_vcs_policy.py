@@ -14,7 +14,7 @@ from archon_horizon.core.tasks import WriteSet
 from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
 from archon_horizon.orchestration.locks import FilesystemLockManager
 from archon_horizon.vcs.git import WorkspaceGit, git_available
-from archon_horizon.vcs.integration import integrate_workspace_session, project_checkpoint
+from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session, project_checkpoint
 
 
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
@@ -108,6 +108,37 @@ def test_workspace_session_integration_commits_project_with_trailers(tmp_path: P
     assert _trailer("Archon-Session") == "0001-horizon-T-1"
     assert _trailer("Archon-Task") == "T-1"
     assert _trailer("Archon-Projects") == "p"
+
+
+def test_workspace_baseline_commit_is_created_at_run_start(tmp_path: Path) -> None:
+    _identity()
+    project_dir = tmp_path / "projects" / "p"
+    project_dir.mkdir(parents=True)
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    workspace = Workspace(
+        name="ws",
+        root=tmp_path,
+        projects={"p": Project(name="p", path=Path("projects/p"))},
+    )
+
+    outcome = integrate_workspace_baseline(workspace, run_id="0007", projects=("p",))
+
+    assert outcome.attempted is True
+    assert outcome.error is None
+    assert outcome.sha
+    ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
+
+    def _show(format_spec: str) -> str:
+        return subprocess.run(
+            ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "show", "-s", f"--format={format_spec}", "HEAD"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    assert _show("%an") == "Archon Horizon (System)"
+    assert _show("%s") == "workspace[0007] system: baseline"
+    assert _show("%(trailers:key=Archon-Run,valueonly)") == "0007"
+    assert _show("%(trailers:key=Archon-Session,valueonly)") == "run-baseline"
+    assert _show("%(trailers:key=Archon-Commit,valueonly)") == "baseline"
 
 
 def test_workspace_integration_excludes_build_and_nested_git_artifacts(tmp_path: Path) -> None:
@@ -275,4 +306,3 @@ def test_filesystem_lock_manager_blocks_overlapping_files(tmp_path: Path) -> Non
     assert locks.acquire("run-c", WriteSet(files=("projects/q/Bar.lean",)))
     locks.release("run-a")
     assert locks.acquire("run-b", WriteSet(files=("projects/p/Foo.lean",)))
-

@@ -26,22 +26,46 @@ from archon_horizon.store.filesystem import FilesystemEventLog
 from .shared import emit_json, load_workspace
 
 
-def _workspace_rel(files: list[str], root: Path) -> tuple[list[str], list[str]]:
-    """Resolve caller-supplied paths (relative to the shell cwd, or absolute) to
-    workspace-relative posix paths. Returns ``(inside, outside)`` — paths outside
-    the workspace are reported, not committed."""
+def _workspace_rel(
+    files: list[str], root: Path, changed: frozenset[str] = frozenset()
+) -> tuple[list[str], list[str]]:
+    """Resolve caller-supplied paths to workspace-relative posix paths. Returns
+    ``(inside, outside)`` — paths outside the workspace are reported, not committed.
+
+    A relative path is genuinely ambiguous: agents pass shell-relative paths, but
+    also often workspace-relative ones (``project/File.lean``) — and if the shell
+    cwd is *inside* that project, interpreting the latter as cwd-relative doubles
+    the prefix (``project/project/File.lean``) and ``git add`` fails with
+    ``pathspec did not match`` (the recurring I-0069 family of failures). So for a
+    relative path we consider BOTH the cwd-relative and the workspace-root-relative
+    reading and pick the one that actually names a change: first a hit in
+    ``changed`` (real uncommitted change — also catches deletions), then a path
+    that exists on disk, else the cwd-relative reading (the historical contract)."""
     root_res = root.resolve()
+    cwd = Path.cwd()
     inside: list[str] = []
     outside: list[str] = []
     for f in files:
         p = Path(f)
-        absolute = p if p.is_absolute() else (Path.cwd() / p)
-        try:
-            rel = absolute.resolve().relative_to(root_res)
-        except ValueError:
+        # Candidate absolute paths, in preference order.
+        candidates = [p] if p.is_absolute() else [cwd / p, root_res / p]
+        rels: list[tuple[Path, str]] = []
+        for c in candidates:
+            try:
+                rel = c.resolve().relative_to(root_res).as_posix()
+            except ValueError:
+                continue
+            if (c, rel) not in rels:
+                rels.append((c, rel))
+        if not rels:
             outside.append(f)
             continue
-        inside.append(rel.as_posix())
+        chosen = (
+            next((rel for _, rel in rels if rel in changed), None)
+            or next((rel for c, rel in rels if c.exists()), None)
+            or rels[0][1]
+        )
+        inside.append(chosen)
     return inside, outside
 
 
@@ -71,18 +95,30 @@ def commit(
     git = WorkspaceGit(workspace.root)
     git.init()
 
+    changed_set = frozenset(git.changed_files())
     outside: list[str] = []
     if changed:
         # Everything the agent changed, minus the shared Horizon state the system
         # owns (.archon-horizon) — the agent commits code, not the ledger's books.
-        paths = [p for p in git.changed_files() if not p.split("/", 1)[0].startswith(".archon-horizon")]
+        paths = [p for p in changed_set if not p.split("/", 1)[0].startswith(".archon-horizon")]
     else:
         if not files:
             log.error("Pass the files you changed, or --changed to commit all your project changes.")
             raise typer.Exit(1)
-        paths, outside = _workspace_rel(list(files), workspace.root)
+        paths, outside = _workspace_rel(list(files), workspace.root, changed_set)
     if outside:
         log.warn(f"Ignoring path(s) outside the workspace: {', '.join(outside)}")
+    # A supplied path that resolved into the workspace but names no known change is
+    # almost always a mistyped/mis-based path — surface it rather than failing later
+    # with an opaque `git add` pathspec error.
+    if not changed and files:
+        unknown = [p for p in paths if p not in changed_set]
+        if unknown:
+            log.warn(
+                "Path(s) with no detected change (commit may be a no-op or the path is "
+                f"mis-based): {', '.join(unknown)}. Tip: pass workspace-relative paths "
+                "(e.g. `project/File.lean`) or use `--changed` to commit all your edits."
+            )
     if not paths:
         msg = "No changed files to commit."
         emit_json({"committed": None, "reason": "no-changes"}) if as_json else log.info(msg)
@@ -95,7 +131,7 @@ def commit(
     projects = tuple(p for p in os.environ.get("ARCHON_HORIZON_PROJECTS", "").split(",") if p)
     trailers = _commit_trailers(
         run_id=run_id, session=session, role=role or "", round_index=None,
-        task_id=task_id, projects=projects,
+        task_id=task_id, projects=projects, commit_kind="agent",
     )
 
     try:

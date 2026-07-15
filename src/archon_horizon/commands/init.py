@@ -83,10 +83,10 @@ def _options_block(kind: str) -> str:
 
     Keeps engine-specific keys off the wrong engine — e.g. Codex's ``sandbox`` must
     not land on a ``claude-code`` harness, and vice-versa. Both engines honour
-    ``effort`` (Codex maps it to ``model_reasoning_effort``; Claude Code maps it
-    to a ``MAX_THINKING_TOKENS`` budget). The returned string is spliced right
-    after the ``model:`` line, so it starts with a newline and has no trailing
-    newline."""
+    ``effort`` (Codex passes it as ``model_reasoning_effort``; Claude Code passes
+    it as the native ``--effort`` flag, or a raw integer as a ``MAX_THINKING_TOKENS``
+    budget). The returned string is spliced right after the ``model:`` line, so it
+    starts with a newline and has no trailing newline."""
     if kind == "codex":
         return (
             "\n    options:\n"
@@ -97,8 +97,10 @@ def _options_block(kind: str) -> str:
     if kind == "claude-code":
         return (
             "\n    options:\n"
-            "      # Effort → thinking budget — 'default' leaves Claude Code's own default.\n"
-            "      # default | low | medium | high | xhigh | max | ultracode  (or a raw integer)\n"
+            "      # Effort → claude's native --effort flag — 'default' leaves Claude Code's own.\n"
+            "      # default | low | medium | high | xhigh | max   (or a raw integer = MAX_THINKING_TOKENS)\n"
+            "      # 'ultracode' = xhigh + automatic dynamic-workflow orchestration (via --settings;\n"
+            "      # needs workflows enabled + claude >= 2.1.154; can fan out to many agents per task).\n"
             "      effort: default\n"
             "      # backend: default   # default | vscode | desktop | claude-p"
         )
@@ -775,6 +777,24 @@ class InitCommand:
         if installed:
             verb = "Updated" if self.update else "Installed"
             log.success(f"{verb} {len(installed)} skill(s) under .claude/skills/.")
+
+        # Install the editable agent prompt bodies (ground.md/horizon.md). Same
+        # keep-vs-overwrite policy as skills: update mode force-refreshes to the
+        # bundled versions; a fresh/interactive init keeps local edits unless the
+        # user confirms overwrite.
+        from archon_horizon.agents.prompts import install_prompts
+
+        def _prompt_overwrite(name: str, dest: Path, new_text: str) -> bool:
+            if not self.interactive:
+                return False
+            from rich.prompt import Confirm
+
+            return Confirm.ask(f"Prompt '{name}' has local changes. Overwrite with the bundled version?", default=False)
+
+        installed_prompts = install_prompts(self.root, overwrite=None if self.update else _prompt_overwrite)
+        if installed_prompts:
+            verb = "Updated" if self.update else "Installed"
+            log.success(f"{verb} {len(installed_prompts)} agent prompt(s) under .archon-horizon/prompts/.")
 
         from archon_horizon.config.mcp import install_mcp_for_harnesses, write_mcp_config
 
