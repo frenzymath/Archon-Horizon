@@ -474,6 +474,23 @@ def test_run_infers_a_task_from_a_roadmap_id(tmp_path: Path) -> None:
     assert reports[0].tasks_run == ("M-1",)
 
 
+def test_materialized_roadmap_task_does_not_copy_the_items_comments(tmp_path: Path) -> None:
+    # Dedup: materializing a task from a roadmap milestone links by reference and
+    # must NOT copy the item's metadata blob — that blob carries the roadmap item's
+    # own comment thread, and copying it duplicated the comments into the task.
+    orch, _ = _build(tmp_path)
+    orch.roadmap_store.save(Roadmap(items=(
+        RoadmapItem(id="M-9", title="Big theorem", projects=("ag-main",), status=RoadmapStatus.ACTIVE),
+    )))
+    orch.roadmap_store.add_comment("M-9", "strategy note that belongs on the roadmap", "ground")
+
+    task = orch.ensure_roadmap_task("M-9")
+
+    assert task is not None
+    assert task.roadmap_refs == ("M-9",)          # linked by reference…
+    assert "comments" not in (task.metadata or {})  # …but no inherited comment thread
+
+
 def test_harness_request_carries_cwd(tmp_path: Path) -> None:
     seen: dict[str, HarnessRequest] = {}
 

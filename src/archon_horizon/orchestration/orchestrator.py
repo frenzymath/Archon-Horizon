@@ -902,7 +902,12 @@ class Orchestrator:
             scope=item.scope,
             roadmap_refs=(item.id,),
             inbox_refs=item.inbox_refs,
-            metadata={**item.metadata, "roadmap_priority": item.priority, "from_roadmap": True},
+            # Link to the milestone by reference (roadmap_refs) — do NOT copy the
+            # item's metadata blob. That blob carries the roadmap item's own
+            # comments/history, and copying it duplicated the roadmap's comment
+            # thread into the task (the "same comments in both" problem). Keep only
+            # the task's own working hints.
+            metadata={"roadmap_priority": item.priority, "from_roadmap": True},
         )
         existing = {t.id: t for t in self.task_store.list()}
         if item.id in existing:

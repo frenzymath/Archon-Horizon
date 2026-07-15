@@ -149,6 +149,10 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
         if item.id not in wanted or item.status == target:
             items.append(item)
             continue
+        # Propagate the status to the linked milestone and record a structured
+        # history entry — but do NOT write a prose comment. The comment duplicated
+        # progress narration that already lives in the task and its commits (the
+        # "same comments in roadmap and task" problem); the history entry is enough.
         store.append_history(
             item.id,
             history_entry(
@@ -158,13 +162,6 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
                 after=target.value,
                 note=f"synced from task {task.id}",
             ),
-        )
-        store.add_comment(
-            item.id,
-            f"**Status synced from task `{task.id}`.**\n\n"
-            f"- Task status changed to `{status.value}`.\n"
-            f"- Roadmap item moved from `{item.status.value}` to `{target.value}`.",
-            actor,
         )
         items.append(dataclasses.replace(
             item,

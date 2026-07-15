@@ -127,8 +127,13 @@ def test_task_command_writes_safe_yaml(tmp_path: Path) -> None:
     assert yaml.safe_load(task_file.read_text("utf-8"))["status"] == "done"
     roadmap_file = ws / ".archon-horizon" / "roadmap" / "items" / "A.3.yaml"
     assert yaml.safe_load(roadmap_file.read_text("utf-8"))["status"] == "done"
+    # Dedup: the status syncs to the linked milestone, but NO prose comment is
+    # written onto the roadmap (that duplicated the task's narration). The
+    # transition is recorded in structured history instead.
     comments_dir = ws / ".archon-horizon" / "roadmap" / "comments" / "A.3"
-    assert any("T-1" in p.read_text("utf-8") for p in comments_dir.glob("*.md"))
+    assert not comments_dir.exists() or not any(comments_dir.glob("*.md"))
+    history_file = ws / ".archon-horizon" / "roadmap" / "history" / "A.3.jsonl"
+    assert history_file.exists() and "synced from task T-1" in history_file.read_text("utf-8")
     assert _run(ws, "task", "list") == 0
     assert _run(ws, "task", "remove", "T-1") == 0
     assert not task_file.exists()
