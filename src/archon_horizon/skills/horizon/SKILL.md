@@ -71,8 +71,18 @@ read recent ledger history (`project-git` skill: `git log` + `git show` by
 `Archon-Session` trailer) and the previous session's transcript/report under
 `.archon-horizon/runs/` to see what was in flight, then pick up from there.
 
-## Delegate when it helps (optional)
+## Cleaning up the work (you decide, via subagents)
 
-You may spawn a subagent for review or upkeep (blueprint checks, janitor hygiene,
-work review, reference retrieval) — see the `subagents` skill. It's a judgement
-call, not a requirement.
+There is **no separate Ground agent** running alongside you. *You* are the only
+driver. When you judge the workspace needs tidying — the roadmap or memory has
+drifted, the inbox is piling up, the blueprint↔Lean correspondence needs checking,
+or you want a fresh-eyes review of what you just did — **spawn a subagent** to do
+it, then carry on. This is a judgement call, not a schedule: clean up when it's
+worth it, not on a timer. Available subagents (see the `subagents` skill):
+
+- **janitor** — workspace hygiene: roadmap/READMEs concise, inbox from overflowing.
+- **work-reviewer** — fresh-context review of your last work; is it converging?
+- **blueprint-reviewer** / blueprint checks — Lean ↔ blueprint statement/`\uses` correctness.
+- **reference-retriever**, **debug**, **page-transcriber** — as needed.
+
+Keep proving; delegate the upkeep.

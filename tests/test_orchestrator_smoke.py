@@ -205,48 +205,26 @@ def test_focused_crashed_session_retries_each_round(tmp_path: Path) -> None:
     assert reopens, "the machine's return-to-queued of a retried task should be recorded in history"
 
 
-def test_supervisor_runs_ground_upkeep_every_n_horizon_rounds(tmp_path: Path) -> None:
-    # The lightweight supervisor: a Horizon-only loop (roles=("horizon",)) where the
-    # task never declares terminal (so it runs every round), and Ground runs ONLY as
-    # a scheduled upkeep pass every N rounds — not every round.
+def test_supervisor_is_horizon_only_and_never_runs_ground(tmp_path: Path) -> None:
+    # The lightweight supervisor (roles=("horizon",)) runs N Horizon rounds and NEVER
+    # invokes a Ground role — cleanup is the Horizon agent's own call (it spawns a
+    # subagent when it wants). The task never declares terminal, so it runs each round.
     orch, _ = _build(tmp_path, horizon_sets_status=None)
     ground_calls = {"n": 0}
 
     def _count_ground(req):
         ground_calls["n"] += 1
-        return HarnessResult(ok=True, text="upkeep pass")
+        return HarnessResult(ok=True, text="should never run")
 
     orch.ground = HarnessGroundAgent(NullHarness(_count_ground))
     orch.roles = ("horizon",)
     orch.start_with = orch.end_with = "horizon"
-    orch.upkeep_every = 2
 
-    reports = orch.run(RunRecord(id="SUP-1", rounds_requested=4))
-
-    # Horizon ran every round; Ground upkeep fired only on the cadence (rounds 2 & 4).
-    assert len(reports) == 4
-    assert all(r.tasks_run == ("R-1",) for r in reports)
-    assert ground_calls["n"] == 2
-
-
-def test_supervisor_upkeep_off_runs_no_ground(tmp_path: Path) -> None:
-    # upkeep_every=None (pure Horizon-only loop): Ground never runs.
-    orch, _ = _build(tmp_path, horizon_sets_status=None)
-    ground_calls = {"n": 0}
-
-    def _count_ground(req):
-        ground_calls["n"] += 1
-        return HarnessResult(ok=True, text="x")
-
-    orch.ground = HarnessGroundAgent(NullHarness(_count_ground))
-    orch.roles = ("horizon",)
-    orch.start_with = orch.end_with = "horizon"
-    orch.upkeep_every = None
-
-    reports = orch.run(RunRecord(id="SUP-2", rounds_requested=3))
+    reports = orch.run(RunRecord(id="SUP-1", rounds_requested=3))
 
     assert len(reports) == 3
-    assert ground_calls["n"] == 0
+    assert all(r.tasks_run == ("R-1",) for r in reports)  # Horizon ran every round
+    assert ground_calls["n"] == 0  # no Ground role in the loop
 
 
 def test_focused_run_stops_early_when_task_is_done(tmp_path: Path) -> None:
