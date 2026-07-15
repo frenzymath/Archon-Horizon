@@ -36,7 +36,6 @@ from archon_horizon.store import serde
 from archon_horizon.transcript.parsers import observed_effort, observed_model
 from archon_horizon.transcript.sink import read_transcript
 from archon_horizon.transcript.subagents import materialize_subagent_sessions
-from archon_horizon.orchestration.locks import live_run_lock
 from archon_horizon.server.git_api import get_git_log, get_git_diff
 from archon_horizon.server.source_api import file_stats, list_lean_files, read_lean_file
 from archon_horizon.vcs.git import WorkspaceGit, git_available
@@ -315,8 +314,10 @@ class WorkspaceService:
             run_id = event.data.get("run_id")
             if isinstance(run_id, str) and run_id:
                 run_events.setdefault(run_id, []).append(serde.to_jsonable(event))
-        holder = live_run_lock(self.workspace.state_path / "run.lock")
-        live_run_id = str(holder.get("run_id")) if holder and holder.get("run_id") else None
+        # Runs are sequential and there is no run lock any more; the dashboard
+        # reflects liveness from each session's own status meta instead of a
+        # process-liveness probe. (No run is specially highlighted as "the live one".)
+        live_run_id: str | None = None
         return [
             self._run_state(
                 self.stores.run_logs.get(run_id),

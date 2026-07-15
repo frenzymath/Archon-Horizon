@@ -55,7 +55,6 @@ from archon_horizon.vcs.integration import (
     project_checkpoint,
 )
 
-from .locks import LockManager, workspace_run_lock
 from .scheduler import Scheduler
 from .sync import SyncCoordinator
 
@@ -302,7 +301,6 @@ class Orchestrator:
     horizon: HorizonAgent
     scheduler: Scheduler
     sync: SyncCoordinator
-    locks: LockManager
     event_log: EventLog
     roadmap_store: RoadmapStore
     memory_store: MemoryStore
@@ -1030,17 +1028,6 @@ class Orchestrator:
                        rules=[r.pattern for r in violations])
             return None
 
-        # The write lock is advisory: if a concurrent run holds an overlapping
-        # write set we warn the user but still run the Horizon, rather than
-        # deferring (which silently skipped the step and left the round with a
-        # pointless planning Ground). Real cross-run conflicts are the user's to
-        # avoid; within a single run the scheduler already keeps selected tasks
-        # non-overlapping. When we couldn't take the lock we proceed without
-        # holding it — the release in `finally` is a harmless no-op for a token we
-        # never stored, and never touches the other holder's lock.
-        if not self.locks.acquire(task.id, task.write_set):
-            self._emit("task.lock_warning", task_id=task.id, reason="lock-conflict")
-
         try:
             try:
                 current_task = self.task_store.get(task.id)
@@ -1195,7 +1182,6 @@ class Orchestrator:
                 stop_watch.set()
             if "watcher" in locals():
                 watcher.join(timeout=1.0)
-            self.locks.release(task.id)
 
     def _publish_silent(self, run: RunRecord) -> None:
         """Refresh human-facing artifacts at a boundary and pull external inboxes,
@@ -1496,23 +1482,12 @@ class Orchestrator:
         ``rounds_override`` (from ``--rounds``) when given, else the run's
         configured round count; see ``_run_locked`` for the exact rule.
 
-        The workspace run lock is advisory: if another *live* orchestrator is
-        already driving this workspace we warn (``run.concurrent``) and proceed
-        anyway, since concurrent runs are tolerated — their shared
-        roadmap/blueprint writes may interleave, last-writer-wins. A crashed run
-        leaves a stale lock the next run reclaims.
+        Runs are sequential — one session at a time on the single workspace
+        ledger — so there is no run lock or write-set lock to contend on.
         """
-        _lock = workspace_run_lock(
-            self.workspace.state_path / "run.lock", run_id=run.id or "", exclusive=False
+        return self._run_locked(
+            run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
         )
-        status = _lock.__enter__()
-        try:
-            return self._run_locked(
-                run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
-                concurrent_holder=status.concurrent,
-            )
-        finally:
-            _lock.__exit__(None, None, None)
 
     def _run_locked(
         self,
@@ -1521,7 +1496,6 @@ class Orchestrator:
         dry_run: bool = False,
         resume: bool = False,
         rounds_override: int | None = None,
-        concurrent_holder: dict | None = None,
     ) -> list[RoundReport]:
         runlog: RunLog | None = None
         if self.run_logs is not None:
@@ -1598,8 +1572,6 @@ class Orchestrator:
                     files=list(baseline.files),
                     projects=list(self._run_scope_projects(run)),
                 )
-        if concurrent_holder:
-            self._emit("run.concurrent", run_id=run.id, existing=concurrent_holder)
         reports: list[RoundReport] = []
 
         # Displayed round numbering is offset by ``start_round`` (0 for a normal

@@ -21,7 +21,6 @@ from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import Harness
 from archon_horizon.inboxes.base import InboxProvider
 from archon_horizon.log import log
-from archon_horizon.orchestration.locks import FilesystemLockManager
 from archon_horizon.orchestration.orchestrator import Orchestrator
 from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
@@ -223,7 +222,6 @@ def build_orchestrator(
             freeze=freeze, max_parallel=cfg.scheduler.max_parallel_sessions
         ),
         sync=MultiProviderSyncCoordinator(inbox_providers),
-        locks=FilesystemLockManager(workspace.state_path / "locks"),
         event_log=stores.events,
         roadmap_store=stores.roadmap,
         memory_store=stores.memory,

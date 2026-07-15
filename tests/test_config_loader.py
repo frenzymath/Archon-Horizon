@@ -505,28 +505,6 @@ def test_default_alternation_starts_on_horizon(tmp_path: Path) -> None:
     assert agents == ["0002-horizon-R-1", "0004-ground", "0006-horizon-R-1", "0008-ground"]
 
 
-def test_write_lock_conflict_warns_but_still_runs_horizon(tmp_path: Path) -> None:
-    """The write lock is advisory: when a concurrent holder owns an overlapping
-    write set, the Horizon still runs (it is no longer deferred) and a
-    ``task.lock_warning`` is emitted instead of ``task.deferred``."""
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=True, text="done")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    _queue_task(orch)
-    # Simulate another concurrent run holding the same project's write set.
-    assert orch.locks.acquire("other-run", WriteSet(projects=("ag-main",)))
-
-    reports = orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
-
-    assert reports[0].tasks_run == ("R-1",)  # ran despite the conflict, not deferred
-    types = {e.type for e in orch.event_log.read_all()}
-    assert "task.lock_warning" in types
-    assert "task.deferred" not in types
-
-
 def test_queue_focus_never_reopens_agent_declared_done(tmp_path: Path) -> None:
     """`done` is the agent's word and terminal: the orchestrator never reopens a
     done focused task — not mid-run, and not on an explicit human launch. Re-running

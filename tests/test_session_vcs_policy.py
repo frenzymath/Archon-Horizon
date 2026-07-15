@@ -12,7 +12,6 @@ from archon_horizon.config import operations
 from archon_horizon.config.loader import build_workspace, load_config
 from archon_horizon.core.tasks import WriteSet
 from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
-from archon_horizon.orchestration.locks import FilesystemLockManager
 from archon_horizon.vcs.git import WorkspaceGit, git_available
 from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session, project_checkpoint
 
@@ -298,11 +297,3 @@ def test_secret_guard_hook_blocks_credentials(tmp_path: Path) -> None:
     assert allowed.returncode == 0
 
 
-def test_filesystem_lock_manager_blocks_overlapping_files(tmp_path: Path) -> None:
-    locks = FilesystemLockManager(tmp_path / ".archon-horizon" / "locks")
-
-    assert locks.acquire("run-a", WriteSet(files=("projects/p/Foo.lean",)))
-    assert not locks.acquire("run-b", WriteSet(files=("projects/p/Foo.lean",)))
-    assert locks.acquire("run-c", WriteSet(files=("projects/q/Bar.lean",)))
-    locks.release("run-a")
-    assert locks.acquire("run-b", WriteSet(files=("projects/p/Foo.lean",)))

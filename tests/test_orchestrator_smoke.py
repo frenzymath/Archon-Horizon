@@ -20,7 +20,6 @@ from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import HarnessRequest, HarnessResult
 from archon_horizon.harnesses.null import NullHarness
-from archon_horizon.orchestration.locks import InMemoryLockManager
 from archon_horizon.orchestration.orchestrator import Orchestrator
 from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
@@ -128,7 +127,6 @@ def _build(
         horizon=horizon,
         scheduler=FreezeAwareScheduler(freeze=freeze, max_parallel=2),
         sync=MultiProviderSyncCoordinator([]),
-        locks=InMemoryLockManager(),
         event_log=FilesystemEventLog(state / "events.jsonl"),
         roadmap_store=roadmap_store,
         memory_store=FilesystemMemoryStore(state / "memory.md"),

@@ -6,12 +6,30 @@ from abc import ABC, abstractmethod
 
 from archon_horizon.core.freeze import FreezeSet, frozen_violations
 from archon_horizon.core.sessions import Focus, RunRecord
-from archon_horizon.core.tasks import HorizonTask, TaskStatus
+from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.core.workspace import Workspace
 
-from .locks import write_sets_conflict
-
 _PRIORITY_ORDER = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
+
+
+def write_sets_conflict(a: WriteSet, b: WriteSet) -> bool:
+    """True if two write sets cannot safely run at the same time. Kept so the
+    scheduler can keep a parallel selection non-overlapping; with the default
+    ``max_parallel=1`` (the sequential supervisor) it never fires."""
+    if a.workspace or b.workspace:
+        return True
+    if set(a.declarations) & set(b.declarations):
+        return True
+    if set(a.blueprint_nodes) & set(b.blueprint_nodes):
+        return True
+    shared_projects = set(a.projects) & set(b.projects)
+    if not shared_projects:
+        return bool(set(a.files) & set(b.files))
+    # A project with no declared files is an unknown write set -> lock the whole
+    # project, so any other claim on it conflicts.
+    if not a.files or not b.files:
+        return True
+    return bool(set(a.files) & set(b.files))
 
 
 def _priority_key(task: HorizonTask) -> tuple[int, str]:
