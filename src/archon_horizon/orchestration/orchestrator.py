@@ -544,7 +544,6 @@ class Orchestrator:
             log_dir=log_dir,
             resume_session_id=resume_session_id,
             cancel=cancel,
-            metadata={"ground_recommendation": self._latest_ground_recommendation(runlog)},
         )
 
     def _dirty_files(self) -> frozenset[str]:
@@ -598,68 +597,6 @@ class Orchestrator:
         path = session.path / "report.md"
         path.write_text(text.rstrip() + "\n", "utf-8")
         return path.as_posix()
-
-    @staticmethod
-    def _extract_recommendation(text: str) -> str:
-        """Return the recommendation section Ground left for the next Horizon.
-
-        Ground reports are intentionally prose, so this is a small Markdown
-        convention rather than a parser contract: prefer an explicit
-        recommendation/next section, otherwise keep the whole report.
-        """
-        lines = text.strip().splitlines()
-        if not lines:
-            return ""
-        section_starts = [
-            idx for idx, line in enumerate(lines)
-            if line.lstrip("# ").strip().lower() in {
-                "next",
-                "recommendation",
-                "recommendations",
-                "recommended focus",
-                "horizon recommendation",
-            }
-        ]
-        if not section_starts:
-            return text.strip()
-        start = section_starts[-1]
-        start_line = lines[start].lstrip()
-        level = len(start_line) - len(start_line.lstrip("#"))
-        end = len(lines)
-        for idx in range(start + 1, len(lines)):
-            line = lines[idx].lstrip()
-            if line.startswith("#"):
-                idx_level = len(line) - len(line.lstrip("#"))
-                if idx_level <= level:
-                    end = idx
-                    break
-        return "\n".join(lines[start:end]).strip()
-
-    @classmethod
-    def _write_recommendation(cls, session: SessionLog | None, text: str) -> str | None:
-        if session is None:
-            return None
-        path = session.path / "recommendation.md"
-        if path.is_file() and path.read_text("utf-8").strip():
-            return path.as_posix()
-        recommendation = cls._extract_recommendation(text)
-        if not recommendation:
-            return None
-        path.write_text(recommendation.rstrip() + "\n", "utf-8")
-        return path.as_posix()
-
-    @staticmethod
-    def _latest_ground_recommendation(runlog: RunLog | None) -> str:
-        if runlog is None:
-            return ""
-        for session in reversed(runlog.sessions()):
-            meta = session.read_meta()
-            if meta.get("role") != "ground" and not session.name.endswith("-ground"):
-                continue
-            path = session.path / "recommendation.md"
-            if path.exists():
-                return path.read_text("utf-8").strip()
-        return ""
 
     def _queue_focus_for_round(self, run: RunRecord, *, initial: bool) -> None:
         """Queue explicitly focused tasks so a user-started run actually runs them.

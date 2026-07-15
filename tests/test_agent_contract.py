@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archon_horizon.agents.base import HorizonContext, GroundContext
-from archon_horizon.agents.parsing import parse_ground_update
-from archon_horizon.agents.prompts import compose_horizon_prompt, compose_ground_prompt
+from archon_horizon.agents.base import HorizonContext
+from archon_horizon.agents.prompts import compose_horizon_prompt
 from archon_horizon.core.inbox import InboxItem, InboxKind
 from archon_horizon.core.labels import AGENT_READY
 from archon_horizon.core.roadmap import Roadmap
@@ -21,74 +20,6 @@ def _workspace(tmp_path: Path) -> Workspace:
         root=tmp_path,
         projects={"ag-main": Project(name="ag-main", path=Path("projects/ag-main"), build_command="lake build")},
     )
-
-
-def test_ground_prompt_contains_archon_horizon_contract(tmp_path: Path) -> None:
-    run = RunRecord(id="S-1", rounds_requested=1)
-    ctx = GroundContext(
-        workspace=_workspace(tmp_path),
-        run=run,
-        focus=run.focus,
-        roadmap=Roadmap(),
-        accepted_inbox=(InboxItem(id="I-1", provider="local", kind=InboxKind.HINT, body="use affine", labels=(AGENT_READY,)),),
-        blueprint_summary="ag-main: 1 nodes, 0 proved, 0 edges, 0 dangling",
-        memory="avoid old lemma",
-    )
-
-    prompt = compose_ground_prompt(ctx)
-
-    assert "Ground agent" in prompt
-    # No machine-readable report contract anymore, but CLI reads should be parseable.
-    assert "--json" in prompt
-    assert "--author ground" in prompt
-    assert "supervisor" in prompt and "janitor" in prompt
-    assert "at most 4 concise bullets" in prompt
-    assert "## Progress" in prompt
-    assert "4 sorries -> 3 sorries" in prompt
-    assert "No change because" in prompt
-    assert "inline `-` bullets" in prompt
-    assert "## Why I stopped" in prompt
-    assert "fully complete" in prompt
-    # Ground does not own a task, so it gets no task-status CLI instruction.
-    assert "task set <task_id> --status done" not in prompt
-    assert "not a list of commands" in prompt
-    assert "Avoid directive language" in prompt
-    assert "archive stale or consumed items" in prompt
-    assert "10 open memory items" in prompt
-    assert "3-4 open info items" in prompt
-    assert "# Skills" in prompt and "horizon-inbox" in prompt  # capabilities are skills now
-    assert "ag-main: 1 nodes" in prompt
-    assert "use affine" in prompt
-
-
-def test_ground_prompt_compacts_large_inbox(tmp_path: Path) -> None:
-    items = tuple(
-        InboxItem(
-            id=f"I-{i:04d}",
-            provider="local",
-            kind=InboxKind.HINT,
-            body=("detail " * 200) + str(i),
-            labels=(AGENT_READY,),
-        )
-        for i in range(12)
-    )
-    ctx = GroundContext(
-        workspace=_workspace(tmp_path),
-        run=RunRecord(id="S-1", rounds_requested=1),
-        focus=RunRecord(id="S-1", rounds_requested=1).focus,
-        roadmap=Roadmap(),
-        accepted_inbox=items,
-        blueprint_summary="",
-        memory="",
-    )
-
-    prompt = compose_ground_prompt(ctx)
-
-    assert "I-0000" in prompt
-    assert "I-0009" in prompt
-    assert "I-0010" not in prompt
-    assert "2 more accepted inbox item(s) omitted" in prompt
-    assert "detail " * 120 not in prompt
 
 
 def test_horizon_prompt_is_task_scoped(tmp_path: Path) -> None:
@@ -251,30 +182,6 @@ def test_horizon_does_not_retry_when_resumed_session_did_work(tmp_path: Path) ->
     HarnessHorizonAgent(harness).run_task(ctx)
 
     assert len(harness.requests) == 1  # no fallback retry
-
-
-def test_parse_ground_update_is_report_only() -> None:
-    # The whole response IS the report when the agent emits only its report; the
-    # structured effects happened live (disk + CLI), so there is nothing else to parse.
-    update = parse_ground_update("  Set strategy; recommended R-1 next.  ")
-
-    assert update.report == "Set strategy; recommended R-1 next."
-    assert update.artifact_refs == ()
-
-
-def test_parse_ground_update_keeps_last_explicit_report_block() -> None:
-    text = """Let me inspect the workspace.
-Done. Here's the run-local report.
-## Run-local report
-old
-Done. Here's the run-local report.
-## Run-local report
-new
-"""
-
-    update = parse_ground_update(text)
-
-    assert update.report == "## Run-local report\nnew"
 
 
 def test_prompt_body_loads_from_bundled_default(tmp_path: Path) -> None:

@@ -478,53 +478,6 @@ def test_harness_request_carries_cwd(tmp_path: Path) -> None:
     assert seen["req"].cwd == tmp_path / "projects" / "p"
 
 
-def test_extract_and_persist_ground_recommendation(tmp_path: Path) -> None:
-    from archon_horizon.orchestration.orchestrator import Orchestrator
-    from archon_horizon.runlog import RunLogTree
-
-    report = """# Summary
-We analyzed the codebase.
-
-# Recommendation
-## 1. Implement feature X
-Do X first.
-### Sub-detail
-Some sub detail.
-
-# Appendix
-Other info.
-"""
-    extracted = Orchestrator._extract_recommendation(report)
-    assert extracted == "# Recommendation\n## 1. Implement feature X\nDo X first.\n### Sub-detail\nSome sub detail."
-
-    run_logs = RunLogTree(tmp_path / "runs")
-    runlog = run_logs.allocate()
-    session = runlog.new_session("ground")
-    session.write_meta({"role": "ground"})
-    Orchestrator._write_recommendation(session, report)
-
-    latest = Orchestrator._latest_ground_recommendation(runlog)
-    assert latest == extracted
-
-
-def test_ground_recommendation_file_is_not_overwritten(tmp_path: Path) -> None:
-    from archon_horizon.orchestration.orchestrator import Orchestrator
-    from archon_horizon.runlog import RunLogTree
-
-    runlog = RunLogTree(tmp_path / "runs").allocate()
-    session = runlog.new_session("ground")
-    explicit = "# Recommendation\n\nDetailed plan the agent wrote during the session."
-    (session.path / "recommendation.md").write_text(explicit + "\n", "utf-8")
-
-    ref = Orchestrator._write_recommendation(
-        session,
-        "# Summary\nGround report.\n\n# Next\n- Short final-report fallback.",
-    )
-
-    assert ref == (session.path / "recommendation.md").as_posix()
-    assert (session.path / "recommendation.md").read_text("utf-8") == explicit + "\n"
-
-
 def test_auth_error_early_stop(tmp_path: Path) -> None:
     orchestrator, _ = _build(tmp_path)
     # A Horizon session that hits an auth error must stop the whole run.

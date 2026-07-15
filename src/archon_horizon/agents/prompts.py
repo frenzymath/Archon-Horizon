@@ -21,7 +21,7 @@ from archon_horizon.core.workspace import Workspace
 from archon_horizon.skills.registry import available_skills
 from archon_horizon.subagents.registry import descriptor_summary
 
-from .base import HorizonContext, GroundContext
+from .base import HorizonContext
 
 _MAX_INBOX_ITEMS_IN_PROMPT = 10
 _MAX_INBOX_BODY_CHARS = 700
@@ -84,7 +84,7 @@ def _load_prompt_body(workspace: Workspace, name: str) -> str:
     return (PROMPT_TEMPLATE_DIR / f"{name}.md").read_text("utf-8").rstrip()
 
 
-def _state_file(context: GroundContext | HorizonContext, name: str) -> str:
+def _state_file(context: HorizonContext, name: str) -> str:
     return f"{context.workspace.state_dir.as_posix()}/{name}"
 
 
@@ -285,17 +285,6 @@ def _workspace_lines(workspace: Workspace) -> str:
     return "\n".join(out)
 
 
-def _focus_line(context: GroundContext) -> str:
-    parts: list[str] = []
-    if context.focus.projects:
-        parts.append("projects=" + ",".join(context.focus.projects))
-    if context.focus.task:
-        parts.append("task=" + context.focus.task)
-    if context.focus.tasks:
-        parts.append("tasks=" + ",".join(context.focus.tasks))
-    return ", ".join(parts) if parts else "workspace-wide"
-
-
 def _write_set_lines(write_set: WriteSet) -> str:
     parts = []
     if write_set.workspace:
@@ -335,21 +324,7 @@ def _task_block(task: HorizonTask) -> str:
     )
 
 
-def _ground_recommendation_block(context: HorizonContext) -> str:
-    recommendation = str(context.metadata.get("ground_recommendation") or "").strip()
-    if not recommendation:
-        return ""
-    return (
-        "# Latest Ground orientation\n"
-        "This was saved as `recommendation.md` by the last Ground session. Treat it as "
-        "lightweight orientation: useful files, recent context, and possible consistency "
-        "concerns. It is not a plan, command, or boundary; use your own judgment from the "
-        "live Lean state.\n"
-        f"{recommendation}"
-    )
-
-
-def _subagent_catalog(context: GroundContext | HorizonContext) -> str:
+def _subagent_catalog(context: HorizonContext) -> str:
     directory = context.workspace.state_path / "subagents"
     summary = descriptor_summary(directory)
     return (
@@ -382,84 +357,6 @@ def _subagent_catalog(context: GroundContext | HorizonContext) -> str:
     )
 
 
-def _ground_phase_block(context: GroundContext) -> str:
-    """Tell Ground which phase it is in, so the opening session does not flail
-    looking for a Horizon diff that does not exist yet."""
-    if context.is_opening:
-        return (
-            "# This is the OPENING Ground of the run\n"
-            "No Horizon agent has run yet, so there is NO prior Horizon diff to "
-            "review. Your job right now is a short orientation pass: read the roadmap, "
-            "blueprints, and open inbox; check that the selected task's scope and "
-            "dependency picture are sane; and leave compact notes pointing Horizon to "
-            "the relevant files, references, and recent context."
-        )
-    return (
-        "# This is a RECONCILE Ground\n"
-        "A Horizon session just ran. Do a bounded but SKEPTICAL review of its report and "
-        "project diff (the `project-git` skill), then reconcile blueprints/roadmap/memory "
-        "with what actually changed. Read the report as a claim to verify against the diff "
-        "and Lean state, not a summary to take on trust: separate what was genuinely proved "
-        "from what was deferred, weakened, or stubbed. Watch for avoidance — a "
-        "`sorry`/`admit`/placeholder or new `axiom` left behind, the easy sub-goals closed "
-        "while the hard core is punted, an artificial case split that dodges the real "
-        "difficulty, or a statement quietly weakened to pass. When the report says something "
-        "like 'this is multi-session work, I stopped because …', judge from the evidence "
-        "whether that is a real mathematical blocker or a hard step being avoided, and record "
-        "your honest read (an `info`/`memory` inbox item or a roadmap comment) so the project "
-        "does not quietly stagnate behind plausible-sounding excuses. Focus on correctness, "
-        "consistency, and workspace hygiene; avoid long proof search or exhaustive theorem triage."
-    )
-
-
-def _recommendation_guidance() -> str:
-    return (
-        "# Orientation for the next agent (write `recommendation.md`)\n"
-        "Write at most 4 concise bullets. This file is not a strategy memo and not a "
-        "list of commands. It should give Horizon quick access to context: relevant "
-        "Lean files/declarations, blueprint nodes, reference locations, recent work, "
-        "environment/build notes, and any Lean/blueprint consistency concern.\n"
-        "Avoid directive language like `do`, `do not`, `must`, `safe target`, or "
-        "`avoid`, and avoid ranking targets by fear of difficulty. Prefer wording like "
-        "`Useful context:` or `Relevant files:`. Encourage ambitious progress: Horizon "
-        "may widen scope, fill infrastructure gaps, refactor strategy, or create tools "
-        "when that is the best route. If the last session avoided the hard core, deferred "
-        "it to 'a later session', or leaned on a `sorry`/placeholder where a real attempt "
-        "was tractable, say so plainly and point to that core as the highest-value next "
-        "piece — as honest orientation Horizon may commit to, never as a command. (Naming an "
-        "avoided or stagnating obligation is the opposite of ranking by difficulty: what you "
-        "must not do is steer Horizon *away* from hard work.) Human-facing notes go to an "
-        "`info` inbox item; durable dead ends go to memory."
-    )
-
-
-def compose_ground_prompt(context: GroundContext) -> str:
-    """Prompt for the human-facing planning/blueprint/roadmap agent.
-
-    The static role/policy prose is loaded from ``ground.md`` (a workspace override
-    at ``<state_dir>/prompts/ground.md`` wins over the bundled default); the dynamic
-    phase block and context sections are injected here."""
-    return (
-        f"{_load_prompt_body(context.workspace, 'ground')}\n\n"
-        f"{_ground_phase_block(context)}\n\n"
-        f"{_skills_block()}\n\n"
-        f"Workspace: {context.workspace.name}\n"
-        f"Run: {context.run.id or '(new run)'}; focus: {_focus_line(context)}\n"
-        f"{_write_scope(context.write_domain)}\n"
-        f"Log directory for this session: {context.log_dir or '(none)'}\n\n"
-        f"# Projects\n{_workspace_lines(context.workspace)}\n\n"
-        f"# Roadmap\n{_roadmap_lines(context.roadmap)}\n\n"
-        f"# Blueprint / DAG summary\n{context.blueprint_summary or '(no blueprint summary)'}\n\n"
-        f"# Subagents\n{_subagent_catalog(context)}\n\n"
-        f"{_section(_protected_block(context.accepted_inbox))}"
-        f"# Opened inbox\n{_inbox_lines(context.accepted_inbox)}\n\n"
-        f"# Memory\n{context.memory.strip() or '(empty)'}\n\n"
-        f"{_recommendation_guidance()}\n\n"
-        f"{_pending_work_guidance()}\n\n"
-        f"{_report_guidance('Ground')}"
-    )
-
-
 def compose_horizon_prompt(context: HorizonContext) -> str:
     """Prompt for one autonomous long-horizon formalization attempt.
 
@@ -474,7 +371,6 @@ def compose_horizon_prompt(context: HorizonContext) -> str:
         f"{_write_scope(context.write_domain)}\n"
         f"Log/artifact directory: {context.log_dir or '(none)'}\n\n"
         f"# Subagents\n{_subagent_catalog(context)}\n\n"
-        f"{_section(_ground_recommendation_block(context))}"
         f"# Task focus\n{_task_block(context.task)}\n\n"
         f"# Roadmap slice\n{_roadmap_lines(context.roadmap)}\n\n"
         f"{_section(_protected_block(context.accepted_inbox))}"

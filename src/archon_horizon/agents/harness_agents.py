@@ -16,7 +16,7 @@ from collections.abc import Callable
 from archon_horizon.core.tasks import HorizonResult, TaskStatus
 from archon_horizon.harnesses.base import Harness, HarnessCapability, HarnessRequest, HarnessResult
 
-from . import parsing, prompts
+from . import prompts
 from .base import HorizonAgent, HorizonContext
 
 # Preambles prepended to the FULL prompt when continuing a native engine session
