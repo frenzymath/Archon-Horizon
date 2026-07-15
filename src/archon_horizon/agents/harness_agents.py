@@ -17,13 +17,7 @@ from archon_horizon.core.tasks import HorizonResult, TaskStatus
 from archon_horizon.harnesses.base import Harness, HarnessCapability, HarnessRequest, HarnessResult
 
 from . import parsing, prompts
-from .base import (
-    HorizonAgent,
-    HorizonContext,
-    GroundAgent,
-    GroundContext,
-    GroundUpdate,
-)
+from .base import HorizonAgent, HorizonContext
 
 # Preambles prepended to the FULL prompt when continuing a native engine session
 # (claude --resume). The engine is *supposed* to replay the prior conversation, so
@@ -37,13 +31,6 @@ HORIZON_CONTINUE = (
     "below. If your prior conversation is already in context, pick up from where you "
     "left off (re-read the file(s) you were editing and any build output to refresh); "
     "otherwise start from the instructions below. Finish with the usual brief report.\n\n"
-    "─────────────────────────────────────────\n\n"
-)
-GROUND_CONTINUE = (
-    "You are RESUMING this round — its full instructions follow below. If your prior "
-    "conversation is already in context, pick up from where you left off (re-read the "
-    "roadmap, the open inbox, and any report you were writing); otherwise start from "
-    "the instructions below. Then finish the round.\n\n"
     "─────────────────────────────────────────\n\n"
 )
 
@@ -61,7 +48,7 @@ def _resume_failed_to_start(result: HarnessResult) -> bool:
     return not result.ok and result.metadata.get("failure_reason") == "aborted_early"
 
 
-def _agent_env(role: str, context: HorizonContext | GroundContext) -> dict[str, str]:
+def _agent_env(role: str, context: HorizonContext) -> dict[str, str]:
     """Env stamped on an agent invocation so its CLI writes carry provenance:
     the role plus the run id and session directory (read back by the `horizon`
     CLI to tag inbox/roadmap/task items with which run/session authored them).
@@ -211,58 +198,3 @@ class HarnessHorizonAgent(HorizonAgent):
         )
 
 
-class HarnessGroundAgent(GroundAgent):
-    def __init__(
-        self,
-        harness: Harness,
-        *,
-        compose: Callable[[GroundContext], str] = prompts.compose_ground_prompt,
-        parse: Callable[[str], GroundUpdate] = parsing.parse_ground_update,
-    ) -> None:
-        self._harness = harness
-        self._compose = compose
-        self._parse = parse
-
-    def harness_metadata(self) -> dict[str, object]:
-        """Harness/model/effort/auth this agent will run with (see the Horizon
-        agent's version) — stamped into the session meta at START."""
-        return _harness_metadata(self._harness)
-
-    def _run(self, context: GroundContext, prompt: str) -> GroundUpdate:
-        # Continue the native session only if the engine supports it; otherwise
-        # re-run fresh with the full prompt (the engine-agnostic fallback).
-        resume = context.resume_session_id if _supports_resume(self._harness) else None
-        request = HarnessRequest(
-            prompt=(GROUND_CONTINUE + prompt) if resume else prompt,
-            cwd=context.workspace.root,
-            artifact_dir=context.log_dir,
-            resume_session_id=resume,
-            metadata={"env": _agent_env("ground", context)},
-        )
-        result = self._harness.run(request)
-        if resume and _resume_failed_to_start(result):
-            # The native session was gone; retry once fresh with the full prompt
-            # rather than letting the aborted resume halt the run.
-            result = self._harness.run(dataclasses.replace(
-                request, prompt=prompt, resume_session_id=None,
-            ))
-        result = dataclasses.replace(result, metadata=_merge_run_metadata(self._harness, result))
-        update = self._parse(result.text)
-        metadata = {k: v for k, v in _result_metadata(result).items() if v is not None}
-        if metadata:
-            update = dataclasses.replace(update, metadata={**update.metadata, **metadata})
-        return update
-
-    def run_round(self, context: GroundContext) -> GroundUpdate:
-        return self._run(context, self._compose(context))
-
-    def handle_horizon_result(
-        self,
-        context: GroundContext,
-        result: HorizonResult,
-    ) -> GroundUpdate:
-        prompt = (
-            self._compose(context)
-            + f"\n\n# Horizon result for {result.task_id} ({result.status})\n{result.report}"
-        )
-        return self._run(context, prompt)

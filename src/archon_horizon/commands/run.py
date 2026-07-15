@@ -23,7 +23,7 @@ from .shared import emit_json, inbox_providers, load_workspace
 
 # The single-agent run targets. ``horizon run ground`` / ``horizon run horizon``
 # drive exactly one session of that role instead of the usual G/H alternation.
-ROLE_TARGETS = ("ground", "horizon")
+ROLE_TARGETS = ("horizon",)
 
 
 class RunCommand:
@@ -161,39 +161,24 @@ class RunCommand:
             thread.join(timeout=5)
 
     def _run_single_role(self, orch, role: str):
-        """Drive exactly one session of ``role``.
-
-        Ground: run the opening plan only (``rounds=0`` runs the opener, then the
-        loop body never executes). Horizon: skip the opening and closing Ground
-        (``start_with``/``end_with`` = ``horizon``) and run a single round, so the
-        run is one bare Horizon step over the current focus.
+        """Drive exactly one Horizon session over the current focus.
 
         ``--run <id>`` appends the session to an existing (or new) run directory
         instead of allocating a fresh run, and ``--round <n>`` numbers it — so a
-        human hand-driving ground → horizon → horizon → … into one run keeps the
-        logs, session metadata, and commit trailers consistent with the automatic
-        alternation (and the dashboard groups them under that one run)."""
+        human hand-driving one session at a time into a run keeps the logs, session
+        metadata, and commit trailers grouped under that run."""
         run_id = self.run_id or ""
         start_round = self.round_index or 0
-        if role == "ground":
-            orch.start_with, orch.end_with = "ground", "ground"
-            run = RunRecord(id=run_id, focus=Focus(), rounds_requested=0, start_round=start_round)
-        else:  # horizon
-            orch.start_with, orch.end_with = "horizon", "horizon"
-            focus = Focus() if not self.targets[1:] else self._resolve_focus(orch, self.targets[1:])
-            run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
+        focus = Focus() if not self.targets[1:] else self._resolve_focus(orch, self.targets[1:])
+        run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
         return orch.run(run, dry_run=self.dry_run)
 
     def _run_supervisor(self, orch, cfg):
         """The lightweight automated loop: N rounds of Horizon-only sessions.
 
-        There is no Ground role in the loop — the Horizon agent cleans up the work
-        itself by spawning a subagent (janitor / reviewer) when it judges it useful
-        (see the `horizon` skill). Reuses the round engine's session machinery
-        (selection, integration, recording); strictly sequential (one session at a
-        time), so the advisory locks never contend."""
-        orch.roles = ("horizon",)
-        orch.start_with = orch.end_with = "horizon"
+        The orchestrator is horizon-only by design — the Horizon agent cleans up the
+        work itself by spawning a subagent (janitor / reviewer) when it judges it
+        useful (see the `horizon` skill). Strictly sequential (one session at a time)."""
         # `*` / `.` / task / project targets scope the focus; a bare run supervises all queued work.
         targets = tuple(t for t in self.targets if t not in ("*",))
         focus = self._resolve_focus(orch, targets) if targets else Focus()
@@ -220,11 +205,8 @@ class RunCommand:
                 harness.options.get("backend") or ""
             ).strip().lower() == "interactive"
 
-        # An explicit `horizon run ground` is the only way to drive Ground alone.
-        if self.targets == ("ground",):
-            return "ground" if declares_interactive(cfg.ground_harness) else None
-        # Every other target shape ends up running a Horizon step, so the Horizon
-        # harness's opt-in governs — seeded with whatever focus was requested.
+        # Every target shape runs a Horizon session, so the Horizon harness's opt-in
+        # governs — seeded with whatever focus was requested.
         return "horizon" if declares_interactive(cfg.horizon_harness) else None
 
     def _recover_interactive_resume(self, role: str) -> tuple[str | None, tuple[str, ...]]:
@@ -290,17 +272,8 @@ class RunCommand:
         focus = tuple(t for t in self.targets if t not in ROLE_TARGETS)
         # Prefer the role picked by config routing (`_config_interactive_role`); the
         # plain `--backend interactive` CLI path falls back to the target shape.
-        role = getattr(self, "_interactive_role", None)
-        if role is None:
-            if self.targets and self.targets[0] in ROLE_TARGETS:
-                role = self.targets[0]
-            elif focus:
-                role = "horizon"  # a task/project/file focus is Horizon work
-            else:
-                role = "ground"
-                log.info("`--backend interactive` with no target defaults to the "
-                         "ground role; pass `horizon run horizon` or a task/project "
-                         "to drive Horizon instead.")
+        # Only one role exists now (horizon); interactive always drives it.
+        role = getattr(self, "_interactive_role", None) or "horizon"
 
         # `--resume` interactively continues the interrupted run's engine
         # conversation: recover its last matching session's engine id (for a true

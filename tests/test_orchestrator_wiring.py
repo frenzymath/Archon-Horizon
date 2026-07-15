@@ -50,26 +50,6 @@ def test_frozen_horizon_agent_blocks_tasks(tmp_path: Path) -> None:
     assert orch.task_store.get("R-1").status is TaskStatus.BLOCKED
 
 
-def test_blueprint_checks_do_not_create_inbox_items(tmp_path: Path) -> None:
-    root = _setup(tmp_path, blueprint=True)
-    bp = root / "projects" / "ag-main" / "blueprint"
-    bp.mkdir(parents=True)
-    (bp / "ch1.tex").write_text(r"\begin{lemma}\label{b}\uses{zzz}\lean{B}" "\nB.\n" r"\end{lemma}", "utf-8")
-
-    local = FilesystemInboxProvider(root / ".archon-horizon" / "inbox" / "local")
-    orch = build_orchestrator(root, harnesses={"inf": NullHarness(""), "hor": NullHarness("")},
-                              inbox_providers=[local])
-    # Exercise the opening planning Ground explicitly: the default alternation now
-    # starts on Horizon, and this unfocused run has no queued task to run.
-    orch.start_with = "ground"
-    orch.run(RunRecord(id="", rounds_requested=1))
-
-    assert local.list_items() == []
-    event = next(e for e in orch.event_log.read_all() if e.type == "blueprint.checks.findings")
-    assert event.data["count"] > 0
-    assert event.data["projects"] == {"ag-main": event.data["count"]}
-
-
 def test_session_meta_includes_workspace_sha(tmp_path: Path) -> None:
     root = _setup(tmp_path)
     git = WorkspaceGit(root)
@@ -78,12 +58,16 @@ def test_session_meta_includes_workspace_sha(tmp_path: Path) -> None:
     sha = git.current_sha()
 
     orch = build_orchestrator(root, harnesses={"inf": NullHarness(""), "hor": NullHarness("")})
-    # The default alternation opens on Horizon; force an opening Ground so this
-    # test can assert the ground session's recorded workspace sha.
-    orch.start_with = "ground"
-    orch.run(RunRecord(id="", rounds_requested=1))
+    orch.task_store.put(HorizonTask(
+        id="T-1", project="ag-main", objective="x", title="x",
+        projects=("ag-main",), status=TaskStatus.QUEUED, write_set=WriteSet(projects=("ag-main",)),
+    ))
+    orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=1))
 
-    meta = root / ".archon-horizon" / "runs" / "0001" / "sessions" / "0001-ground" / "meta.json"
+    sessions_dir = root / ".archon-horizon" / "runs" / "0001" / "sessions"
+    horizon_sessions = [d for d in sorted(sessions_dir.iterdir()) if "horizon" in d.name]
+    assert horizon_sessions
+    meta = horizon_sessions[0] / "meta.json"
     assert meta.exists()
     assert sha
     # The run opens with a baseline commit, so the ground session records the

@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from archon_horizon.agents.harness_agents import HarnessHorizonAgent, HarnessGroundAgent
+from archon_horizon.agents.harness_agents import HarnessHorizonAgent
 from archon_horizon.core.freeze import FreezeLevel, FreezeRule, FreezeSet
 from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
 from archon_horizon.core.sessions import Focus, RunRecord
@@ -67,7 +67,6 @@ def _build(
     *,
     freeze: FreezeSet | None = None,
     horizon_ok: bool = True,
-    ground_ok: bool = True,
     horizon_report: str | None = None,
     horizon_sets_status: TaskStatus | None = TaskStatus.DONE,
 ) -> tuple[Orchestrator, FilesystemTaskStore]:
@@ -78,13 +77,6 @@ def _build(
         name="ws",
         root=root,
         projects={"ag-main": Project(name="ag-main", path=Path("projects/ag-main"))},
-    )
-
-    # Ground just reports; Horizon succeeds. Work is derived from the roadmap.
-    ground_harness = (
-        NullHarness("Set strategy; R-1 is active.")
-        if ground_ok
-        else NullHarness(lambda req: HarnessResult(ok=False, text="", metadata={"returncode": 1}))
     )
 
     task_store = FilesystemTaskStore(state / "tasks")
@@ -123,7 +115,6 @@ def _build(
     )
     orch = Orchestrator(
         workspace=workspace,
-        ground=HarnessGroundAgent(ground_harness),
         horizon=horizon,
         scheduler=FreezeAwareScheduler(freeze=freeze, max_parallel=2),
         sync=MultiProviderSyncCoordinator([]),
@@ -146,26 +137,6 @@ def test_round_creates_and_runs_a_task(tmp_path: Path) -> None:
     # The derived task id mirrors the active roadmap item id.
     assert reports[0].tasks_run == ("R-1",)
     assert task_store.get("R-1").status is TaskStatus.DONE
-
-
-def test_ground_crash_is_surfaced_not_swallowed(tmp_path: Path) -> None:
-    # A Ground engine that exits non-zero (e.g. a hung MCP tool taking the process
-    # down) used to be recorded as a healthy round with a stub report. It must now
-    # surface a `ground.failed` event and mark the session failed.
-    orch, _ = _build(tmp_path, ground_ok=False)
-
-    orch.run(RunRecord(id="S-0009", rounds_requested=1))
-
-    events = orch.event_log.read_all()
-    assert any(e.type == "ground.failed" for e in events)
-    failed = next(e for e in events if e.type == "ground.failed")
-    assert failed.data.get("returncode") == 1
-
-
-def test_healthy_ground_emits_no_failure(tmp_path: Path) -> None:
-    orch, _ = _build(tmp_path)
-    orch.run(RunRecord(id="S-0010", rounds_requested=1))
-    assert not any(e.type == "ground.failed" for e in orch.event_log.read_all())
 
 
 def test_focus_runs_in_focus_work_and_excludes_others(tmp_path: Path) -> None:
@@ -203,26 +174,18 @@ def test_focused_crashed_session_retries_each_round(tmp_path: Path) -> None:
     assert reopens, "the machine's return-to-queued of a retried task should be recorded in history"
 
 
-def test_supervisor_is_horizon_only_and_never_runs_ground(tmp_path: Path) -> None:
-    # The lightweight supervisor (roles=("horizon",)) runs N Horizon rounds and NEVER
-    # invokes a Ground role — cleanup is the Horizon agent's own call (it spawns a
-    # subagent when it wants). The task never declares terminal, so it runs each round.
+def test_run_is_horizon_only_no_ground_sessions(tmp_path: Path) -> None:
+    # The orchestrator is horizon-only: N rounds each run one Horizon session and
+    # there is never a Ground session on disk (cleanup is the Horizon agent's own
+    # call via a subagent). The task never declares terminal, so it runs each round.
     orch, _ = _build(tmp_path, horizon_sets_status=None)
-    ground_calls = {"n": 0}
-
-    def _count_ground(req):
-        ground_calls["n"] += 1
-        return HarnessResult(ok=True, text="should never run")
-
-    orch.ground = HarnessGroundAgent(NullHarness(_count_ground))
-    orch.roles = ("horizon",)
-    orch.start_with = orch.end_with = "horizon"
 
     reports = orch.run(RunRecord(id="SUP-1", rounds_requested=3))
 
+    # Every round ran exactly one Horizon task and nothing else — no Ground events.
     assert len(reports) == 3
-    assert all(r.tasks_run == ("R-1",) for r in reports)  # Horizon ran every round
-    assert ground_calls["n"] == 0  # no Ground role in the loop
+    assert all(r.tasks_run == ("R-1",) for r in reports)
+    assert not any(e.type == "ground.failed" for e in orch.event_log.read_all())
 
 
 def test_focused_run_stops_early_when_task_is_done(tmp_path: Path) -> None:
@@ -563,9 +526,9 @@ def test_ground_recommendation_file_is_not_overwritten(tmp_path: Path) -> None:
 
 
 def test_auth_error_early_stop(tmp_path: Path) -> None:
-    orchestrator, _ = _build(tmp_path, ground_ok=False)
-    # Replace ground harness with one returning auth_error
-    orchestrator.ground = HarnessGroundAgent(
+    orchestrator, _ = _build(tmp_path)
+    # A Horizon session that hits an auth error must stop the whole run.
+    orchestrator.horizon = HarnessHorizonAgent(
         NullHarness(lambda req: HarnessResult(ok=False, text="Not logged in · Please run /login", metadata={"returncode": 1, "failure_reason": "auth_error"}))
     )
 

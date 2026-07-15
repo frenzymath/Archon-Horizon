@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from archon_horizon.agents.harness_agents import HarnessHorizonAgent, HarnessGroundAgent
+from archon_horizon.agents.harness_agents import HarnessHorizonAgent
 from archon_horizon.core.freeze import FreezeLevel, FreezeRule, FreezeSet
 from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import Harness
@@ -198,25 +198,11 @@ def build_orchestrator(
     freeze = build_freeze(cfg)
 
     built = harnesses if harnesses is not None else (registry or HarnessRegistry()).build_all(cfg.harnesses)
-    ground_harness = _resolve_harness(built, cfg.ground_harness, "ground")
-    ground = HarnessGroundAgent(ground_harness)
     horizon = HarnessHorizonAgent(_resolve_harness(built, cfg.horizon_harness, "horizon"))
-    subagent_harness = (
-        _resolve_harness(built, cfg.subagent_harness, "subagent")
-        if cfg.subagent_harness
-        else ground_harness
-    )
-    ground_subagents = build_subagents(
-        cfg.ground_subagents,
-        descriptor_dir=workspace.state_path / "subagents",
-        harnesses=built,
-        default_harness=subagent_harness,
-    )
 
     stores = build_stores(workspace, codec)
     return Orchestrator(
         workspace=workspace,
-        ground=ground,
         horizon=horizon,
         scheduler=FreezeAwareScheduler(
             freeze=freeze, max_parallel=cfg.scheduler.max_parallel_sessions
@@ -229,9 +215,5 @@ def build_orchestrator(
         inbox_providers=inbox_providers,
         run_store=stores.runs,
         run_logs=stores.run_logs,
-        ground_subagents=ground_subagents,
         freeze=freeze,
-        start_with=cfg.start_with,
-        end_with=cfg.end_with,
-        roles=cfg.roles,
     )
