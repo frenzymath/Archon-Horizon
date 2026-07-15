@@ -714,13 +714,53 @@ class WorkspaceService:
         summary["scope_source"] = "run-agent-files" if run_files else "project"
         return summary
 
-    def session_file_diff(self, run_id: str, session: str, path: str, *, worktree: bool = False) -> dict[str, Any]:
+    def session_commits_view(self, run_id: str, session: str) -> dict[str, Any]:
+        """Per-COMMIT change view for one session: each commit the session made
+        (message + per-file table vs that commit's own git parent), so the
+        dashboard can show progress at *commit* granularity — the commit message
+        and diff ARE the progress record. Complements ``run_changes`` (which sums a
+        session's commits into one table). Per-commit file diffs are fetched lazily
+        via ``/api/session/file-diff?...&sha=<sha>``."""
+        from archon_horizon.server.changes_api import session_change_summary
+        from archon_horizon.vcs.git import WorkspaceGit, git_available
+
+        wsgit = WorkspaceGit(self.root) if git_available() else None
+        if wsgit is None:
+            return {"run": run_id, "session": session, "commits": []}
+        info = self._session_integrations(run_id).get(session) or {}
+        projects = [p for p in (info.get("projects") or []) if p]
+        paths = self._project_paths(projects) or tuple()
+        commits_out: list[dict[str, Any]] = []
+        for r in wsgit.session_commits_detailed(run_id, session):
+            sha = r["sha"]
+            summary = session_change_summary(self.root, sha, paths, base=None)
+            commits_out.append({
+                "sha": sha,
+                "short_sha": sha[:10],
+                "subject": r.get("subject", ""),
+                "role": r.get("role") or info.get("role"),
+                "kind": r.get("kind", ""),  # "agent" | "integration" | …
+                "files": summary.get("files", []),
+                "lean": summary.get("lean", {}),
+                "blueprint": summary.get("blueprint", {}),
+                "sorry_delta": summary.get("sorry_delta", 0),
+                "other_count": summary.get("other_count", 0),
+            })
+        return {"run": run_id, "session": session, "commits": commits_out}
+
+    def session_file_diff(
+        self, run_id: str, session: str, path: str, *, worktree: bool = False, sha: str | None = None
+    ) -> dict[str, Any]:
         """Unified diff of one changed file vs the session commit's git parent —
         or, with ``worktree``, the current working tree vs the last committed
-        session (the live view for a running session)."""
+        session (the live view for a running session). With ``sha``, the diff is
+        scoped to that ONE commit (vs its own parent) for the commit-granular view."""
         from archon_horizon.server.changes_api import session_file_diff
         from archon_horizon.vcs.git import WorkspaceGit, git_available
 
+        if sha:
+            # Commit-granular: exactly what this one commit changed to the file.
+            return session_file_diff(self.root, sha, path, base=None)
         integrated = self._session_integrations(run_id)
         if worktree:
             last_commit = self._last_run_commit(run_id)
@@ -1017,11 +1057,24 @@ class WorkspaceService:
             except Exception:
                 continue
             for session in changes.get("sessions", []):
+                # Commit-granular view for this session (message + per-commit files).
+                eps.append(f"/api/session/commits?run={run_id}&session={session['session']}")
                 for f in session.get("files", []):
                     if f.get("category") in ("lean", "blueprint"):
                         eps.append(
                             f"/api/session/file-diff?run={run_id}&session={session['session']}&path={f['path']}"
                         )
+                # Per-commit file diffs, so click-to-diff on a single commit works offline too.
+                try:
+                    for c in self.session_commits_view(run_id, session["session"]).get("commits", []):
+                        for f in c.get("files", []):
+                            if f.get("category") in ("lean", "blueprint"):
+                                eps.append(
+                                    f"/api/session/file-diff?run={run_id}&session={session['session']}"
+                                    f"&path={f['path']}&sha={c['sha']}"
+                                )
+                except Exception:
+                    pass
         for name in self._discover_projects():
             encoded_name = quote(name, safe='')
             eps.append(f"/api/blueprint/chapters?project={encoded_name}")
@@ -1089,12 +1142,18 @@ class WorkspaceService:
                 (query.get("run") or [""])[0],
                 (query.get("session") or [""])[0] or None,
             )
+        if parsed.path == "/api/session/commits":
+            return self.session_commits_view(
+                (query.get("run") or [""])[0],
+                (query.get("session") or [""])[0],
+            )
         if parsed.path == "/api/session/file-diff":
             return self.session_file_diff(
                 (query.get("run") or [""])[0],
                 (query.get("session") or [""])[0],
                 (query.get("path") or [""])[0],
                 worktree=(query.get("worktree") or [""])[0] in ("1", "true"),
+                sha=(query.get("sha") or [""])[0] or None,
             )
         if parsed.path == "/api/projects":
             return self.projects_summary()

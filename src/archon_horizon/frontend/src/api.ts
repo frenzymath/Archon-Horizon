@@ -192,6 +192,21 @@ export interface RunChanges {
   }[];
   file_trends: Record<string, { session: string; sorry_after: number; loc_code_after: number }[]>;
 }
+// One commit's own change (message + per-file table vs its git parent) — the
+// commit-granular "progress" view in the Logs page.
+export interface CommitChange {
+  sha: string;
+  short_sha: string;
+  subject: string;
+  role?: string;
+  kind: string; // 'agent' | 'integration' | …
+  files: SessionChangeFile[];
+  lean: ChangeRollup;
+  blueprint: ChangeRollup;
+  sorry_delta: number;
+  other_count: number;
+}
+export interface SessionCommits { run: string; session: string; commits: CommitChange[] }
 export interface FileDiff { path: string; available: boolean; diff: string; truncated?: boolean }
 // Raw interpolation (no encode): run ids/sessions/paths are bare and the path
 // must match the Python endpoint registry exactly for static-mode hashing.
@@ -201,8 +216,11 @@ export const getRunChanges = (runId: string) =>
 // of a running session vs the run's last committed session.
 export const getWorkingChanges = (runId: string, session?: string) =>
   getJson<SessionChange>(`/api/run/working-changes?run=${runId}${session ? `&session=${session}` : ''}`);
-export const getSessionFileDiff = (runId: string, session: string, path: string, worktree = false) =>
-  getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}${worktree ? '&worktree=1' : ''}`);
+export const getSessionFileDiff = (runId: string, session: string, path: string, worktree = false, sha?: string) =>
+  getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}${worktree ? '&worktree=1' : ''}${sha ? `&sha=${sha}` : ''}`);
+// Per-commit change view for one session (message + per-file table per commit).
+export const getSessionCommits = (runId: string, session: string) =>
+  getJson<SessionCommits>(`/api/session/commits?run=${runId}&session=${session}`);
 
 export interface SearchResult {
   name: string | null;

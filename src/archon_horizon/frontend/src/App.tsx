@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type RunChanges, type FileDiff } from './api';
+import { editInbox, editRoadmap, editTask, getState, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type CommitChange, type RunChanges, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
@@ -2101,8 +2101,8 @@ function GitUnifiedDiff({ text }: { text: string }) {
 
 // One file row: click the name to lazily load and expand its diff. Only the
 // base file name is shown (paths are often very long); hover reveals the path.
-function FileChangeRow({ runId, session, file, showComments, initial, worktree }: {
-  runId: string; session: string; file: SessionChangeFile; showComments: boolean; initial?: boolean; worktree?: boolean;
+function FileChangeRow({ runId, session, file, showComments, initial, worktree, sha }: {
+  runId: string; session: string; file: SessionChangeFile; showComments: boolean; initial?: boolean; worktree?: boolean; sha?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [diff, setDiff] = useState<FileDiff | null>(null);
@@ -2113,7 +2113,9 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree }
     const next = !open;
     setOpen(next);
     if (next && diff === null) {
-      getSessionFileDiff(runId, session, file.path, worktree).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
+      // `sha` scopes the diff to a single commit (commit-granular view); omitted, it
+      // spans the session's commit range (the aggregated session view).
+      getSessionFileDiff(runId, session, file.path, worktree, sha).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
     }
   };
   return (
@@ -2196,6 +2198,62 @@ function attributionNote(change: SessionChange): string {
 function attributionWarning(change: SessionChange): string {
   const detail = attributionNote(change);
   return `Change attribution is approximate and may be inaccurate with parallel runs or workspaces that used older commit conventions. ${detail}`;
+}
+
+// One commit rendered as a distinct card: message (the progress statement) + its
+// own per-file diff. Expands to that single commit's files (diff scoped by sha).
+function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: string; session: string }) {
+  const [open, setOpen] = useState(false);
+  const files = (commit.files ?? []).filter((f) => f.category === 'lean' || f.category === 'blueprint');
+  const isAgent = commit.kind === 'agent';
+  return (
+    <div className={`commit-card ${isAgent ? 'agent' : 'system'}`}>
+      <button className="commit-card-head" onClick={() => setOpen(!open)} title={commit.sha}>
+        <span className="change-caret">{open ? '▾' : '▸'}</span>
+        <span className={`commit-kind ${commit.kind || 'other'}`}>{isAgent ? (commit.role || 'agent') : (commit.kind || 'commit')}</span>
+        <span className="commit-subject">{commit.subject}</span>
+        {commit.sorry_delta !== 0 && (
+          <span className="commit-stat"><AfterDelta after={commit.lean?.sorry_after ?? 0} delta={commit.sorry_delta} goodWhenNegative /> sorry</span>
+        )}
+        <span className="commit-sha">{commit.short_sha}</span>
+      </button>
+      {open && (
+        files.length === 0 ? (
+          <p className="empty commit-empty">No Lean/blueprint files in this commit{commit.other_count ? ` (+${commit.other_count} shared-state file${commit.other_count === 1 ? '' : 's'})` : ''}.</p>
+        ) : (
+          <table className="change-table">
+            <tbody>
+              {files.map((f) => (
+                <FileChangeRow key={f.path} runId={runId} session={session} file={f} showComments sha={commit.sha} />
+              ))}
+            </tbody>
+          </table>
+        )
+      )}
+    </div>
+  );
+}
+
+// The commit-granular "progress" panel for a session: each commit is a card whose
+// message + diff IS the progress record. Fetched lazily from /api/session/commits.
+function SessionCommitsPanel({ runId, session }: { runId: string; session: string }) {
+  const [commits, setCommits] = useState<CommitChange[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    getSessionCommits(runId, session)
+      .then((d) => { if (live) setCommits(d.commits ?? []); })
+      .catch(() => { if (live) setCommits([]); });
+    return () => { live = false; };
+  }, [runId, session]);
+  if (!commits || commits.length === 0) return null;
+  return (
+    <details className="log-panel commits-panel" open>
+      <summary>Commits <span className="commits-count">{commits.length}</span></summary>
+      <div className="commit-cards">
+        {commits.map((c) => <CommitCard key={c.sha} commit={c} runId={runId} session={session} />)}
+      </div>
+    </details>
+  );
 }
 
 function SessionChanges({ change, runId }: {
@@ -2411,6 +2469,9 @@ function TranscriptViewer({
         </div>
       </div>
       {change && <SessionChanges change={change} runId={changesRunId ?? ''} />}
+      {change && !change.worktree && changesRunId && change.session && (
+        <SessionCommitsPanel runId={changesRunId} session={change.session} />
+      )}
       {recommendation && recommendation.trim() && (
         <details className="log-panel report-panel" open>
           <summary>Recommendation</summary>
