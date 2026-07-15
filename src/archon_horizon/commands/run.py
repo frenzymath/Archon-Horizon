@@ -38,6 +38,8 @@ class RunCommand:
         resume: str | None = None,
         backend: str = "default",
         bare: bool = False,
+        supervisor: bool = False,
+        upkeep_every: int = 3,
         run_id: str | None = None,
         round_index: int | None = None,
         as_json: bool = False,
@@ -53,6 +55,8 @@ class RunCommand:
         self.resume = resume
         self.backend = (backend or "default").strip().lower()
         self.bare = bare
+        self.supervisor = supervisor
+        self.upkeep_every = upkeep_every
         self.run_id = (run_id or "").strip() or None
         self.round_index = round_index
         self.as_json = as_json
@@ -99,6 +103,14 @@ class RunCommand:
             if not self.targets:
                 log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `ground`, `horizon`, task names, project names, or files.")
                 raise typer.Exit(1)
+
+            # `--supervisor`: the lightweight automated mode — N rounds of Horizon-only
+            # sessions with a scheduled Ground *upkeep* pass every `--upkeep-every`
+            # rounds, instead of the mandatory Ground/Horizon alternation.
+            if self.supervisor:
+                reports = self._run_supervisor(orch, cfg)
+                self._emit_reports(reports)
+                return
 
             # `horizon run ground` / `horizon run horizon`: one session of that role.
             if len(self.targets) == 1 and self.targets[0] in ROLE_TARGETS:
@@ -172,6 +184,24 @@ class RunCommand:
             orch.start_with, orch.end_with = "horizon", "horizon"
             focus = Focus() if not self.targets[1:] else self._resolve_focus(orch, self.targets[1:])
             run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
+        return orch.run(run, dry_run=self.dry_run)
+
+    def _run_supervisor(self, orch, cfg):
+        """The lightweight automated loop: N rounds of Horizon-only sessions, with a
+        scheduled Ground *upkeep* pass every ``--upkeep-every`` rounds.
+
+        Reuses the round engine's session machinery (selection, integration,
+        recording) but drops the mandatory per-round Ground — Ground runs only as a
+        periodic janitor so blueprint/roadmap/memory don't drift. Strictly
+        sequential (one session at a time), so the advisory locks never contend."""
+        orch.roles = ("horizon",)
+        orch.start_with = orch.end_with = "horizon"
+        # 0 / negative disables upkeep (pure Horizon-only loop).
+        orch.upkeep_every = self.upkeep_every if self.upkeep_every and self.upkeep_every > 0 else None
+        # `*` / `.` / task / project targets scope the focus; a bare run supervises all queued work.
+        targets = tuple(t for t in self.targets if t not in ("*",))
+        focus = self._resolve_focus(orch, targets) if targets else Focus()
+        run = RunRecord(id="", focus=focus, rounds_requested=self.rounds or cfg.rounds)
         return orch.run(run, dry_run=self.dry_run)
 
     def _config_interactive_role(self) -> str | None:
@@ -544,6 +574,14 @@ def run(
         False, "--bare",
         help="Lightweight interactive seed: the only instruction is to load the `horizon` skill, then wait for you — no composed role brief. Implies `--backend interactive`. The session is still recorded in the Log/dashboard.",
     ),
+    supervisor: bool = typer.Option(
+        False, "--supervisor",
+        help="Lightweight automated loop: run `--rounds` Horizon-only sessions with a scheduled Ground upkeep pass every `--upkeep-every` rounds, instead of the mandatory Ground/Horizon alternation. Stops cleanly on a usage-limit (state is on disk; just re-run to resume).",
+    ),
+    upkeep_every: int = typer.Option(
+        3, "--upkeep-every",
+        help="With `--supervisor`, run a Ground upkeep pass every N Horizon rounds (0 = never; pure Horizon-only loop).",
+    ),
     run_id: str | None = typer.Option(
         None, "--run",
         help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving ground/horizon into one run keeps the logs and dashboard grouped. Use with `ground` or `horizon`.",
@@ -584,6 +622,8 @@ def run(
         resume=resume,
         backend=backend,
         bare=bare,
+        supervisor=supervisor,
+        upkeep_every=upkeep_every,
         run_id=run_id,
         round_index=round_index,
         as_json=as_json,

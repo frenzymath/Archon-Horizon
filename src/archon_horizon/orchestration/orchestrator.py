@@ -322,6 +322,11 @@ class Orchestrator:
     # ("horizon",) → a Horizon-only loop with no Ground; ("ground",) → a Ground-only
     # loop with no Horizon (each round is a single Ground session).
     roles: tuple[str, ...] = ("ground", "horizon")
+    # Lightweight-supervisor upkeep: in a Horizon-only loop (no per-round Ground),
+    # run ONE Ground upkeep pass every ``upkeep_every`` rounds so blueprint/roadmap/
+    # memory don't drift once Ground is no longer a mandatory half-round. ``None``/0
+    # disables it (the default, so normal alternation is unchanged).
+    upkeep_every: int | None = None
     # Last roadmap that parsed cleanly; kept in memory if a human-readable item
     # shard is malformed, so one bad edit can't crash the whole run.
     _roadmap_cache: Roadmap | None = field(default=None, repr=False)
@@ -1733,6 +1738,16 @@ class Orchestrator:
             # Ground is disabled entirely (a Horizon-only loop).
             is_last = i == total_rounds - 1
             if self._ground_enabled and not (is_last and self.end_with == "horizon"):
+                update = self._ground_step(run, runlog, round_index=base + i + 1, horizon_result=last_result)
+                if update is not None and _is_fatal_failure(update.metadata):
+                    self._publish_silent(run)
+                    self._flush_system_session(runlog)
+                    self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
+                    break
+            elif self.upkeep_every and (base + i + 1) % self.upkeep_every == 0:
+                # Lightweight supervisor: a Horizon-only loop runs no per-round
+                # Ground, so run one Ground *upkeep* pass every N rounds to keep the
+                # blueprint/roadmap/memory tidy without a mandatory half-round.
                 update = self._ground_step(run, runlog, round_index=base + i + 1, horizon_result=last_result)
                 if update is not None and _is_fatal_failure(update.metadata):
                     self._publish_silent(run)
