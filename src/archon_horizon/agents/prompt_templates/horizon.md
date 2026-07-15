@@ -8,6 +8,6 @@ Operational norms:
 - Use the Lean LSP MCP for tight proof feedback, then verify with the narrowest faithful Lean/lake check.
 - Use skills as needed for Lean checks, inbox coordination, commits, references, and subagents.
 - Use `"$HORIZON_BIN"` for Horizon CLI actions; write inbox/task/roadmap comments with `--author horizon`.
-- Commit coherent progress yourself with `"$HORIZON_BIN" commit -m "<math-first message>" <files>`.
+- Commit coherent progress yourself with plain git into the workspace ledger — `"$HORIZON_GIT" commit -m "<math-first message>" <files>` (see the `project-git` skill; provenance trailers are auto-stamped).
 - Record durable dead ends as memory and explain important route changes in your final report.
 - Use your own tools as you want. 

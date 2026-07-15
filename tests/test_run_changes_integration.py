@@ -9,6 +9,7 @@ the deterministic diff + sorry delta the Logs view renders.
 from __future__ import annotations
 
 import os
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -18,10 +19,21 @@ from archon_horizon.cli import main
 from archon_horizon.core.events import Event
 from archon_horizon.runlog import RunLogTree
 from archon_horizon.server.service import WorkspaceService
-from archon_horizon.vcs.git import git_available
+from archon_horizon.vcs.git import WorkspaceGit, git_available
 from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session
 
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
+
+
+def _ledger_commit(ws: Path, message: str, *files: str) -> None:
+    """Agent-style commit into the workspace ledger with plain git (the raw-git
+    path that replaced `horizon commit`). Provenance trailers are stamped by the
+    ledger's prepare-commit-msg hook from the ARCHON_HORIZON_* env the test sets."""
+    gd = str(WorkspaceGit(ws).git_dir)
+    base = ["git", f"--git-dir={gd}", f"--work-tree={ws}"]
+    for f in files:
+        subprocess.run([*base, "add", f], cwd=str(ws), check=True)
+    subprocess.run([*base, "commit", "-m", message], cwd=str(ws), check=True)
 
 
 def _identity() -> None:
@@ -88,7 +100,7 @@ def test_run_changes_reports_per_session_sorry_delta(tmp_path: Path, monkeypatch
     s1 = run.new_session("horizon-T")
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", s1.name)
     lean.write_text("theorem a : True := by sorry\ntheorem b : True := by sorry\n", "utf-8")
-    assert main(["commit", "-m", "Introduce a and b", str(lean)]) == 0
+    _ledger_commit(ws, "Introduce a and b", str(lean))
     i1 = integrate_workspace_session(service.workspace, run_id=run.id, session=s1.name,
                                      role="horizon", round_index=0, project="proj", projects=("proj",))
     _emit_integration(service, i1, 0)
@@ -97,7 +109,7 @@ def test_run_changes_reports_per_session_sorry_delta(tmp_path: Path, monkeypatch
     s2 = run.new_session("horizon-T")
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", s2.name)
     lean.write_text("theorem a : True := trivial\ntheorem b : True := by sorry\n", "utf-8")
-    assert main(["commit", "-m", "Discharge a", str(lean)]) == 0
+    _ledger_commit(ws, "Discharge a", str(lean))
     i2 = integrate_workspace_session(service.workspace, run_id=run.id, session=s2.name,
                                      role="horizon", round_index=1, project="proj", projects=("proj",))
     _emit_integration(service, i2, 1)
@@ -150,9 +162,9 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     s1 = run.new_session("horizon-T")
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", s1.name)
     lean.write_text("theorem a : True := by sorry\n", "utf-8")
-    assert main(["commit", "-m", "Introduce a", str(lean)]) == 0
+    _ledger_commit(ws, "Introduce a", str(lean))
     lean.write_text("theorem a : True := trivial\n", "utf-8")
-    assert main(["commit", "-m", "Discharge a", str(lean)]) == 0
+    _ledger_commit(ws, "Discharge a", str(lean))
     i1 = integrate_workspace_session(service.workspace, run_id=run.id, session=s1.name,
                                      role="horizon", round_index=0, project="proj", projects=("proj",))
     _emit_integration(service, i1, 0)
@@ -257,13 +269,13 @@ def test_working_changes_excludes_a_parallel_runs_files_in_the_same_project(
     monkeypatch.setenv("ARCHON_HORIZON_RUN", run_a.id)
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", sa.name)
     mine.write_text("theorem m : True := by sorry\n", "utf-8")
-    assert main(["commit", "-m", "run A: add Mine", str(mine)]) == 0
+    _ledger_commit(ws, "run A: add Mine", str(mine))
 
     sb = run_b.new_session("horizon-B")
     monkeypatch.setenv("ARCHON_HORIZON_RUN", run_b.id)
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", sb.name)
     sibling.write_text("theorem s : True := by sorry\n", "utf-8")
-    assert main(["commit", "-m", "run B: add Sibling", str(sibling)]) == 0
+    _ledger_commit(ws, "run B: add Sibling", str(sibling))
 
     # Run A's live session, with fresh UNCOMMITTED edits to both files in the
     # shared worktree — Mine.lean is A's own work; Sibling.lean is B's leftover.

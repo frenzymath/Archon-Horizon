@@ -68,8 +68,9 @@ def _agent_env(role: str, context: HorizonContext | GroundContext) -> dict[str, 
 
     Also carries ``ARCHON_HORIZON_ROOT`` so a `horizon` sub-invocation resolves
     the workspace even when the agent's shell cwd is a project subdirectory (the
-    Horizon agent runs from its project dir), and the task/projects so a
-    ``horizon commit`` the agent makes carries full provenance trailers."""
+    Horizon agent runs from its project dir), and the task/projects so a raw ``git``
+    commit the agent makes into the ledger carries full provenance trailers (stamped
+    by the ledger's prepare-commit-msg hook)."""
     env = {"ARCHON_HORIZON_AGENT_ROLE": role}
     env["ARCHON_HORIZON_ROOT"] = str(context.workspace.root.resolve())
     run_id = getattr(context.run, "id", "") or ""

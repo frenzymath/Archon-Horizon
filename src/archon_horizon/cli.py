@@ -17,7 +17,6 @@ from typer.main import get_command
 
 from archon_horizon import __version__
 from archon_horizon.commands import blueprint as blueprint_cmd
-from archon_horizon.commands import commit as commit_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
 from archon_horizon.commands import inbox as inbox_cmd
@@ -124,7 +123,6 @@ app.command()(init_cmd.init)
 app.command("setup")(setup_cmd.setup)
 app.command("update")(update_cmd.update)
 app.command("run")(run_cmd.run)
-app.command("commit")(commit_cmd.commit)
 app.command("discuss")(discuss_cmd.discuss)
 app.add_typer(inbox_cmd.app, name="inbox")
 app.add_typer(roadmap_cmd.app, name="roadmap")
