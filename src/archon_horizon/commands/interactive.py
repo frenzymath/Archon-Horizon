@@ -430,3 +430,31 @@ def interactive_role_prompt(
 def discuss_prompt(root: Path) -> str:
     """Seed prompt for the `horizon discuss` companion agent."""
     return f"{_ORIENTATION.format(root=root)}\n\n{_DISCUSS_BRIEF}\n"
+
+
+def horizon_seed_prompt(root: Path, focus: tuple[str, ...] = ()) -> str:
+    """The *lightweight* interactive seed: the only instruction is to load the
+    `horizon` skill and wait for the user — no composed role brief, no pushed
+    policy. The skill (editable at ``.claude/skills/horizon/SKILL.md``) carries the
+    orientation and conventions; everything else the agent pulls on demand.
+
+    ``focus`` (task ids / projects / files the human targeted) is passed through so
+    the agent can start there after loading the skill."""
+    lines = [
+        f"You are in an **Archon Horizon** workspace at `{root}`.",
+        "",
+        "Load the **`horizon`** skill — it explains where the state lives, the tools, "
+        "and the conventions for this workspace. Do that first.",
+    ]
+    if focus:
+        items = ", ".join(f"`{f}`" for f in focus)
+        lines += [
+            "",
+            f"The user launched this session focused on: {items}. After loading the "
+            "skill, orient on that and propose a first step.",
+        ]
+    lines += [
+        "",
+        "Then briefly greet the user and wait for their instructions — they are driving.",
+    ]
+    return "\n".join(lines) + "\n"

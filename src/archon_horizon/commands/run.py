@@ -37,6 +37,7 @@ class RunCommand:
         dry_run: bool = False,
         resume: str | None = None,
         backend: str = "default",
+        bare: bool = False,
         run_id: str | None = None,
         round_index: int | None = None,
         as_json: bool = False,
@@ -51,6 +52,7 @@ class RunCommand:
         self.dry_run = dry_run
         self.resume = resume
         self.backend = (backend or "default").strip().lower()
+        self.bare = bare
         self.run_id = (run_id or "").strip() or None
         self.round_index = round_index
         self.as_json = as_json
@@ -61,6 +63,9 @@ class RunCommand:
     def run(self) -> None:
         if not self.targets and self.task:
             self.targets = (self.task,)
+        # `--bare` is a lightweight *interactive* seed, so it implies that backend.
+        if self.bare:
+            self.backend = "interactive"
 
         with self._dashboard_server():
             # `--backend interactive` hands the terminal straight to the engine so a
@@ -247,6 +252,7 @@ class RunCommand:
         from archon_horizon.core.clock import utc_now
 
         from .interactive import (
+            horizon_seed_prompt,
             interactive_launch_for_role,
             interactive_role_prompt,
             run_interactive,
@@ -282,9 +288,15 @@ class RunCommand:
                 log.info("No resumable engine session found for that run; starting a "
                          "fresh interactive session seeded with its focus instead.")
 
-        prompt = interactive_role_prompt(
-            self.root.resolve(), role, focus=focus, resuming=self.resume is not None
-        )
+        # `--bare` is the lightweight harness seed: the only instruction is to load
+        # the `horizon` skill and wait for the user (no composed role brief). The UI
+        # still records the session identically (captured path below).
+        if self.bare:
+            prompt = horizon_seed_prompt(self.root.resolve(), focus=focus)
+        else:
+            prompt = interactive_role_prompt(
+                self.root.resolve(), role, focus=focus, resuming=self.resume is not None
+            )
         try:
             launch = interactive_launch_for_role(
                 self.root, role, prompt, resume_session_id=resume_session_id
@@ -528,6 +540,10 @@ def run(
         "default", "--backend",
         help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine for a single role so you can type prompts (claude/codex sessions are still parsed into the Log) — use with `ground` or `horizon`.",
     ),
+    bare: bool = typer.Option(
+        False, "--bare",
+        help="Lightweight interactive seed: the only instruction is to load the `horizon` skill, then wait for you — no composed role brief. Implies `--backend interactive`. The session is still recorded in the Log/dashboard.",
+    ),
     run_id: str | None = typer.Option(
         None, "--run",
         help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving ground/horizon into one run keeps the logs and dashboard grouped. Use with `ground` or `horizon`.",
@@ -567,6 +583,7 @@ def run(
         dry_run=dry_run,
         resume=resume,
         backend=backend,
+        bare=bare,
         run_id=run_id,
         round_index=round_index,
         as_json=as_json,
