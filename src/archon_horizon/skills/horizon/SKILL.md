@@ -23,7 +23,7 @@ and the manifest is `config.yaml`. Read what you need, when you need it — via 
 - **Inbox** — how agents talk across sessions (and projects). Leave a note for the
   next session; read what past ones left. `"$HORIZON_BIN" inbox …` (skill: `horizon-inbox`)
 - **Blueprint DAG** — declaration dependencies and what's proved. `"$HORIZON_BIN" leandag …` (skill: `leandag`).
-  With **hgraph** installed, each node is a file with attached comments/reviews —
+  Each node is also an **hgraph** file with attached comments/reviews —
   `hgraph frontier` ranks what to prove next, and node-scoped failure memory
   goes on the node itself (skill: `hgraph`).
 - **Memory** — durable facts/dead-ends: `.archon-horizon/memory.md`.

@@ -23,11 +23,11 @@ rationale and measurements in
   between sessions. A limit/budget stop writes `runs/<id>/paused.json` (reason,
   advertised retry window, focus, resume command) and `horizon run` exits with
   code 3 so relaunch loops can tell "paused, resumable" from failure.
-- **HyperGraph engine** — with the `hgraph` extra installed, the dependency
-  graph is generated from per-node files under `<project>/hgraph/` (agents
-  attach comments and Maths/Lean reviews; `hgraph frontier` ranks what to prove
-  next; new `hgraph` skill). Falls back to the vendored leandag, then the
-  parser.
+- **HyperGraph engine** — installed by default: the dependency graph is
+  generated from per-node files under `<project>/hgraph/` (agents attach
+  comments and Maths/Lean reviews; `hgraph frontier` ranks what to prove next;
+  new `hgraph` skill). Degrades gracefully to the vendored leandag, then the
+  parser, if the import is unavailable.
 - **Engine-native orientation** — `init` writes `CLAUDE.md`/`AGENTS.md`
   pointers to the `horizon` skill, so any engine launched in the workspace
   self-orients without pushed prompt prose.
