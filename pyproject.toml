@@ -37,6 +37,12 @@ dependencies = [
 dev = [
     "pytest>=8",
 ]
+# The preferred dependency-graph engine: per-node files with agent-editable
+# comments/reviews under <project>/hgraph/. Without it Horizon falls back to
+# the vendored leandag scan, then the parser DAG.
+hgraph = [
+    "hgraph @ git+https://github.com/AxelDlv00/hgraph.git",
+]
 
 [project.urls]
 Homepage = "https://github.com/frenzymath/Archon-Horizon"

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type CommitChange, type RunChanges, type FileDiff } from './api';
+import { editInbox, editRoadmap, editTask, getState, getBlueprints, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type CommitChange, type RunChanges, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
@@ -90,9 +90,14 @@ export function App() {
   const [isError, setIsError] = useState(false);
 
   const reload = () => {
-    getState()
-      .then((next) => {
-        setState(next);
+    // Blueprints ride a separate endpoint (they change only on publish/sync;
+    // its ETag makes the poll a 304), merged back so consumers still read
+    // `state.blueprints`. A blueprint fetch failure never blocks the state.
+    Promise.all([getState(), getBlueprints().catch(() => ({}))])
+      .then(([next, blueprints]) => {
+        setState(
+          next && next.blueprints === undefined ? { ...next, blueprints } : next,
+        );
         setIsError(false);
       })
       .catch(() => setIsError(true));

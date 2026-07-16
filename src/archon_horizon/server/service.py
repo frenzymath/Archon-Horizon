@@ -383,10 +383,9 @@ class WorkspaceService:
             "inbox_providers": self._inbox_provider_state(),
             "memory": self.stores.memory.load(),
             "reports": self.stores.reports.list(),
-            # Light DAGs only (heavy statement/proof/lean_source stripped): the
-            # Blueprint and DAG pages fetch the full per-project DAG on demand via
-            # /api/blueprint/dag, so the 5s poll doesn't re-ship several MB of text.
-            "blueprints": self._light_dags_cached(),
+            # Blueprint DAGs are NOT in this payload: they change only on
+            # publish/sync, so the SPA fetches /api/blueprints separately (its
+            # ETag makes that a 304 almost always) and the 5s poll stays small.
             "projects": self._discover_projects(),
             "libraries": self._search_libraries(),
             "harnesses": self._harness_state(),
@@ -1275,7 +1274,7 @@ class WorkspaceService:
     def endpoints(self) -> list[str]:
         """Every GET path the dashboard reads. The live server and the static
         exporter both go through this, so they can never drift."""
-        eps = ["/api/state", "/api/transcripts", "/api/git/log", "/api/git/diff", "/api/projects"]
+        eps = ["/api/state", "/api/blueprints", "/api/transcripts", "/api/git/log", "/api/git/diff", "/api/projects"]
         eps += [f"/api/transcript?ref={t['ref']}" for t in self.transcripts()]
         eps += [f"/api/report?ref={t['ref']}" for t in self.transcripts()]
         # One change-view per run, so the static export precomputes each run's
@@ -1332,6 +1331,11 @@ class WorkspaceService:
         query = parse_qs(parsed.query)
         if parsed.path == "/api/state":
             return self.state()
+        if parsed.path == "/api/blueprints":
+            # Light per-project DAGs, split out of /api/state: they change only
+            # on publish/sync, so the browser's ETag cache keeps this a 304
+            # while the 5s state poll stays several MB smaller.
+            return self._light_dags_cached()
         if parsed.path == "/api/transcripts":
             return self.transcripts()
         if parsed.path == "/api/transcript":

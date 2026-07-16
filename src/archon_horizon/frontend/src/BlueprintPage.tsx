@@ -5,7 +5,7 @@ import { buildBlueprintModel, ChapterView, TitleInline } from './components/Blue
 import ProjectPicker from './components/ProjectPicker';
 import styles from './BlueprintPage.module.css';
 
-type BlueprintDeclStatus = 'leanok' | 'mathlibok' | 'none';
+type BlueprintDeclStatus = 'leanok' | 'mathlibok' | 'sorry' | 'none';
 type BlueprintDeclIndexItem = {
   label: string;
   kind: string;
@@ -26,11 +26,22 @@ const NO_STATUS_KINDS = new Set(['remark', 'notation', 'convention', 'example', 
 const STATUS_LABEL: Record<BlueprintDeclStatus, string> = {
   leanok: '✓ leanok',
   mathlibok: 'ⓜ mathlib',
+  sorry: '△ sorry',
   none: 'todo',
 };
 
+// One color per status, everywhere squares/segments appear (hgraph's palette).
+const STATUS_COLOR: Record<BlueprintDeclStatus, string> = {
+  mathlibok: '#0B5FD0',
+  leanok: '#137333',
+  sorry: '#C2410C',
+  none: '#6B7280',
+};
+const STATUS_ORDER: BlueprintDeclStatus[] = ['mathlibok', 'leanok', 'sorry', 'none'];
+
 function proved(n: any) { return n?.proved ?? n?.leanok ?? false; }
 function mathlib(n: any) { return n?.mathlib_ok ?? n?.mathlibok ?? false; }
+function sorried(n: any) { return Boolean(n?.has_sorry ?? (n?.lean_status === 'sorry')); }
 
 function gatherDecls(
   blocks: any[],
@@ -46,6 +57,7 @@ function gatherDecls(
       const dag = dagById.get(label);
       const isMathlib = Boolean(block.meta.mathlibok) || mathlib(dag);
       const isLeanOk = Boolean(block.meta.leanok) || proved(dag);
+      const isSorry = !isMathlib && !isLeanOk && sorried(dag);
       out.push({
         label,
         kind: target?.kind ?? block.name ?? 'Declaration',
@@ -55,7 +67,7 @@ function gatherDecls(
         anchor: target?.anchor ?? block.anchor ?? '',
         title: String(block.meta.human ?? ''),
         leanNames: (block.meta.lean ?? []).map(String),
-        status: isMathlib ? 'mathlibok' : isLeanOk ? 'leanok' : 'none',
+        status: isMathlib ? 'mathlibok' : isLeanOk ? 'leanok' : isSorry ? 'sorry' : 'none',
         graphId: dag?.id ? String(dag.id) : label,
       });
     }
@@ -64,6 +76,53 @@ function gatherDecls(
   };
   blocks.forEach(visit);
   return out;
+}
+
+/** hgraph-style mini-map: one 12px square per statement, colored by status,
+ * each square clickable to its statement. */
+function Squares({ decls, onOpen }: { decls: BlueprintDeclIndexItem[]; onOpen: (d: BlueprintDeclIndexItem) => void }) {
+  if (!decls.length) return null;
+  return (
+    <span className={styles.mmCells}>
+      {decls.map((d) => (
+        <i
+          key={d.label}
+          className={styles.mm}
+          style={{ background: STATUS_COLOR[d.status] }}
+          title={`${d.kind}${d.num ? ` ${d.num}` : ''} · ${d.label} — ${STATUS_LABEL[d.status]}`}
+          onClick={(e) => { e.stopPropagation(); onOpen(d); }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** hgraph-style segmented progress bar: one proportional segment per status. */
+function SegBar({ decls }: { decls: BlueprintDeclIndexItem[] }) {
+  const total = decls.length;
+  if (!total) return null;
+  return (
+    <span className={styles.segbar} title={STATUS_ORDER
+      .map((s) => `${STATUS_LABEL[s]}: ${decls.filter((d) => d.status === s).length}`)
+      .join(' · ')}>
+      {STATUS_ORDER.map((s) => {
+        const n = decls.filter((d) => d.status === s).length;
+        return n > 0
+          ? <i key={s} style={{ width: `${(100 * n) / total}%`, background: STATUS_COLOR[s] }} />
+          : null;
+      })}
+    </span>
+  );
+}
+
+function StatusLegend() {
+  return (
+    <span className={styles.mmLegend}>
+      {STATUS_ORDER.map((s) => (
+        <span key={s}><i className={styles.mm} style={{ background: STATUS_COLOR[s] }} /> {STATUS_LABEL[s]}</span>
+      ))}
+    </span>
+  );
 }
 
 /**
@@ -198,6 +257,17 @@ export default function BlueprintPage({ state }: { state: any }) {
   const declIndex = useMemo(() => (
     openChapters.flatMap((ch) => gatherDecls(ch.blocks as any[], labels as any, dagById))
   ), [openChapters, labels, dagById]);
+  // Per-chapter statement index for the mini-map (cheap: walks parsed blocks,
+  // no KaTeX) — remark-like environments carry no status, so skip them.
+  const chapterDecls = useMemo(() => {
+    const out = new Map<string, BlueprintDeclIndexItem[]>();
+    for (const ch of doc) {
+      out.set(ch.slug, gatherDecls(ch.blocks as any[], labels as any, dagById)
+        .filter((d) => !NO_STATUS_KINDS.has(d.envName)));
+    }
+    return out;
+  }, [doc, labels, dagById]);
+  const allDecls = useMemo(() => doc.flatMap((ch) => chapterDecls.get(ch.slug) ?? []), [doc, chapterDecls]);
   const declStats = useMemo(() => ({
     leanok: declIndex.filter((d) => d.status === 'leanok').length,
     mathlibok: declIndex.filter((d) => d.status === 'mathlibok').length,
@@ -257,12 +327,22 @@ export default function BlueprintPage({ state }: { state: any }) {
 
           {openChapters.length === 0 && doc.length > 0 && (
             <nav className={styles.bigToc}>
-              <div className={styles.bigTocHead}>Table of Contents <span className={styles.bigTocHint}>— click to open a chapter</span></div>
+              {allDecls.length > 0 && (
+                <div className={styles.overviewBar}>
+                  <SegBar decls={allDecls} />
+                  <StatusLegend />
+                </div>
+              )}
+              <div className={styles.bigTocHead}>Table of Contents <span className={styles.bigTocHint}>— click to open a chapter; each square is a statement</span></div>
               {doc.map((ch) => (
                 <div key={ch.slug} className={styles.bigTocChap}>
                   <button className={styles.bigTocChapLink} onClick={() => openTo(ch.slug)}>
                     <span className={styles.tocNum}>{ch.num}</span> <TitleInline nodes={ch.title} macros={macros} />
                   </button>
+                  <Squares
+                    decls={chapterDecls.get(ch.slug) ?? []}
+                    onOpen={(d) => openTo(ch.slug, d.anchor || undefined)}
+                  />
                   {ch.sections.length > 0 && (
                     <div className={styles.bigTocSecs}>
                       {ch.sections.map((s) => (

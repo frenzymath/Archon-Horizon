@@ -1369,14 +1369,14 @@ class Orchestrator:
         counts: dict[str, dict[str, int]] = {}
         for project, dag in dags.items():
             path = out_dir / f"{project}.json"
-            # Never DOWNGRADE a rich (leandag, Lean-source-bearing) cache to the
-            # cheap parser DAG: the mid-round refresh (rich=False) would otherwise
-            # strip the Lean source the dashboard shows, forcing a manual
-            # "Synchronize". Only overwrite a rich cache with another rich build.
+            # Never DOWNGRADE a rich (hgraph/leandag, Lean-source-bearing) cache
+            # to the cheap parser DAG: the mid-round refresh (rich=False) would
+            # otherwise strip the Lean source the dashboard shows, forcing a
+            # manual "Synchronize". Only overwrite a rich cache with another rich build.
             if not rich and path.exists():
                 try:
                     existing = json.loads(path.read_text("utf-8"))
-                    if (existing.get("meta") or {}).get("engine") == "leandag":
+                    if (existing.get("meta") or {}).get("engine") in ("leandag", "hgraph"):
                         continue
                 except (OSError, ValueError):
                     pass

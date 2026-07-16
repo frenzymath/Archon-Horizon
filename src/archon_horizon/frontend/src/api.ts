@@ -59,6 +59,9 @@ async function parseJsonResponse<T>(res: Response, label: string): Promise<T> {
 }
 
 export const getState = () => getJson<any>('/api/state');
+// Light per-project DAGs, split out of /api/state: they change only on
+// publish/sync, so the ETag cache turns this poll into a 304 almost always.
+export const getBlueprints = () => getJson<Record<string, any>>('/api/blueprints');
 export const getTranscripts = () => getJson<any[]>('/api/transcripts');
 export const getTranscript = (ref: string) => getJson<any[]>(transcriptPath(ref));
 export const getReport = (ref: string) => getJson<{ markdown: string; recommendation?: string }>(reportPath(ref));
