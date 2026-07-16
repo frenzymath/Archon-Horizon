@@ -171,6 +171,12 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
         changed = True
     if changed:
         store.save(Roadmap(items=tuple(items), updated_at=utc_now()))
+        # The synced status may complete a parent's subtree (or contradict a done
+        # parent) — say so, never silently fix: the editor decides.
+        from archon_horizon.core.roadmap import hierarchy_status_warnings
+
+        for warning in hierarchy_status_warnings(tuple(items)):
+            log.warn(warning)
 
 
 @app.command("add")

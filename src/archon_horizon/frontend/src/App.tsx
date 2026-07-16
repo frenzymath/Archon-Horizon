@@ -33,6 +33,7 @@ type HorizonState = {
   config_dir?: string;
   projects?: string[];
   roadmap?: { items?: any[] };
+  roadmap_warnings?: string[];
   tasks?: any[];
   runs?: any[];
   local_inbox?: any[];
@@ -1098,6 +1099,11 @@ function RoadmapPage({ state, reload }: PageProps) {
           </div>
         </div>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
+        {(state.roadmap_warnings ?? []).map((w: string) => (
+          // Parent/child status inconsistencies — informational only; the CLI/agent
+          // decides whether to correct them (they may be intentional).
+          <div key={w} className="notice error" style={{ opacity: 0.85 }}>⚠ {w}</div>
+        ))}
         <div className="roadmap-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {filteredProjects.map((proj) => (
             <div key={proj as string} className="roadmap-project-group">

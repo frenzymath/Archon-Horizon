@@ -55,17 +55,10 @@ range, or when the blueprint needs exact page-level anchors.
    vision-transcribes the pages (never OCR), one self-contained LaTeX file per
    page. Keep each call to **≤5 pages** (longer ranges lose accuracy); split a
    bigger range across several calls.
-3. Use the configured transcription harness/model. Do not pick the model inside
-   the prompt. The config key is:
-
-```yaml
-references:
-  transcription:
-    harness: <optional harness name>
-    model: <optional model override>
-```
-
-When unset, page transcription inherits the parent session's harness/model.
+3. Do not pick the transcription model inside the prompt: it is pinned on the
+   page-transcriber descriptor (`tier:`/`model:` in
+   `.archon-horizon/subagents/page-transcriber.md`, resolved through the
+   harness's `models:` map). When unset it inherits the parent session's model.
 
 4. Write each result to `references/<slug>/tex/page-NNNN.tex`. A minimal header
    is enough; avoid YAML sidecars unless the user asks for them:

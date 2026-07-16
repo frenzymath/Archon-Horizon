@@ -36,7 +36,8 @@ choosing what to attempt next.
 
 `horizon blueprint` writes each project's DAG to
 `.archon-horizon/blueprints/<project>.json` (`nodes`, `edges`, `dangling`) for
-the dashboard. Under the leandag engine, `\uses` are resolved at build/cache
-time, so `dangling` is empty there; the parser fallback still populates it. To
-check for orphan/unresolved nodes, use `horizon leandag` rather than relying only
-on `dangling`.
+the dashboard. The DAG is built by **hgraph** (see the `hgraph` skill), which
+resolves `\uses` at sync time and reports unresolved references as sync
+warnings and `dangling` entries; the plain LaTeX-parser fallback populates
+`dangling` too. To check for orphan/unresolved nodes, use `horizon leandag`
+(or `hgraph sync` and read its warnings) rather than relying only on `dangling`.

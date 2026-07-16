@@ -10,7 +10,7 @@ Lean sources into it, deriving each node's real ``lean_status`` from the code
 This adapter runs a sync and re-serialises the graph into the same
 ``{nodes, edges, dangling, meta}`` dict Horizon's parser DAG emits, so the
 dashboard and the cached blueprint JSON are engine-agnostic. Callers fall
-back to the vendored leandag, then to the parser, when hgraph is absent.
+back to the plain LaTeX-parser DAG when hgraph is absent.
 
 Convention notes (they differ from Horizon's):
 - hgraph edge direction is dependent → dependency (``a --uses--> b`` means *a

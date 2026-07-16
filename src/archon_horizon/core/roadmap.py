@@ -166,3 +166,68 @@ def subtree(items: Sequence[RoadmapItem], root_id: str) -> list[tuple[RoadmapIte
             break  # left the subtree
         picked.append((it, depth - base_depth))
     return picked
+
+
+def children_of(items: Sequence[RoadmapItem]) -> dict[str, list[RoadmapItem]]:
+    """Direct children per item id, from explicit ``parent`` links."""
+    ids = {it.id for it in items}
+    out: dict[str, list[RoadmapItem]] = {}
+    for it in items:
+        parent = item_parent(it)
+        if parent and parent in ids and parent != it.id:
+            out.setdefault(parent, []).append(it)
+    return out
+
+
+def subtree_progress(items: Sequence[RoadmapItem]) -> dict[str, tuple[int, int]]:
+    """Per parent id: ``(done_descendants, total_descendants)`` over its whole
+    subtree (rejected items don't count toward either). The roadmap is the
+    agents' strategy sketch, so a parent row can show "3/7 done" at a glance."""
+    kids = children_of(items)
+
+    def count(item_id: str, seen: frozenset[str]) -> tuple[int, int]:
+        done = total = 0
+        for child in kids.get(item_id, ()):
+            if child.id in seen:  # cycle guard
+                continue
+            if child.status is not RoadmapStatus.REJECTED:
+                total += 1
+                if child.status is RoadmapStatus.DONE:
+                    done += 1
+            sub_done, sub_total = count(child.id, seen | {child.id})
+            done += sub_done
+            total += sub_total
+        return done, total
+
+    return {pid: count(pid, frozenset({pid})) for pid in kids}
+
+
+def hierarchy_status_warnings(items: Sequence[RoadmapItem]) -> list[str]:
+    """Parent↔child status inconsistencies, as human/agent-facing warnings.
+
+    Never auto-corrected: an "inconsistent" state can be intentional (a parent
+    closed as no-longer-pursued while a child stays open, or an umbrella item
+    kept open past its sub-items for review). The CLI surfaces these after
+    roadmap reads/writes so whoever is editing decides.
+    """
+    kids = children_of(items)
+    warnings: list[str] = []
+    for parent_id, children in sorted(kids.items()):
+        parent = next(it for it in items if it.id == parent_id)
+        active_children = [c for c in children if c.status is not RoadmapStatus.REJECTED]
+        if not active_children:
+            continue
+        open_children = [c for c in active_children if c.status is not RoadmapStatus.DONE]
+        if parent.status is RoadmapStatus.DONE and open_children:
+            shown = ", ".join(c.id for c in open_children[:4])
+            more = f" (+{len(open_children) - 4} more)" if len(open_children) > 4 else ""
+            warnings.append(
+                f"{parent_id} is done but sub-item(s) {shown}{more} are not — "
+                f"finish them or reopen {parent_id} if that was unintended."
+            )
+        elif parent.status not in (RoadmapStatus.DONE, RoadmapStatus.REJECTED) and not open_children:
+            warnings.append(
+                f"{parent_id}: every sub-item is done — consider "
+                f"`roadmap set {parent_id} --status done` (or add what remains)."
+            )
+    return warnings

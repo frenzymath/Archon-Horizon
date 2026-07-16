@@ -21,7 +21,7 @@ _JSON = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout
 
 def _clean_agent(detail: str | None, role: str) -> str | None:
     """Tidy a sub-identity: drop a redundant leading ``<role>-`` / ``<role> ``
-    prefix (so ``ground-diff-auditor`` under author ``ground`` reads ``diff-auditor``)."""
+    prefix (so ``horizon-work-reviewer`` under author ``horizon`` reads ``work-reviewer``)."""
     if not detail:
         return None
     text = detail.strip()
@@ -36,7 +36,7 @@ def _clean_agent(detail: str | None, role: str) -> str | None:
 def _resolve_authorship(author: str | None, agent: str | None = None) -> tuple[str, str | None]:
     """Canonical author plus an optional finer-grained sub-identity.
 
-    Inbox authors are a small conventional set (human / ground / horizon / …) so
+    Inbox authors are a small conventional set (human / horizon / …) so
     the UI can group and colour by them. Agents run with
     ``ARCHON_HORIZON_AGENT_ROLE`` set to their role, and that role is authoritative
     — it wins over any ``--author`` the model typed. A more specific identity (a
@@ -165,9 +165,9 @@ def add(
     kind: InboxKind = typer.Option(InboxKind.HINT, "--kind", help="Item kind."),
     project: str | None = typer.Option(None, "--project", help="Scope the item to a project (what it is ABOUT)."),
     to: str | None = typer.Option(
-        None, "--to", help="Recipient the item is FOR: horizon | ground | human | project:<name>."
+        None, "--to", help="Recipient the item is FOR: horizon | human | project:<name>."
     ),
-    author: str | None = typer.Option(None, "--author", help="Who is writing it (human / horizon / ground)."),
+    author: str | None = typer.Option(None, "--author", help="Who is writing it (human / horizon)."),
     agent: str | None = typer.Option(
         None, "--agent",
         help="Finer-grained author identity (e.g. a subagent descriptor name like "

@@ -15,9 +15,14 @@ The workspace root is `$ARCHON_HORIZON_ROOT`. Live state is under `.archon-horiz
 and the manifest is `config.yaml`. Read what you need, when you need it — via the
 `horizon` CLI (invoke it as `"$HORIZON_BIN" …`):
 
-- **Roadmap** — the strategy + progress map across *all* projects. Read it to see
-  where things are going and what other projects have done; keep your own item's
-  status/strategy current as you work. `"$HORIZON_BIN" roadmap …`
+- **Roadmap** — YOUR strategy sketch across *all* projects, kept as a nested
+  outline. `"$HORIZON_BIN" roadmap list` renders the indented tree with per-parent
+  progress (`active · 3/7 done`); `--focus <id>` shows one subtree, `--max-depth 0`
+  the top level only. Structure it: nest sub-goals with `--parent`, keep your
+  item's status/strategy current as you work. Roadmap commands print a **warning**
+  when parent/child statuses disagree (all sub-items done but parent open, or a
+  done parent with open children) — nothing is auto-corrected; you decide whether
+  to fix it or leave it (it may be intentional).
 - **Tasks** — a specific piece of work, usually the one a human launched and is
   watching. `"$HORIZON_BIN" task …`
 - **Inbox** — how agents talk across sessions (and projects). Leave a note for the
@@ -26,7 +31,9 @@ and the manifest is `config.yaml`. Read what you need, when you need it — via 
   Each node is also an **hgraph** file with attached comments/reviews —
   `hgraph frontier` ranks what to prove next, and node-scoped failure memory
   goes on the node itself (skill: `hgraph`).
-- **Memory** — durable facts/dead-ends: `.archon-horizon/memory.md`.
+- **Memory** — durable facts/dead-ends live in the inbox: read with
+  `"$HORIZON_BIN" inbox list --kind memory --json`, write with
+  `"$HORIZON_BIN" inbox add --kind memory --to horizon --body …`.
 - **Usage** — your token/cost consumption this session and run, budget headroom,
   and recent rate-limit signals: `"$HORIZON_BIN" usage --json`. See
   "Pace yourself" below for how to act on it.
@@ -45,6 +52,7 @@ The harness exports these to every session — read them instead of guessing:
 | `ARCHON_HORIZON_TASK` / `ARCHON_HORIZON_TASK_TITLE` | the task id / title (full body: `"$HORIZON_BIN" task show "$ARCHON_HORIZON_TASK" --json`) |
 | `ARCHON_HORIZON_PROJECTS` | comma-separated projects this task spans |
 | `HORIZON_BIN`, `HORIZON_GIT` | absolute paths to the CLI and the ledger-git wrapper |
+| `HORIZON_LEDGER_GIT_DIR`, `HORIZON_LEDGER_WORK_TREE` | the workspace ledger repo + its work tree — `"$HORIZON_GIT" …` is shorthand for `git --git-dir "$HORIZON_LEDGER_GIT_DIR" --work-tree "$HORIZON_LEDGER_WORK_TREE" …` |
 
 ## Pace yourself (usage & interruption risk)
 
@@ -84,6 +92,17 @@ at each significant step. You own the task's terminal status (skill:
 `blocked`/`failed` if genuinely stuck; set nothing if it's only partly advanced
 (it returns to the queue).
 
+## Warnings are work
+
+Commands report problems for a reason — never scroll past them. `lake build`
+warnings, `hgraph sync` warnings, roadmap consistency warnings, deprecation
+notices from any tool: if your change caused it, **fix it now** (it is part of
+the task); if it's pre-existing or caused by the tool/command itself, don't
+silently ignore it — record it as a memory item, file an inbox `issue`, or
+address it `--to human` when a human decision is needed. A warning that
+survives your session should be one you *chose* to leave, with a trace saying
+why.
+
 ## Do the work (Lean)
 
 - Search before proving — the lemma may already exist. Skill: `leansearch`
@@ -109,9 +128,18 @@ staging explicit files over `add -A`. Beyond commits:
 ## Resuming after an interruption
 
 State lives on disk, so a fresh session (even on another account) continues cheaply:
-read recent ledger history (`project-git` skill: `git log` + `git show` by
-`Archon-Session` trailer) and the previous session's transcript/report under
-`.archon-horizon/runs/` to see what was in flight, then pick up from there.
+
+- **Why did the last run stop?** `"$HORIZON_BIN" usage --json` includes a
+  `paused` field (from `runs/<id>/paused.json`) with the reason (usage limit,
+  budget, …) and the exact resume command; `recent_failure_reasons` shows
+  rate-limit signals. A paused/killed run resumes with
+  `"$HORIZON_BIN" run --resume <id>`.
+- **What was in flight?** Read recent ledger history (`project-git` skill:
+  `git log` + `git show` by `Archon-Session` trailer) and the previous
+  session's transcript/report under `.archon-horizon/runs/`.
+- **Is another run live on this workspace?** `"$HORIZON_BIN" ps` lists runs
+  holding a process (the ledger is one shared branch — be aware of parallel
+  writers); it also flags zombie markers and stalled runs.
 
 ## Final report (your last message)
 
@@ -138,7 +166,7 @@ worth it, not on a timer. Available subagents (see the `subagents` skill):
 
 - **janitor** — workspace hygiene: roadmap/READMEs concise, inbox from overflowing.
 - **work-reviewer** — fresh-context review of your last work; is it converging?
-- **blueprint-reviewer** / blueprint checks — Lean ↔ blueprint statement/`\uses` correctness.
+- **blueprint** — Lean ↔ blueprint statement/`\uses` correctness for a scoped slice.
 - **reference-retriever**, **debug**, **page-transcriber** — as needed.
 
 Keep proving; delegate the upkeep.

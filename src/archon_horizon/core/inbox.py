@@ -50,9 +50,10 @@ class InboxItem:
     status: InboxStatus = InboxStatus.OPEN
     scope: InboxScope = field(default_factory=InboxScope)
     # Who the item is FOR (vs ``scope``, which is what it is ABOUT). Empty means
-    # anyone. Conventions: "horizon", "ground", "human", "project:<name>".
+    # anyone. Conventions: "horizon", "human", "project:<name>" ("ground" may
+    # appear on items from older workspaces).
     audience: str = ""
-    # Who wrote it (provenance for the UI to colour by): human / horizon / ground
+    # Who wrote it (provenance for the UI to colour by): human / horizon
     # / github / <name>. Distinct from ``audience``.
     author: str = ""
     source_ref: str | None = None

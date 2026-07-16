@@ -26,7 +26,7 @@ from archon_horizon.blueprint.workspace import published_dag, published_dags, wo
 from archon_horizon.config.loader import build_stores, build_workspace, load_config
 from archon_horizon.core.inbox import InboxDraft, InboxKind, InboxStatus
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus, apply_hierarchy
+from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus, apply_hierarchy, hierarchy_status_warnings
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.status_sync import roadmap_status_for_task_status
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
@@ -363,6 +363,13 @@ class WorkspaceService:
                 "roadmap",
                 (self.workspace.state_path / "roadmap",),
                 lambda: serde.to_jsonable(self.stores.roadmap.load()),
+            ),
+            # Parent↔child status inconsistencies — surfaced, never auto-fixed
+            # (matching the CLI's behavior; the editor decides).
+            "roadmap_warnings": self._cached_by_stamp(
+                "roadmap_warnings",
+                (self.workspace.state_path / "roadmap",),
+                lambda: hierarchy_status_warnings(self.stores.roadmap.load().items),
             ),
             "tasks": self._cached_by_stamp(
                 "tasks",

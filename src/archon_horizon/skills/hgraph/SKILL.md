@@ -15,6 +15,19 @@ Run the CLI from the project directory (or pass the project path as the last
 argument). Address nodes by `label:<latex-label>` or `decl:<lean-fqname>` —
 raw ids are opaque hashes. Most commands accept `--json`.
 
+## Sync it yourself — and act on the warnings
+
+Don't wait for the run boundary: after you change blueprint statements,
+`\uses{}`/`\lean{}` annotations, or Lean declarations, run `hgraph sync` in the
+project and **read its output**. Sync prints warnings for exactly the defects
+you can fix on the spot: `\uses{X} has no blueprint node` (missing/mistyped
+label), `\lean{Name} not found in Lean sources` (renamed or unwritten
+declaration), stale nodes whose source vanished. Fix what your change caused
+before moving on; a warning you deliberately leave (e.g. a forward reference
+you'll write next) gets a node comment or a memory item so the next session
+knows it's intentional. Sync is idempotent and never touches your authored
+comments/reviews/metadata.
+
 ## Read
 
 - `hgraph list --state ready` — nodes whose dependencies are all closed:

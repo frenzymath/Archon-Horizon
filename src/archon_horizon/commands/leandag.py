@@ -1,6 +1,6 @@
 """``horizon leandag`` — inspect the blueprint dependency DAG from the CLI.
 
-The DAG is the leandag engine's output (vendored under ``archon_horizon.leandag``)
+The DAG is the cached blueprint graph (built by hgraph, else the LaTeX parser)
 serialized to the shared ``{nodes, edges, dangling}`` shape, where an edge
 ``source -> target`` means *target depends on source*. This command lets an agent
 (or a human) verify a project's cones, find isolated/dangling nodes, and view the

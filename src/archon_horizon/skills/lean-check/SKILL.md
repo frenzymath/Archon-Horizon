@@ -42,6 +42,12 @@ kernel-check the module at the end.
 
 ## Heavy builds — actually wait for them
 
+Read the WHOLE build output, not just pass/fail: warnings (unused variables,
+deprecations, `sorry` notices, unexpected recompiles) are actionable — fix the
+ones your change introduced, and record pre-existing/toolchain ones as memory
+or an inbox issue rather than scrolling past (see the `horizon` skill,
+"Warnings are work").
+
 A cold `lake build` (or one that recompiles Mathlib) can take many minutes. The
 most common way a session ends on a wrong conclusion is **not waiting for the
 build to finish**:

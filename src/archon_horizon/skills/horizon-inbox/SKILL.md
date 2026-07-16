@@ -36,10 +36,10 @@ fields.
 
 Authorship is automatic: every item and comment you create through the CLI is
 attributed to your role (normally `horizon`) from the run environment — you do
-**not** pass `--author` (a stray `--author blueprint-reviewer` is demoted to the
+**not** pass `--author` (a stray `--author work-reviewer` is demoted to the
 `agent` metadata, not used as the author, so the author set stays conventional).
 If you are a dispatched **subagent**, add `--agent <your-name>` (e.g. `--agent
-blueprint-reviewer`) to record your identity; it is stored in metadata and shown
+work-reviewer`) to record your identity; it is stored in metadata and shown
 next to the role in the UI, keeping the author itself a clean role. Items and
 comments are also auto-tagged with the run/session provenance (a small chip in the
 UI); you do not pass this yourself.
@@ -99,6 +99,8 @@ obvious and then run `horizon inbox archive <id>`.
   - `--project` says what the item is ABOUT (its subject).
   - `--persistent` / `--temporary` just prepend a `[persistent]` / `[temporary]`
     tag to the body.
+  - `--pending` labels the item `not-ready` instead of the default `agent-ready`,
+    so it stays invisible to agents until a human releases it.
 - `horizon inbox add --kind memory --to horizon --body "Short memory title\n\nDurable fact, convention, or dead end."` — record a durable
   note / dead end. Memory lives in the inbox, so it is rendered in the "Memory"
   section and a human can prune it like any other item.

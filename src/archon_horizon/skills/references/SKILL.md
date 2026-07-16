@@ -67,17 +67,8 @@ to an image and **vision-transcribes** it into one self-contained
   reading the rendered page image with a vision model preserves it. This is a hard
   rule of the transcription flow.
 - **A small vision model is usually enough.** Faithful page transcription doesn't
-  need a frontier model — a cheap vision-capable model (e.g. Haiku) running in the
-  background typically suffices, which is what the config is for:
-
-  ```yaml
-  references:
-    transcription:
-      harness: <optional harness>
-      model: <cheap vision-capable model, e.g. a Haiku-class model>
-  ```
-
-  Don't pick the model inside the prompt; pin it on the page-transcriber
+  need a frontier model — a cheap vision-capable model (e.g. Haiku-class)
+  typically suffices. Don't pick the model inside the prompt; pin it on the page-transcriber
   descriptor (`tier:`/`model:` in `.archon-horizon/subagents/page-transcriber.md`)
   so every transcription uses the same cheap vision model. When unset it inherits
   the parent session's model.

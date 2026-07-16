@@ -14,10 +14,12 @@ from archon_horizon.core.roadmap import (
     RoadmapKind,
     RoadmapStatus,
     apply_hierarchy,
+    hierarchy_status_warnings,
     item_depth,
     item_parent,
     ordered_tree,
     subtree,
+    subtree_progress,
 )
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.log import log
@@ -69,6 +71,15 @@ def _save(store, items: tuple[RoadmapItem, ...]) -> None:
     store.save(Roadmap(items=items, updated_at=utc_now()))
 
 
+def _warn_hierarchy(items) -> list[str]:
+    """Surface parent↔child status inconsistencies (never auto-fix: the state
+    may be intentional — the editor decides whether to correct it)."""
+    warnings = hierarchy_status_warnings(items)
+    for warning in warnings:
+        log.warn(warning)
+    return warnings
+
+
 def _validate_parent(items: list[RoadmapItem], item_id: str, parent: str) -> None:
     """A parent must exist and not be the item itself (a cycle). Unknown/self
     parents are hard errors so a typo doesn't silently detach the item."""
@@ -92,8 +103,20 @@ def list_items(
     rows = subtree(items, focus) if focus else ordered_tree(items)
     if max_depth is not None:
         rows = [(it, d) for it, d in rows if d <= max_depth]
+    progress = subtree_progress(items)
     if as_json:
-        emit_json({"items": [{**_item_dict(it), "tree_depth": d} for it, d in rows]})
+        emit_json({
+            "items": [
+                {
+                    **_item_dict(it),
+                    "tree_depth": d,
+                    **({"subtree_done": progress[it.id][0], "subtree_total": progress[it.id][1]}
+                       if it.id in progress else {}),
+                }
+                for it, d in rows
+            ],
+            "warnings": hierarchy_status_warnings(items),
+        })
         return
     if not items:
         log.info("Roadmap is empty.")
@@ -101,10 +124,20 @@ def list_items(
     if focus and not rows:
         log.error(f"No roadmap item {focus!r}.")
         raise typer.Exit(1)
+
+    def _status_cell(item: RoadmapItem) -> str:
+        # Parents show subtree progress at a glance — the roadmap is the agents'
+        # strategy sketch, so "active · 3/7 done" reads as a plan, not a flat list.
+        if item.id in progress:
+            done, total = progress[item.id]
+            return f"{item.status.value} · {done}/{total} done"
+        return item.status.value
+
     log.results_table(
-        [("  " * d + i.id, i.status.value, "  " * d + i.title) for i, d in rows],
+        [("  " * d + i.id, _status_cell(i), "  " * d + i.title) for i, d in rows],
         title="Roadmap" + (f" · {focus} subtree" if focus else ""),
     )
+    _warn_hierarchy(items)
 
 
 @app.command("set")
@@ -160,9 +193,10 @@ def set_item(
     items[idx] = dataclasses.replace(item, metadata=metadata, **changes)
     _save(store, tuple(items))
     if as_json:
-        emit_json(_item_dict(items[idx]))
+        emit_json({**_item_dict(items[idx]), "warnings": hierarchy_status_warnings(items)})
         return
     log.success(f"Updated roadmap item {item_id} ({', '.join(changes) or 'no fields'}).")
+    _warn_hierarchy(items)
 
 
 @app.command("add")
@@ -208,9 +242,10 @@ def add_item(
     _save(store, tuple(items))
     store.append_history(item_id, _history_entry(actor, "created", after=item.status.value, note="opened"))
     if as_json:
-        emit_json(_item_dict(item))
+        emit_json({**_item_dict(item), "warnings": hierarchy_status_warnings(items)})
         return
     log.success(f"Added roadmap item {item_id}.")
+    _warn_hierarchy(items)
 
 
 @app.command("comment")
