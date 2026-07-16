@@ -213,4 +213,5 @@ def build_orchestrator(
         run_store=stores.runs,
         run_logs=stores.run_logs,
         freeze=freeze,
+        budget=cfg.budget if cfg.budget.configured else None,
     )

@@ -222,6 +222,16 @@ def parse_claude_line(line: str) -> list[TranscriptEvent]:
         if model:
             data["model"] = model
         events.append(TranscriptEvent(TranscriptKind.USAGE, data=data, usage=usage))
+        subtype = str(obj.get("subtype") or "")
+        if obj.get("is_error") or subtype.startswith("error"):
+            # The engine's own structured verdict on the run — surfaced as an
+            # ERROR event so failure classification can read the typed subtype
+            # (e.g. ``error_during_execution``) instead of grepping stderr.
+            events.append(TranscriptEvent(
+                TranscriptKind.ERROR,
+                text=str(obj.get("result") or subtype or "engine reported an error"),
+                data={"subtype": subtype} if subtype else {},
+            ))
         if obj.get("result"):
             events.append(TranscriptEvent(TranscriptKind.TEXT, text=obj["result"]))
     parent = obj.get("parent_tool_use_id")

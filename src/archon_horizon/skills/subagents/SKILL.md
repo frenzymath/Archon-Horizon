@@ -51,7 +51,8 @@ ITS slice. Search, file-finding, transcription, lint, diff review, and other
 mechanical work want a small, cheap model at low effort; reserve the large
 model at high effort for genuinely hard proof reasoning. Fanning out many
 large-model agents at once is the fastest way to exhaust the session/rate
-budget and get the run cut off mid-work — spend the expensive tier deliberately.
+budget and get the run cut off mid-work — spend the expensive tier deliberately,
+and check `"$HORIZON_BIN" usage --json` before a big fan-out.
 
 To add or change a subagent, edit its descriptor under
 `.archon-horizon/subagents/` — it recompiles on the next run. Do not rely on a

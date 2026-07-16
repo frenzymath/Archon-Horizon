@@ -24,6 +24,10 @@ and the manifest is `config.yaml`. Read what you need, when you need it — via 
   next session; read what past ones left. `"$HORIZON_BIN" inbox …` (skill: `horizon-inbox`)
 - **Blueprint DAG** — declaration dependencies and what's proved. `"$HORIZON_BIN" leandag …` (skill: `leandag`)
 - **Memory** — durable facts/dead-ends: `.archon-horizon/memory.md`.
+- **Usage** — your token/cost consumption this session and run, plus any
+  configured budget headroom and recent rate-limit signals:
+  `"$HORIZON_BIN" usage --json`. **Check it before fanning out subagents or
+  starting very heavy work** — running out mid-proof loses more than pacing does.
 
 ## One-shot discipline (important)
 

@@ -96,6 +96,7 @@ class RunCommand:
                 run = self._resume_run(orch)
                 reports = orch.run(run, resume=True, rounds_override=self.rounds)
                 self._emit_reports(reports)
+                self._exit_if_paused(orch)
                 return
 
             if not self.targets and not self.supervisor:
@@ -104,6 +105,23 @@ class RunCommand:
 
             reports = orch.run(self._build_run(orch, cfg.rounds), dry_run=self.dry_run)
             self._emit_reports(reports)
+            self._exit_if_paused(orch)
+
+    @staticmethod
+    def _exit_if_paused(orch) -> None:
+        """Distinct exit code (3) when the run paused on a limit/budget, so an
+        external relaunch loop can tell 'paused, resumable' from success/failure.
+        The pause details live in ``runs/<id>/paused.json``."""
+        paused = getattr(orch, "last_paused", None)
+        if not paused:
+            return
+        hint = paused.get("retry_after_s")
+        wait = f" (engine advertised retry after {hint}s)" if hint else ""
+        log.warn(
+            f"Run paused: {paused.get('reason')}{wait}. State is on disk — resume with "
+            f"`{paused.get('resume')}`."
+        )
+        raise typer.Exit(3)
 
     def _build_run(self, orch, default_rounds: int) -> RunRecord:
         """Every launch shape reduces to a focus plus a RunRecord:

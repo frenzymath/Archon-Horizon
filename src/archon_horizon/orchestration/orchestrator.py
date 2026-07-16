@@ -20,6 +20,7 @@ from pathlib import Path
 
 from archon_horizon.agents.base import HorizonAgent, HorizonContext
 from archon_horizon.blueprint.workspace import workspace_dags, workspace_dags_rich
+from archon_horizon.config.schema import BudgetConfig
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.events import Event
 from archon_horizon.core.freeze import FreezeSet, frozen_violations
@@ -86,7 +87,7 @@ def _files_summary(value: object, *, limit: int = 8) -> str:
     return f"{len(files)} {noun}: {shown}"
 
 
-_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early"})
+_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early", "session_budget"})
 
 
 def _is_fatal_failure(meta: dict[str, object] | None) -> bool:
@@ -172,6 +173,16 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         )
     if event_type == "task.blocked":
         return f"Blocked task {data.get('task_id')}: {data.get('reason')}."
+    if event_type == "task.budget_cancelled":
+        return (
+            f"Cancelled task {data.get('task_id')}: its session crossed the configured "
+            f"budget ({data.get('tokens_out')} tokens out > {data.get('limit')})."
+        )
+    if event_type == "run.budget_exhausted":
+        return (
+            f"Run budget exhausted ({data.get('tokens_out')} tokens out, "
+            f"${data.get('cost_usd')}); stopping cleanly — state is on disk, resume to continue."
+        )
     if event_type == "task.deferred":
         return f"Deferred task {data.get('task_id')}: {data.get('reason')}."
     if event_type == "task.lock_warning":
@@ -292,6 +303,12 @@ class Orchestrator:
     run_store: RunStore | None = None
     run_logs: RunLogTree | None = None
     freeze: FreezeSet = field(default_factory=FreezeSet)
+    # Optional spend ceilings (workspace.budget). Crossing one stops the run
+    # cleanly, exactly like an engine usage limit: state on disk, --resume works.
+    budget: BudgetConfig | None = None
+    # Why the last run() stopped early, if it did — (reason, retry_after_s|None).
+    # The CLI reads this to write user-facing pause info / exit codes.
+    last_paused: dict[str, object] | None = field(default=None, repr=False)
     # Last roadmap that parsed cleanly; kept in memory if a human-readable item
     # shard is malformed, so one bad edit can't crash the whole run.
     _roadmap_cache: Roadmap | None = field(default=None, repr=False)
@@ -570,26 +587,39 @@ class Orchestrator:
         return True
 
     def _task_terminal_watcher(
-        self, task_id: str, cancel: Cancellation
-    ) -> tuple[threading.Event, list[TaskStatus], threading.Thread]:
-        """Cancel a running Horizon harness if its task is explicitly closed."""
+        self, task_id: str, cancel: Cancellation, usage_path: Path | None = None
+    ) -> tuple[threading.Event, list[TaskStatus], list[int], threading.Thread]:
+        """Cancel a running Horizon harness if its task is explicitly closed —
+        or, when a session token budget is configured, if the session's live
+        ``usage.json`` crosses it (``budget_hit`` then carries the count)."""
         stop = threading.Event()
         observed: list[TaskStatus] = []
+        budget_hit: list[int] = []
+        limit = self.budget.session_tokens_out if self.budget is not None else None
 
         def watch() -> None:
             while not stop.wait(_TASK_CANCEL_POLL_S):
                 try:
                     current = self.task_store.get(task_id)
                 except Exception:
-                    continue
-                if has_recorded_terminal_status(current):
+                    current = None
+                if current is not None and has_recorded_terminal_status(current):
                     observed.append(current.status)
                     cancel.cancel()
                     return
+                if limit and usage_path is not None:
+                    try:
+                        tokens = int(json.loads(usage_path.read_text("utf-8")).get("tokens_out") or 0)
+                    except (OSError, ValueError):
+                        tokens = 0
+                    if tokens > limit:
+                        budget_hit.append(tokens)
+                        cancel.cancel()
+                        return
 
         thread = threading.Thread(target=watch, name=f"horizon-task-watch-{task_id}", daemon=True)
         thread.start()
-        return stop, observed, thread
+        return stop, observed, budget_hit, thread
 
     def ensure_roadmap_task(self, item_id: str) -> HorizonTask | None:
         """Infer a Horizon task from a roadmap item, on demand.
@@ -726,7 +756,10 @@ class Orchestrator:
                     **self._agent_harness_metadata(self.horizon),
                 })
             cancel = Cancellation()
-            stop_watch, externally_terminal, watcher = self._task_terminal_watcher(task.id, cancel)
+            usage_path = (session.path / "usage.json") if session is not None else None
+            stop_watch, externally_terminal, budget_hit, watcher = self._task_terminal_watcher(
+                task.id, cancel, usage_path
+            )
             result = self.horizon.run_task(
                 self._horizon_context(
                     run,
@@ -738,6 +771,18 @@ class Orchestrator:
             )
             stop_watch.set()
             watcher.join(timeout=1.0)
+            if budget_hit:
+                # The session crossed workspace.budget.session_tokens_out and was
+                # cancelled; label it so the run loop stops cleanly (like a usage
+                # limit) instead of respawning a session that would burn the same.
+                result.metadata["failure_reason"] = "session_budget"
+                self._emit(
+                    "task.budget_cancelled",
+                    actor="orchestrator",
+                    task_id=task.id,
+                    tokens_out=budget_hit[-1],
+                    limit=self.budget.session_tokens_out if self.budget else None,
+                )
             ref = self._write_run_report(session, result.report)
             if ref is not None:
                 self._emit("report.written", name=f"task-{task.id}", ref=ref)
@@ -1126,6 +1171,13 @@ class Orchestrator:
         # session meta / commit trailers. The horizon-only session layout is
         # ``[horizon_0 (+system), horizon_1, …]``.
         base = run.start_round
+        self.last_paused = None
+        if runlog is not None:  # a fresh/resumed launch clears any stale pause marker
+            (runlog.path / "paused.json").unlink(missing_ok=True)
+        # Run-level spend, accumulated from each session's reported usage and
+        # checked between sessions against workspace.budget.
+        run_tokens_out = 0
+        run_cost_usd = 0.0
         self._publish_silent(run)
         self._flush_system_session(runlog)
 
@@ -1176,6 +1228,7 @@ class Orchestrator:
             blocked: list[str] = []
             last_result: HorizonResult | None = None
             fatal_reason: str | None = None
+            retry_after: object = None
             for n, task in enumerate(selected):
                 result = self._horizon_step(
                     run, task, runlog, round_index=base + i,
@@ -1183,12 +1236,29 @@ class Orchestrator:
                 )
                 if result is None:
                     blocked.append(task.id)
-                else:
-                    ran.append(task.id)
-                    last_result = result
-                    if _is_fatal_failure(result.metadata):
-                        fatal_reason = str(result.metadata.get("failure_reason") or "task-failed")
-                        break
+                    continue
+                ran.append(task.id)
+                last_result = result
+                usage = result.metadata.get("usage")
+                if isinstance(usage, dict):
+                    run_tokens_out += int(usage.get("tokens_out") or 0)
+                    run_cost_usd += float(usage.get("cost_usd") or 0.0)
+                if _is_fatal_failure(result.metadata):
+                    fatal_reason = str(result.metadata.get("failure_reason") or "task-failed")
+                    retry_after = result.metadata.get("retry_after_s")
+                    break
+                if self.budget is not None and (
+                    (self.budget.run_tokens_out is not None and run_tokens_out > self.budget.run_tokens_out)
+                    or (self.budget.run_cost_usd is not None and run_cost_usd > self.budget.run_cost_usd)
+                ):
+                    fatal_reason = "budget"
+                    self._emit(
+                        "run.budget_exhausted",
+                        run_id=run.id,
+                        tokens_out=run_tokens_out,
+                        cost_usd=round(run_cost_usd, 4),
+                    )
+                    break
             reports.append(RoundReport(round_index=i, tasks_run=tuple(ran), tasks_blocked=tuple(blocked)))
 
             # The Horizon's deterministic aftermath (commits, integration) is its
@@ -1196,6 +1266,7 @@ class Orchestrator:
             self._flush_system_session(runlog)
             if fatal_reason is not None:
                 self._emit("run.stopped", run_id=run.id, reason=fatal_reason, round=i)
+                self._write_pause_marker(runlog, run, fatal_reason, retry_after)
                 break
             self._publish_silent(run)
             self._flush_system_session(runlog)
@@ -1229,6 +1300,33 @@ class Orchestrator:
         self._finalize_system_session()  # close the last system session
         self._collecting = False
         return reports
+
+    def _write_pause_marker(
+        self, runlog: RunLog | None, run: RunRecord, reason: str, retry_after: object = None
+    ) -> None:
+        """Durable "why this run stopped early" marker: ``runs/<id>/paused.json``.
+
+        The supervisor never sleeps waiting for a reset — instead this marker
+        (reason + optional advertised retry window + the focus) makes an external
+        relaunch loop or a human `--resume` trivial. Cleared on the next launch.
+        """
+        payload: dict[str, object] = {
+            "run_id": run.id,
+            "reason": reason,
+            "at": utc_now().isoformat(),
+            "focus_tasks": list(run.focus.tasks),
+            "focus_projects": list(run.focus.projects),
+            "resume": f"horizon run --resume {run.id or 'latest'}",
+        }
+        if retry_after is not None:
+            payload["retry_after_s"] = retry_after
+        self.last_paused = payload
+        if runlog is None:
+            return
+        try:
+            (runlog.path / "paused.json").write_text(json.dumps(payload, indent=2), "utf-8")
+        except OSError:
+            pass
 
     def publish(self, run: RunRecord) -> None:
         """Refresh human-facing artifacts after a collaboration boundary.

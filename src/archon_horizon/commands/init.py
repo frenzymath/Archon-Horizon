@@ -24,6 +24,13 @@ workspace:
   scheduler:
     # How many horizon agents can run simultaneously.
     max_parallel_sessions: {parallel}
+  # Optional spend ceilings; a crossed limit stops the run cleanly (resume with
+  # `horizon run --resume latest`). Unset = unlimited. Agents can check their
+  # headroom with `horizon usage`.
+  # budget:
+  #   session_tokens_out: 400000   # cancel a session that emits more than this
+  #   run_tokens_out: 2000000      # stop the run past this many output tokens
+  #   run_cost_usd: 50             # stop the run past this estimated cost
 
 # Lean libraries the agents and the `horizon search` index should know about.
 # mathlib is included by default. Add more with a GitHub shorthand or a full git

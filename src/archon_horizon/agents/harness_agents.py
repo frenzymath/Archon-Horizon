@@ -109,7 +109,7 @@ def _result_metadata(result: HarnessResult) -> dict[str, object]:
     if session_id:
         meta["session_id"] = session_id
     if not result.ok:
-        for key in ("returncode", "failure_reason", "timed_out", "retries_exhausted"):
+        for key in ("returncode", "failure_reason", "timed_out", "retries_exhausted", "retry_after_s"):
             value = result.metadata.get(key)
             if value is not None:
                 meta[key] = value

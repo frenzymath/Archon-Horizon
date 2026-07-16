@@ -32,6 +32,7 @@ from archon_horizon.commands import setup as setup_cmd
 from archon_horizon.commands import skills as skills_cmd
 from archon_horizon.commands import sync as sync_cmd
 from archon_horizon.commands import update as update_cmd
+from archon_horizon.commands import usage as usage_cmd
 from archon_horizon.log import log
 
 
@@ -133,6 +134,7 @@ app.command("blueprint")(blueprint_cmd.blueprint)
 app.command("leandag")(leandag_cmd.leandag)
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
+app.command("usage")(usage_cmd.usage)
 app.command("dashboard")(dashboard_cmd.dashboard)
 app.command("subagent", hidden=True)(subagent_cmd.subagent)
 

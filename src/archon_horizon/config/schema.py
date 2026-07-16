@@ -94,6 +94,38 @@ class SchedulerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BudgetConfig:
+    """Optional spend ceilings for automated runs (``workspace.budget``).
+
+    All limits are opt-in (unset = unlimited). A crossed limit stops the run
+    cleanly — like a usage limit, state stays on disk and ``--resume`` picks it
+    back up. ``session_tokens_out`` additionally cancels a live session that
+    crosses it (checked from the session's live ``usage.json``).
+    """
+
+    session_tokens_out: int | None = None
+    run_tokens_out: int | None = None
+    run_cost_usd: float | None = None
+
+    @classmethod
+    def from_raw(cls, data: dict[str, Any]) -> "BudgetConfig":
+        def _int(key: str) -> int | None:
+            value = data.get(key)
+            return int(value) if value is not None else None
+
+        cost = data.get("run_cost_usd")
+        return cls(
+            session_tokens_out=_int("session_tokens_out"),
+            run_tokens_out=_int("run_tokens_out"),
+            run_cost_usd=float(cost) if cost is not None else None,
+        )
+
+    @property
+    def configured(self) -> bool:
+        return any(v is not None for v in (self.session_tokens_out, self.run_tokens_out, self.run_cost_usd))
+
+
+@dataclass(frozen=True, slots=True)
 class GithubConfig:
     enabled: bool = False
     repo: str | None = None
@@ -230,6 +262,7 @@ class WorkspaceConfig:
     ground_harness: str | None = None
     horizon_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
     external_libraries: tuple[ExternalLibrary, ...] = ()
     harnesses: dict[str, HarnessConfig] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
@@ -251,6 +284,7 @@ class WorkspaceConfig:
             ground_harness=ws.get("ground_agent", {}).get("harness"),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
+            budget=BudgetConfig.from_raw(ws.get("budget", {}) or {}),
             external_libraries=tuple(
                 ExternalLibrary.from_raw(e) for e in (data.get("external_libraries") or ())
             ),
