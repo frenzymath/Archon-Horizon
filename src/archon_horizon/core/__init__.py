@@ -12,7 +12,7 @@ from .tasks import (
     TaskStatus,
     WriteSet,
 )
-from .workspace import Project, ProjectVcs, Workspace
+from .workspace import Project, Workspace
 
 __all__ = [
     "AgentName",
@@ -28,7 +28,6 @@ __all__ = [
     "InboxStatus",
     "ItemScope",
     "Project",
-    "ProjectVcs",
     "Roadmap",
     "RoadmapItem",
     "RoadmapKind",

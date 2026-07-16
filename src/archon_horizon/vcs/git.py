@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -45,6 +46,7 @@ def _run(
     work_tree: Path | None = None,
     cwd: Path | None = None,
     check: bool = True,
+    index_file: Path | None = None,
 ) -> str:
     cmd = ["git"]
     if git_dir is not None:
@@ -58,7 +60,7 @@ def _run(
         capture_output=True,
         text=True,
         check=False,
-        env=_git_env(),
+        env=_git_env(index_file),
     )
     if check and completed.returncode != 0:
         raise GitError(f"{' '.join(cmd)} failed: {completed.stderr.strip()}")
@@ -232,14 +234,17 @@ def _ensure_repo_hygiene(git_dir: Path, *, extra_excludes: Sequence[str] = ()) -
     prov.chmod(0o755)
 
 
-def _prune_ignored_from_index(git_dir: Path, work_tree: Path) -> None:
+def _prune_ignored_from_index(git_dir: Path, work_tree: Path, index_file: Path | None = None) -> None:
     """Drop already-tracked but now-ignored paths from the index (e.g. ``.lake``
     committed before the excludes existed), so the next commit records their
     removal. Touches only the index (``--cached``); the working tree is left
-    intact. Self-heals a workspace that was bloated by the old force-add."""
+    intact. Self-heals a workspace that was bloated by the old force-add.
+
+    ``index_file`` targets a private index — commits stage there, so the pruning
+    has to happen in the index the commit is actually built from."""
     listed = _run(
         ["ls-files", "-z", "-ci", "--exclude-standard"],
-        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
     )
     paths = [p for p in listed.split("\0") if p]
     if not paths:
@@ -248,8 +253,59 @@ def _prune_ignored_from_index(git_dir: Path, work_tree: Path) -> None:
     for start in range(0, len(paths), 500):
         _run(
             ["rm", "--cached", "-q", "--", *paths[start:start + 500]],
-            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
         )
+
+
+def _unstage_gitlinks(git_dir: Path, work_tree: Path, index_file: Path, paths: Sequence[str] | None = None) -> None:
+    """Drop submodule gitlink entries (mode 160000) that are plain directories on disk.
+
+    A commit's index is seeded from HEAD, so a gitlink committed before the nested
+    ``.git`` was neutralized comes back with it. Dropping it lets the following
+    ``add`` re-track the project's actual files, converting the gitlink to a real
+    tree. A path that still owns a live ``.git`` is left alone."""
+    args = ["ls-files", "-s"]
+    if paths:
+        args += ["--", *paths]
+    listing = _run(
+        args, git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file
+    )
+    stale = [
+        path
+        for line in listing.splitlines()
+        if line.startswith("160000") and "\t" in line
+        for path in (line.split("\t", 1)[1],)
+        if not (work_tree / path / ".git").exists()
+    ]
+    for start in range(0, len(stale), 500):
+        _run(
+            ["rm", "--cached", "-q", "--ignore-unmatch", "--", *stale[start:start + 500]],
+            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
+        )
+
+
+def _sync_index_to_head(git_dir: Path, work_tree: Path) -> None:
+    """Point the repo's **shared** index at HEAD, the way a checkout would.
+
+    Nothing ever checks this out-of-tree repo out, so git never populates its
+    shared index on its own. Left alone it is either *empty* — in which case a
+    plain ``git add F && git commit`` records a tree containing only ``F`` and
+    **deletes every other file** — or it is full of some previous flow's leftover
+    staging, which a plain ``git commit`` would sweep in wholesale and which makes
+    the ``pre-commit`` secret guard scan (and reject on) unrelated files.
+
+    Archon's own commits stage in a private index, so nothing here fights them.
+    Keeping the shared index a faithful mirror of HEAD is what makes the ordinary
+    ``git add`` / ``git commit`` an agent runs behave the way it does in any
+    normal repository."""
+    head = _run(
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+    )
+    _run(
+        ["read-tree", head] if head else ["read-tree", "--empty"],
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+    )
 
 
 def _files_in_commit(git_dir: Path, work_tree: Path, sha: str) -> tuple[str, ...]:
@@ -264,12 +320,16 @@ def _files_in_commit(git_dir: Path, work_tree: Path, sha: str) -> tuple[str, ...
     return tuple(line.strip() for line in out.splitlines() if line.strip())
 
 
-def _git_env() -> dict[str, str]:
+def _git_env(index_file: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Archon Horizon")
     env.setdefault("GIT_AUTHOR_EMAIL", "archon-horizon@local")
     env.setdefault("GIT_COMMITTER_NAME", "Archon Horizon")
     env.setdefault("GIT_COMMITTER_EMAIL", "archon-horizon@local")
+    if index_file is not None:
+        # Stage into a PRIVATE index instead of the repo's shared one. See
+        # WorkspaceGit.commit for why this matters.
+        env["GIT_INDEX_FILE"] = str(index_file)
     return env
 
 
@@ -286,10 +346,17 @@ class WorkspaceGit:
         self.root = root
         self.git_dir = git_dir or (root / ".archon-horizon" / "vcs" / "workspace.git")
 
-    def _run(self, args: Sequence[str], *, check: bool = True) -> str:
+    def _run(self, args: Sequence[str], *, check: bool = True, index_file: Path | None = None) -> str:
         # cwd=root so relative pathspecs resolve against the work tree; the
         # explicit --git-dir means git never discovers a parent .git.
-        return _run(args, git_dir=self.git_dir, work_tree=self.root, cwd=self.root, check=check)
+        return _run(
+            args,
+            git_dir=self.git_dir,
+            work_tree=self.root,
+            cwd=self.root,
+            check=check,
+            index_file=index_file,
+        )
 
     def is_repo(self) -> bool:
         return self.git_dir.exists()
@@ -299,9 +366,11 @@ class WorkspaceGit:
             self.git_dir.parent.mkdir(parents=True, exist_ok=True)
             _init_bare(self.git_dir)
         # Always refresh excludes + secret hook so existing workspaces self-heal,
-        # then drop any now-ignored paths a previous force-add had tracked.
+        # then reset the shared index to HEAD — clearing any staging a pre-private-index
+        # Horizon (or an interrupted commit) stranded there, which would otherwise be
+        # swept into the next plain `git commit` and trip the secret guard.
         _ensure_repo_hygiene(self.git_dir, extra_excludes=_WORKSPACE_EXCLUDES)
-        _prune_ignored_from_index(self.git_dir, self.root)
+        _sync_index_to_head(self.git_dir, self.root)
 
     def commit(
         self,
@@ -321,33 +390,77 @@ class WorkspaceGit:
         ``trailers`` are appended as machine-queryable ``Key: value`` lines at the
         end of the message (git-trailer convention), so provenance can be read
         back with ``git log --format=%(trailers:key=...)`` rather than parsed
-        from prose. Empty values are dropped."""
+        from prose. Empty values are dropped.
+
+        Staging happens in a **private index**, never the repo's shared one. The
+        shared index is a single mutable resource that agents also commit against
+        with plain ``git``; staging thousands of files into it made every other
+        commit either sweep those files in (``git commit`` commits the whole
+        index) or be rejected outright by the ``pre-commit`` secret guard, which
+        scans everything staged. Worse, it was self-poisoning: a commit that
+        failed or was interrupted left its staging behind, wedging the ledger for
+        good. A private index keeps this atomic — nothing is left behind on
+        failure, and a concurrent agent's index is untouched.
+        """
         if trailers:
             message = message.rstrip() + "\n\n" + "".join(
                 f"{key}: {value}\n" for key, value in trailers.items() if value
             )
-        if paths is None:
-            self._run(["add", "-A"])
-        else:
-            # `.archon-horizon` state and config.yaml are force-added: the user's
-            # own root .gitignore may exclude them, but the ledger must record
-            # them. Project trees are added WITHOUT force, so the excludes and the
-            # project's .gitignore apply — keeping .lake / .olean / .git.disabled
-            # out of the ledger instead of force-committing the whole tree.
-            state = [p for p in paths if p == "config.yaml" or p.split("/", 1)[0] == ".archon-horizon"]
-            projects = [p for p in paths if p not in state]
-            if state:
-                self._run(["add", "-f", "--", *state])
-            if projects:
-                self._run(["add", "-A", "--", *projects])
-        status = self._run(["status", "--porcelain"])
-        if not status and not allow_empty:
-            return None
-        args = ["commit", *_author_args(author)]
-        if allow_empty:
-            args.append("--allow-empty")
-        self._run([*args, "-m", message])
-        return self.current_sha()
+
+        with tempfile.TemporaryDirectory(prefix="archon-index-") as tmp:
+            index = Path(tmp) / "index"
+            # Re-seed and retry if HEAD moves under us: the private index is built
+            # from a snapshot of HEAD, so committing against a HEAD that has since
+            # advanced would write a tree that silently reverts the other writer's
+            # files. Comparing HEAD before/after staging turns that data loss into
+            # a retry.
+            for _ in range(3):
+                head = self.current_sha()
+                self._run(["read-tree", head] if head else ["read-tree", "--empty"], index_file=index)
+                # Drop now-ignored paths inherited from HEAD, so this commit records
+                # their removal (the self-heal for trees bloated by the old force-add),
+                # and likewise any gitlink HEAD still carries for a neutralized repo.
+                _prune_ignored_from_index(self.git_dir, self.root, index)
+                _unstage_gitlinks(self.git_dir, self.root, index, paths)
+
+                if paths is None:
+                    self._run(["add", "-A"], index_file=index)
+                else:
+                    # `.archon-horizon` state and config.yaml are force-added: the user's
+                    # own root .gitignore may exclude them, but the ledger must record
+                    # them. Project trees are added WITHOUT force, so the excludes and the
+                    # project's .gitignore apply — keeping .lake / .olean / .git.disabled
+                    # out of the ledger instead of force-committing the whole tree.
+                    state = [p for p in paths if p == "config.yaml" or p.split("/", 1)[0] == ".archon-horizon"]
+                    projects = [p for p in paths if p not in state]
+                    if state:
+                        self._run(["add", "-f", "--", *state], index_file=index)
+                    if projects:
+                        self._run(["add", "-A", "--", *projects], index_file=index)
+
+                # Only the index column (porcelain's first char) counts: a bare
+                # `status` is non-empty for untracked/dirty files we did not stage,
+                # which would push us into a `commit` that has nothing to record.
+                staged = any(
+                    line[:1] not in (" ", "?", "")
+                    for line in self._run(["status", "--porcelain"], index_file=index).splitlines()
+                )
+                if not staged and not allow_empty:
+                    return None
+
+                if self.current_sha() != head:
+                    continue  # HEAD advanced while we staged — rebuild on the new one.
+
+                args = ["commit", *_author_args(author)]
+                if allow_empty:
+                    args.append("--allow-empty")
+                self._run([*args, "-m", message], index_file=index)
+                # HEAD moved; keep the shared index tracking it so the plain `git`
+                # an agent runs still sees a normal, HEAD-mirroring index.
+                _sync_index_to_head(self.git_dir, self.root)
+                return self.current_sha()
+
+        raise GitError("ledger HEAD kept moving while staging; commit abandoned after 3 attempts")
 
     def current_sha(self) -> str | None:
         # --verify --quiet: prints nothing (instead of echoing "HEAD") and exits

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from archon_horizon.core.types import Metadata
-from archon_horizon.core.workspace import ProjectVcs
+
 
 
 # Symbolic model tiers, ordered cheapest → most capable. A subagent descriptor
@@ -219,7 +219,6 @@ class ProjectConfig:
     name: str
     path: str
     type: str = "lean"
-    vcs: ProjectVcs = field(default_factory=ProjectVcs)
     blueprint_path: str | None = None
     build_command: str | None = None
     depends_on: tuple[str, ...] = ()
@@ -229,19 +228,13 @@ class ProjectConfig:
 
     @classmethod
     def from_raw(cls, name: str, data: dict[str, Any]) -> "ProjectConfig":
-        vcs_raw = data.get("vcs", {})
-        git_dir = vcs_raw.get("git_dir")
+        # A `vcs:` block here is legacy and ignored: the workspace has ONE ledger and
+        # projects have no repositories of their own.
         freeze_raw = data.get("freeze", {})
         return cls(
             name=name,
             path=data["path"],
             type=data.get("type", "lean"),
-            vcs=ProjectVcs(
-                enabled=bool(vcs_raw.get("enabled", True)),
-                git_dir=Path(git_dir) if git_dir else None,
-                origin=vcs_raw.get("origin"),
-                branch=vcs_raw.get("branch"),
-            ),
             blueprint_path=data.get("blueprint", {}).get("path"),
             build_command=data.get("build", {}).get("command"),
             depends_on=tuple(data.get("depends_on", ())),

@@ -43,12 +43,31 @@ git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" 
     commit -m "feat(chapter): prove foo_lemma"
 ```
 
-- Prefer staging **explicit paths** you changed over `add -A` — the work tree is the
+Ordinary git: the ledger's index tracks HEAD, so `add` then `commit` records your
+files on top of it. Horizon's own commits stage in a private index and never leave
+anything staged in your way.
+
+- Stage **explicit paths** you changed rather than `add -A` — the work tree is the
   whole workspace, so `-A` can sweep in unrelated files.
+- To be surgical, name the paths on the commit itself — this ignores whatever else
+  may be staged and records exactly those files:
+  `"$HORIZON_GIT" commit -m "…" -- path/to/File.lean`
 - `Archon-Run`/`Session`/`Role`/`Task`/`Projects` trailers are stamped for you by a
   hook from the session env; your message stays clean.
 - Build artifacts (`.lake`, `*.olean`, …) and secrets are excluded/blocked
   automatically, so a broad add still won't commit them.
+- If the `pre-commit` guard ever reports *"possible secret in staged changes"* and
+  your own diff is clean, you have staged more than you meant to — commit with
+  `-- <paths>` rather than setting `ARCHON_HORIZON_ALLOW_SECRETS=1`, which only
+  silences the guard and still commits everything staged.
+
+Then verify **in the ledger**, and verify the **paths**, not just the SHA — a bare
+`git cat-file` runs against `<root>/.git`, which has not seen your commit yet and will
+make a perfectly real SHA look fabricated:
+
+```bash
+"$HORIZON_GIT" ls-tree --name-only HEAD -- path/to/File.lean   # empty ⇒ NOT in HEAD
+```
 
 ## Reading history / a project's diff
 

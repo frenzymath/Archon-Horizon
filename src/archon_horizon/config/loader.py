@@ -104,7 +104,6 @@ def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:
             name=pc.name,
             path=Path(pc.path),
             type=pc.type,
-            vcs=pc.vcs,
             blueprint_path=Path(pc.blueprint_path) if pc.blueprint_path else None,
             build_command=pc.build_command,
             depends_on=pc.depends_on,

@@ -9,23 +9,12 @@ from .types import Metadata
 
 
 @dataclass(frozen=True, slots=True)
-class ProjectVcs:
-    """Optional project-local VCS kept outside the project worktree."""
-
-    enabled: bool = False
-    git_dir: Path | None = None
-    origin: str | None = None
-    branch: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class Project:
     """A member formalization unit embedded in the workspace."""
 
     name: str
     path: Path
     type: str = "lean"
-    vcs: ProjectVcs = field(default_factory=ProjectVcs)
     blueprint_path: Path | None = None
     build_command: str | None = None
     depends_on: tuple[str, ...] = ()
