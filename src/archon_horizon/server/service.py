@@ -740,47 +740,6 @@ class WorkspaceService:
                     integrated[name] = data
         return integrated
 
-    def _run_baseline_commit(self, run_id: str) -> str | None:
-        for raw in reversed(self.stores.events.read_all()):
-            event = serde.to_jsonable(raw)
-            data = event.get("data", {})
-            if event.get("type") == "workspace.run_baseline" and data.get("run_id") == run_id:
-                sha = data.get("sha")
-                return str(sha) if sha else None
-        return None
-
-    def _last_run_commit(self, run_id: str) -> str | None:
-        last_commit: str | None = None
-        integrated = self._session_integrations(run_id)
-        try:
-            run = self.stores.run_logs.get(run_id)
-            for session in run.sessions():
-                info = integrated.get(session.name)
-                if info and info.get("workspace_commit"):
-                    last_commit = info["workspace_commit"]
-        except Exception:
-            pass
-        return last_commit or self._run_baseline_commit(run_id)
-
-    def _session_live_context(self, run_id: str, session_name: str | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        try:
-            run = self.stores.run_logs.get(run_id)
-        except Exception:
-            return (), ()
-        selected: SessionLog | None = None
-        if session_name:
-            selected = next((s for s in run.sessions() if s.name == session_name), None)
-        if selected is None:
-            selected = next((s for s in reversed(run.sessions()) if self._session_state(run_id, s, "")["status"] == "running"), None)
-        meta = selected.read_meta() if selected is not None else {}
-        projects = [p for p in (meta.get("projects") or []) if p]
-        project_paths = self._project_paths(projects) if projects else tuple(
-            self.workspace.project_path(n).relative_to(self.root).as_posix()
-            for n in self.workspace.projects
-        )
-        dirty_at_start = tuple(str(p) for p in (meta.get("dirty_at_start") or []) if p)
-        return project_paths, dirty_at_start
-
     def _project_paths(self, names: list[str]) -> tuple[str, ...]:
         paths: list[str] = []
         for name in names:
@@ -788,169 +747,12 @@ class WorkspaceService:
                 paths.append(self.workspace.project_path(name).relative_to(self.root).as_posix())
         return tuple(paths)
 
-    def run_changes(self, run_id: str) -> dict[str, Any]:
-        """Deterministic per-session change view for one run: what each session's
-        ledger commit changed (per-file LOC/sorry before→after), plus cumulative
-        run and per-file trends. Computed from git + the sorry/LOC scanner — no
-        AI. Precomputed by the static exporter, so the static dashboard shows the
-        same boxes/graphs. Per-file diffs are fetched lazily (see the
-        ``/api/session/file-diff`` endpoint)."""
-        from archon_horizon.server.changes_api import aggregate_session_summary, session_change_summary
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
-
-        try:
-            run = self.stores.run_logs.get(run_id)
-        except Exception:
-            return {"run": run_id, "sessions": [], "trend": [], "file_trends": {}}
-
-        integrated = self._session_integrations(run_id)
-        wsgit = WorkspaceGit(self.root) if git_available() else None
-
-        sessions_out: list[dict[str, Any]] = []
-        trend: list[dict[str, Any]] = []
-        # Per-file sorry trajectory across the sessions where the file changed.
-        file_trends: dict[str, list[dict[str, Any]]] = {}
-        cum_sorry = 0
-        # Diff each session against its commit's own git PARENT — the state of the
-        # ledger immediately before this commit — which is exactly what git
-        # records the commit as changing. The workspace ledger is ONE shared
-        # branch that every run commits onto, so "the previous session of the same
-        # run" is meaningless: dozens of other runs' commits (and dashboard
-        # publishes) interleave on that branch, and diffing across them would
-        # report hundreds of unrelated files. The parent is always the right,
-        # deterministic base (base=None → session_change_summary uses commit^).
-        for session in run.sessions():
-            info = integrated.get(session.name) or {}
-            projects = [p for p in (info.get("projects") or []) if p]
-            paths = self._project_paths(projects) or tuple()
-            # Agent sessions are attributed only from agent-authored semantic
-            # commits. The orchestrator's integration sweep is deterministic
-            # ledger bookkeeping: it can capture unrelated project files that
-            # changed in the shared worktree, so it must not populate the agent
-            # file table. System sessions still report their deterministic commits.
-            commit_rows = wsgit.session_commits_detailed(run_id, session.name) if wsgit is not None else []
-            role = str(info.get("role") or session.read_meta().get("role") or "").lower()
-            agent_role = role in ("ground", "horizon")
-            agent_commits = [
-                (r["sha"], r["subject"]) for r in commit_rows
-                if r.get("kind") == "agent" and str(r.get("role") or role).lower() in ("ground", "horizon", "")
-            ]
-            deterministic_rows = [r for r in commit_rows if r.get("kind") != "agent"]
-            if agent_role:
-                if agent_commits:
-                    summary = aggregate_session_summary(self.root, paths, agent_commits)
-                    summary["change_source"] = "agent-commits"
-                elif info:
-                    summary = session_change_summary(self.root, None, paths, base=None, fallback_files=())
-                    summary["change_source"] = "no-agent-commits"
-                else:
-                    continue
-            else:
-                deterministic_commits = [(r["sha"], r["subject"]) for r in deterministic_rows or commit_rows]
-                if deterministic_commits:
-                    summary = aggregate_session_summary(self.root, paths, deterministic_commits)
-                    summary["change_source"] = "deterministic-commits"
-                elif info.get("workspace_commit"):
-                    summary = session_change_summary(
-                        self.root, info.get("workspace_commit"), paths,
-                        base=None, fallback_files=tuple(info.get("files") or ()),
-                    )
-                    summary["change_source"] = "integration-fallback"
-                elif info:
-                    summary = session_change_summary(
-                        self.root, None, paths, base=None, fallback_files=tuple(info.get("files") or ()),
-                    )
-                    summary["change_source"] = "integration-fallback"
-                else:
-                    continue
-            summary["session"] = session.name
-            summary["role"] = role or info.get("role")
-            summary["projects"] = projects
-            summary["system_commits"] = [
-                {"sha": r["sha"], "subject": r["subject"], "kind": r.get("kind", "")}
-                for r in deterministic_rows
-            ]
-            # Advisory task write-set, kept for API compatibility/context only.
-            # The file table itself comes from provenance-tagged commits, not this
-            # expected-file list.
-            summary["scope_files"] = self._session_scope_files(info.get("task_id"))
-            sessions_out.append(summary)
-            cum_sorry += summary.get("sorry_delta", 0)
-            trend.append({
-                "session": session.name,
-                "role": info.get("role"),
-                "sorry_delta": summary.get("sorry_delta", 0),
-                "cumulative_sorry_delta": cum_sorry,
-                "loc_code_delta": summary.get("lean", {}).get("loc_code_delta", 0),
-            })
-            for f in summary.get("files", []):
-                if f.get("category") in ("lean", "blueprint") and "sorry_after" in f:
-                    file_trends.setdefault(f["path"], []).append({
-                        "session": session.name,
-                        "sorry_after": f.get("sorry_after", 0),
-                        "loc_code_after": f.get("loc_code_after", 0),
-                    })
-        return {"run": run_id, "sessions": sessions_out, "trend": trend, "file_trends": file_trends}
-
-    def _session_scope_files(self, task_id: Any) -> list[str]:
-        """The write-set files a task declared, or [] (unknown / project-scoped)."""
-        if not task_id:
-            return []
-        try:
-            task = self.stores.tasks.get(str(task_id))
-        except Exception:
-            return []
-        files = getattr(getattr(task, "write_set", None), "files", ()) or ()
-        return [str(f) for f in files]
-
-    def working_changes(self, run_id: str, session: str | None = None) -> dict[str, Any]:
-        """Live change view for a still-running session: the current working tree
-        (uncommitted) vs the run's last committed session. Live-only (no working
-        tree exists in a static export).
-
-        Scoped to the files this run's own agent commits have touched, so a
-        *parallel* run writing sibling files in the same project (the shared
-        worktree) does not leak into this run's diff. Until this run has any agent
-        commit yet (its first session, nothing committed) we fall back to the
-        session's project scope so the very first uncommitted work is still shown.
-        """
-        from archon_horizon.server.changes_api import session_change_summary
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
-
-        last_commit = self._last_run_commit(run_id)
-        project_paths, dirty_at_start = self._session_live_context(run_id, session)
-        run_files: set[str] = set()
-        if git_available():
-            run_files = WorkspaceGit(self.root).run_agent_changed_files(run_id)
-        # Keep only files under the session's project dirs — the agent commit also
-        # carries shared-state bookkeeping (.archon-horizon/…) that the old
-        # project-scoped live view never showed; drop it here too.
-        if run_files and project_paths:
-            run_files = {
-                f for f in run_files
-                if any(f == p or f.startswith(p.rstrip("/") + "/") for p in project_paths)
-            }
-        scope_paths = tuple(sorted(run_files)) if run_files else project_paths
-        summary = session_change_summary(
-            self.root,
-            None,
-            scope_paths,
-            base=last_commit,
-            worktree=True,
-            exclude_paths=dirty_at_start,
-        )
-        summary["run"] = run_id
-        summary["session"] = session or ""
-        summary["scope_source"] = "run-agent-files" if run_files else "project"
-        return summary
-
     def session_commits_view(self, run_id: str, session: str) -> dict[str, Any]:
         """Per-COMMIT change view for one session: each commit the session made
         (message + per-file table vs that commit's own git parent), so the
-        dashboard can show progress at *commit* granularity — the commit message
-        and diff ARE the progress record. Complements ``run_changes`` (which sums a
-        session's commits into one table). Per-commit file diffs are fetched lazily
-        via ``/api/session/file-diff?...&sha=<sha>``."""
+        dashboard shows progress at *commit* granularity — the commit message
+        and diff ARE the progress record. Per-commit file diffs are fetched
+        lazily via ``/api/session/file-diff?...&sha=<sha>``."""
         from archon_horizon.server.changes_api import session_change_summary
         from archon_horizon.vcs.git import WorkspaceGit, git_available
 
@@ -978,42 +780,14 @@ class WorkspaceService:
             })
         return {"run": run_id, "session": session, "commits": commits_out}
 
-    def session_file_diff(
-        self, run_id: str, session: str, path: str, *, worktree: bool = False, sha: str | None = None
-    ) -> dict[str, Any]:
-        """Unified diff of one changed file vs the session commit's git parent —
-        or, with ``worktree``, the current working tree vs the last committed
-        session (the live view for a running session). With ``sha``, the diff is
-        scoped to that ONE commit (vs its own parent) for the commit-granular view."""
+    def session_file_diff(self, run_id: str, session: str, path: str, *, sha: str) -> dict[str, Any]:
+        """Unified diff of one file in ONE commit (vs that commit's own parent) —
+        the click-to-diff behind the commit cards. Progress is commit-granular;
+        there is no aggregate per-session diff any more (that was the old
+        "changes" view, superseded by the git view)."""
         from archon_horizon.server.changes_api import session_file_diff
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
 
-        if sha:
-            # Commit-granular: exactly what this one commit changed to the file.
-            return session_file_diff(self.root, sha, path, base=None)
-        integrated = self._session_integrations(run_id)
-        if worktree:
-            last_commit = self._last_run_commit(run_id)
-            return session_file_diff(self.root, None, path, base=last_commit, worktree=True)
-        # Span the same commit set used by ``run_changes``. For agent sessions,
-        # that means agent-authored semantic commits only; deterministic
-        # integration sweeps are not allowed to add unrelated files to the diff.
-        wsgit = WorkspaceGit(self.root) if git_available() else None
-        info = integrated.get(session) or {}
-        role = str(info.get("role") or "").lower()
-        rows = wsgit.session_commits_detailed(run_id, session) if wsgit is not None else []
-        if role in ("ground", "horizon"):
-            rows = [r for r in rows if r.get("kind") == "agent"]
-        else:
-            deterministic = [r for r in rows if r.get("kind") != "agent"]
-            rows = deterministic or rows
-        if rows:
-            first_sha, last_sha = rows[0]["sha"], rows[-1]["sha"]
-            return session_file_diff(self.root, last_sha, path, base=wsgit.parent_sha(first_sha))
-        if role not in ("ground", "horizon"):
-            target_commit = info.get("workspace_commit")
-            return session_file_diff(self.root, target_commit, path, base=None)
-        return {"path": path, "available": False, "diff": ""}
+        return session_file_diff(self.root, sha, path, base=None)
 
     def _inbox_provider_state(self) -> dict[str, Any]:
         return {
@@ -1264,31 +1038,22 @@ class WorkspaceService:
         eps = ["/api/state", "/api/blueprints", "/api/transcripts", "/api/git/log", "/api/git/diff", "/api/projects"]
         eps += [f"/api/transcript?ref={t['ref']}" for t in self.transcripts()]
         eps += [f"/api/report?ref={t['ref']}" for t in self.transcripts()]
-        # One change-view per run, so the static export precomputes each run's
-        # per-session diff/sorry summary (the live server computes it on demand),
-        # plus one file-diff endpoint per changed Lean/blueprint file so the
+        # The commit-granular git view: one commits endpoint per session, plus a
+        # per-commit file-diff endpoint per changed Lean/blueprint file so the
         # click-to-diff works on the static page too.
         for run_id in self.stores.run_logs.ids():
-            eps.append(f"/api/run/changes?run={run_id}")
             try:
-                changes = self.run_changes(run_id)
+                sessions = self.stores.run_logs.get(run_id).sessions()
             except Exception:
                 continue
-            for session in changes.get("sessions", []):
-                # Commit-granular view for this session (message + per-commit files).
-                eps.append(f"/api/session/commits?run={run_id}&session={session['session']}")
-                for f in session.get("files", []):
-                    if f.get("category") in ("lean", "blueprint"):
-                        eps.append(
-                            f"/api/session/file-diff?run={run_id}&session={session['session']}&path={f['path']}"
-                        )
-                # Per-commit file diffs, so click-to-diff on a single commit works offline too.
+            for session in sessions:
+                eps.append(f"/api/session/commits?run={run_id}&session={session.name}")
                 try:
-                    for c in self.session_commits_view(run_id, session["session"]).get("commits", []):
+                    for c in self.session_commits_view(run_id, session.name).get("commits", []):
                         for f in c.get("files", []):
                             if f.get("category") in ("lean", "blueprint"):
                                 eps.append(
-                                    f"/api/session/file-diff?run={run_id}&session={session['session']}"
+                                    f"/api/session/file-diff?run={run_id}&session={session.name}"
                                     f"&path={f['path']}&sha={c['sha']}"
                                 )
                 except Exception:
@@ -1358,13 +1123,6 @@ class WorkspaceService:
             if proj and commit:
                 return {"diff": get_git_diff(self._project_path(proj), commit)}
             return {"diff": ""}
-        if parsed.path == "/api/run/changes":
-            return self.run_changes((query.get("run") or [""])[0])
-        if parsed.path == "/api/run/working-changes":
-            return self.working_changes(
-                (query.get("run") or [""])[0],
-                (query.get("session") or [""])[0] or None,
-            )
         if parsed.path == "/api/session/commits":
             return self.session_commits_view(
                 (query.get("run") or [""])[0],
@@ -1375,8 +1133,7 @@ class WorkspaceService:
                 (query.get("run") or [""])[0],
                 (query.get("session") or [""])[0],
                 (query.get("path") or [""])[0],
-                worktree=(query.get("worktree") or [""])[0] in ("1", "true"),
-                sha=(query.get("sha") or [""])[0] or None,
+                sha=(query.get("sha") or [""])[0],
             )
         if parsed.path == "/api/projects":
             return self.projects_summary()

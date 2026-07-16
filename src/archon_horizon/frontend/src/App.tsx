@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getBlueprints, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type CommitChange, type RunChanges, type FileDiff } from './api';
+import { editInbox, editRoadmap, editTask, getState, getBlueprints, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChangeFile, type CommitChange, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
@@ -1831,8 +1831,6 @@ function Transcripts({ state }: { state?: any }) {
   const [report, setReport] = useState<string>('');
   const [recommendation, setRecommendation] = useState<string>('');
   const [selected, setSelected] = useState<string>('');
-  const [changes, setChanges] = useState<RunChanges | null>(null);
-  const [workingChange, setWorkingChange] = useState<SessionChange | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const selectedSession = useMemo(() => findSessionByRef(runs, selected), [runs, selected]);
   const selectedRun = useMemo(() => findRunBySessionRef(runs, selected), [runs, selected]);
@@ -1847,40 +1845,6 @@ function Transcripts({ state }: { state?: any }) {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-
-  // Load the deterministic per-session change view for the selected run (diff +
-  // sorry delta computed server-side from the ledger). Refetched when the run
-  // changes; the payload is small and static-mode reads it from a precomputed file.
-  const selectedRunId = selectedRun?.id;
-  useEffect(() => {
-    if (!selectedRunId) { setChanges(null); return; }
-    let cancelled = false;
-    getRunChanges(selectedRunId)
-      .then((c) => { if (!cancelled) setChanges(c); })
-      .catch(() => { if (!cancelled) setChanges(null); });
-    return () => { cancelled = true; };
-  }, [selectedRunId]);
-  const committedChange = useMemo(
-    () => changes?.sessions.find((s) => s.session === selectedSession?.session),
-    [changes, selectedSession],
-  );
-  // A running session hasn't committed yet: show the live working-tree diff
-  // (current uncommitted state vs the run's last committed session) instead,
-  // polled while it stays running.
-  const sessionRunning = selectedSession?.status === 'running';
-  useEffect(() => {
-    if (!selectedRunId || !sessionRunning) { setWorkingChange(null); return; }
-    let cancelled = false;
-    const load = () => {
-      getWorkingChanges(selectedRunId, selectedSession?.session)
-        .then((c) => { if (!cancelled) setWorkingChange({ ...c, session: selectedSession?.session }); })
-        .catch(() => { if (!cancelled) setWorkingChange(null); });
-    };
-    load();
-    const id = setInterval(load, 4000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [selectedRunId, sessionRunning, selectedSession?.session]);
-  const sessionChange = sessionRunning ? (workingChange ?? undefined) : committedChange;
 
   // Deep-link / selection: keep `selected` in sync with the URL.
   useEffect(() => {
@@ -1935,8 +1899,7 @@ function Transcripts({ state }: { state?: any }) {
         run={selectedRun}
         selected={selected}
         session={selectedSession}
-        change={sessionChange}
-        changesRunId={selectedRunId}
+        runId={selectedRun?.id}
         nextSessionStart={selectedNextStart}
         activeTickSession={activeTickSession}
       />
@@ -2106,8 +2069,8 @@ function GitUnifiedDiff({ text }: { text: string }) {
 
 // One file row: click the name to lazily load and expand its diff. Only the
 // base file name is shown (paths are often very long); hover reveals the path.
-function FileChangeRow({ runId, session, file, showComments, initial, worktree, sha }: {
-  runId: string; session: string; file: SessionChangeFile; showComments: boolean; initial?: boolean; worktree?: boolean; sha?: string;
+function FileChangeRow({ runId, session, file, showComments, sha }: {
+  runId: string; session: string; file: SessionChangeFile; showComments: boolean; sha: string;
 }) {
   const [open, setOpen] = useState(false);
   const [diff, setDiff] = useState<FileDiff | null>(null);
@@ -2118,9 +2081,8 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree, 
     const next = !open;
     setOpen(next);
     if (next && diff === null) {
-      // `sha` scopes the diff to a single commit (commit-granular view); omitted, it
-      // spans the session's commit range (the aggregated session view).
-      getSessionFileDiff(runId, session, file.path, worktree, sha).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
+      // Commit-granular: exactly what this one commit changed in the file.
+      getSessionFileDiff(runId, session, file.path, sha).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
     }
   };
   return (
@@ -2130,8 +2092,7 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree, 
           <button className="change-file-btn" onClick={toggle} title={file.path}>
             <span className="change-caret">{open ? '▾' : '▸'}</span>
             <span className="change-fname">{name}</span>
-            {/* Suppress "new" on the run's initial snapshot, where every file is trivially new. */}
-            {!initial && file.added && <span className="file-tag added">new</span>}
+            {file.added && <span className="file-tag added">new</span>}
             {file.deleted && <span className="file-tag deleted">del</span>}
             <DeclarationDelta delta={file.decl_delta} compact />
           </button>
@@ -2161,50 +2122,6 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree, 
 // Deterministic per-session change view: agent sessions show only files from
 // agent-authored semantic commits; system/integration commits remain visible as
 // ledger metadata. Lean and blueprint files get their own tabs.
-const EMPTY_CHANGE_ROLLUP = {
-  files: 0,
-  add: 0,
-  del: 0,
-  loc_after: 0,
-  loc_code_after: 0,
-  loc_delta: 0,
-  loc_code_delta: 0,
-  sorry_after: 0,
-  sorry_delta: 0,
-};
-
-function changeRollup(change: SessionChange, key: 'lean' | 'blueprint') {
-  const roll = (change as any)[key] ?? {};
-  const merged = { ...EMPTY_CHANGE_ROLLUP, ...roll };
-  if (key === 'lean') {
-    return {
-      ...merged,
-      files: roll.files ?? change.lean_files_changed ?? merged.files,
-      loc_delta: roll.loc_delta ?? change.loc_add ?? merged.loc_delta,
-      loc_code_delta: roll.loc_code_delta ?? change.loc_add ?? merged.loc_code_delta,
-      sorry_delta: roll.sorry_delta ?? change.sorry_delta ?? merged.sorry_delta,
-    };
-  }
-  return merged;
-}
-
-// One-line caveat about how faithfully the diff attributes files to this session.
-function attributionNote(change: SessionChange): string {
-  if (change.worktree) {
-    const excluded = change.excluded_count ? ` Pre-existing dirty files excluded: ${change.excluded_count}.` : '';
-    return `Live working-tree view: current uncommitted changes vs this run's baseline or last committed session.${excluded}`;
-  }
-  if (change.change_source === 'agent-commits') return 'Shows only files from this session\'s agent-authored semantic commits. Deterministic integration commits are listed separately and do not add files here.';
-  if (change.change_source === 'no-agent-commits') return 'No agent-authored semantic commits were recorded for this session; deterministic integration commits are listed separately.';
-  if (change.change_source === 'deterministic-commits') return 'System view: deterministic ledger commits for this session.';
-  return 'Fallback view from the integration ledger; commit provenance was incomplete for this older session.';
-}
-
-function attributionWarning(change: SessionChange): string {
-  const detail = attributionNote(change);
-  return `Change attribution is approximate and may be inaccurate with parallel runs or workspaces that used older commit conventions. ${detail}`;
-}
-
 // One commit rendered as a distinct card: message (the progress statement) + its
 // own per-file diff. Expands to that single commit's files (diff scoped by sha).
 function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: string; session: string }) {
@@ -2261,126 +2178,6 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
   );
 }
 
-function SessionChanges({ change, runId }: {
-  change: SessionChange; runId: string;
-}) {
-  const [tab, setTab] = useState<'lean' | 'blueprint'>('lean');
-  const [showComments, setShowComments] = useState(true);
-  const leanRoll = changeRollup(change, 'lean');
-  const blueprintRoll = changeRollup(change, 'blueprint');
-  const filesAll = change.files ?? [];
-  const otherCount = change.other_count ?? 0;
-  const excludedCount = change.excluded_count ?? 0;
-  const initial = Boolean(change.initial);
-  const worktree = Boolean(change.worktree);
-  const hasBlueprint = blueprintRoll.files > 0;
-  const active = (!hasBlueprint || tab === 'lean') ? 'lean' : 'blueprint';
-  const roll = active === 'lean' ? leanRoll : blueprintRoll;
-  const files = filesAll.filter((f) => f.category === active);
-
-  return (
-    <details className="log-panel change-panel" open>
-      <summary>
-        {worktree ? 'Changes (live)' : 'Changes'}
-        <span className="change-scorecard-col">
-          <span className="change-scorecard">
-            {change.available ? (
-              <>
-                {active === 'lean' && (
-                  <span className="change-stat" title="Open sorries after this session (change)">
-                    <AfterDelta after={roll.sorry_after} delta={roll.sorry_delta} goodWhenNegative /> sorry
-                  </span>
-                )}
-                <span className="change-stat" title={showComments ? 'total lines after (change)' : 'code lines after (change)'}>
-                  <AfterDelta after={showComments ? roll.loc_after : roll.loc_code_after} delta={showComments ? roll.loc_delta : roll.loc_code_delta} /> {showComments ? 'loc' : 'code'}
-                </span>
-                <span className="change-stat muted" title="raw line churn (git)"><span className="delta good">+{roll.add}</span>/<span className="delta bad">−{roll.del}</span></span>
-                <span className="change-stat">{roll.files} file{roll.files === 1 ? '' : 's'}</span>
-              </>
-            ) : (change as any).reason === 'no-changes' ? (
-              <span className="change-stat muted">No file changes in this session.</span>
-            ) : (
-              <span className="change-stat muted">{filesAll.length} file{filesAll.length === 1 ? '' : 's'} changed · diff unavailable (no VCS history)</span>
-            )}
-          </span>
-          {change.available && <DeclarationDelta delta={roll.decl_delta} />}
-        </span>
-      </summary>
-
-      <div className="change-controls">
-        {hasBlueprint && (
-          <div className="change-tabs">
-            <button className={active === 'lean' ? 'on' : ''} onClick={() => setTab('lean')}>Lean ({leanRoll.files})</button>
-            <button className={active === 'blueprint' ? 'on' : ''} onClick={() => setTab('blueprint')}>Blueprint ({blueprintRoll.files})</button>
-          </div>
-        )}
-        <label className="change-toggle" title="Count comment/blank lines in the LOC figures (raw churn always includes them)">
-          <input type="checkbox" checked={showComments} onChange={(e) => setShowComments(e.target.checked)} /> count comments in LOC
-        </label>
-        {otherCount > 0 && (
-          <span className="change-other muted" title="Shared workspace state committed alongside the code (events log, roadmap, config…); excluded from the code stats">
-            +{otherCount} shared-state file{otherCount === 1 ? '' : 's'}
-          </span>
-        )}
-        {excludedCount > 0 && (
-          <span className="change-other muted" title="Files that were already dirty when this session started; excluded from this live attribution">
-            {excludedCount} pre-existing dirty file{excludedCount === 1 ? '' : 's'} excluded
-          </span>
-        )}
-      </div>
-
-      <p className="change-attr-note warning" title={attributionWarning(change)}>
-        <strong>Warning:</strong> {attributionWarning(change)}
-      </p>
-      {change.commits && change.commits.length > 0 && (
-        <div className="change-commits">
-          {change.commits.map((c) => (
-            <div key={c.sha} className="change-commit" title={c.sha}>
-              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
-              <span className="change-commit-msg">{c.subject}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {change.system_commits && change.system_commits.length > 0 && (
-        <div className="change-commits system">
-          {change.system_commits.map((c) => (
-            <div key={c.sha} className="change-commit" title={c.sha}>
-              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
-              <span className="change-commit-msg">{c.kind ? `${c.kind}: ` : ''}{c.subject}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {initial && (
-        <p className="change-initial-note">Initial snapshot — no prior commit to compare against, so these are the current contents.</p>
-      )}
-
-      {files.length === 0 ? (
-        <p className="empty change-empty">{change.available
-          ? `No ${active} files changed in this session.`
-          : 'No diff to show.'}</p>
-      ) : (
-        <table className="change-table">
-          <tbody>
-            {files.map((f) => (
-              <FileChangeRow
-                key={f.path}
-                runId={runId}
-                session={change.session}
-                file={f}
-                showComments={showComments}
-                initial={initial}
-                worktree={worktree}
-              />
-            ))}
-          </tbody>
-        </table>
-      )}
-    </details>
-  );
-}
-
 function TranscriptViewer({
   events,
   harnesses,
@@ -2389,8 +2186,7 @@ function TranscriptViewer({
   run,
   selected,
   session,
-  change,
-  changesRunId,
+  runId,
   nextSessionStart,
   activeTickSession,
 }: {
@@ -2401,8 +2197,7 @@ function TranscriptViewer({
   run?: any;
   selected: string;
   session?: any;
-  change?: SessionChange;
-  changesRunId?: string;
+  runId?: string;
   nextSessionStart?: string;
   activeTickSession?: string;
 }) {
@@ -2473,9 +2268,8 @@ function TranscriptViewer({
           {selected && <p className="transcript-ref">{selected}</p>}
         </div>
       </div>
-      {change && <SessionChanges change={change} runId={changesRunId ?? ''} />}
-      {change && !change.worktree && changesRunId && change.session && (
-        <SessionCommitsPanel runId={changesRunId} session={change.session} />
+      {runId && session?.session && !session?.synthetic && (
+        <SessionCommitsPanel runId={runId} session={session.session} />
       )}
       {recommendation && recommendation.trim() && (
         <details className="log-panel report-panel" open>

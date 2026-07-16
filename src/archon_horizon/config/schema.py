@@ -256,10 +256,6 @@ class WorkspaceConfig:
     name: str
     state_dir: str = ".archon-horizon"
     rounds: int = 1
-    # Harness for auxiliary human-driven sessions (`horizon discuss`, the
-    # post-init advisor) and the default for `horizon subagent`. The orchestrated
-    # run loop is horizon-only and never reads this.
-    ground_harness: str | None = None
     horizon_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
@@ -281,7 +277,6 @@ class WorkspaceConfig:
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
-            ground_harness=ws.get("ground_agent", {}).get("harness"),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
             budget=BudgetConfig.from_raw(ws.get("budget", {}) or {}),

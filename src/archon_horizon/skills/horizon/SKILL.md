@@ -27,10 +27,39 @@ and the manifest is `config.yaml`. Read what you need, when you need it — via 
   `hgraph frontier` ranks what to prove next, and node-scoped failure memory
   goes on the node itself (skill: `hgraph`).
 - **Memory** — durable facts/dead-ends: `.archon-horizon/memory.md`.
-- **Usage** — your token/cost consumption this session and run, plus any
-  configured budget headroom and recent rate-limit signals:
-  `"$HORIZON_BIN" usage --json`. **Check it before fanning out subagents or
-  starting very heavy work** — running out mid-proof loses more than pacing does.
+- **Usage** — your token/cost consumption this session and run, budget headroom,
+  and recent rate-limit signals: `"$HORIZON_BIN" usage --json`. See
+  "Pace yourself" below for how to act on it.
+
+## Your session's identity (environment variables)
+
+The harness exports these to every session — read them instead of guessing:
+
+| Variable | Meaning |
+|---|---|
+| `ARCHON_HORIZON_ROOT` | workspace root (use for `--root`-free CLI calls) |
+| `ARCHON_HORIZON_RUN` | run id (e.g. `0163`) |
+| `ARCHON_HORIZON_SESSION` | this session's name (e.g. `0002-horizon-T-1`) |
+| `ARCHON_HORIZON_SESSION_DIR` | this session's directory (transcript, usage.json, report) |
+| `ARCHON_HORIZON_ROUND` / `ARCHON_HORIZON_ROUNDS` | which round this is (0-based) / the run's planned total |
+| `ARCHON_HORIZON_TASK` / `ARCHON_HORIZON_TASK_TITLE` | the task id / title (full body: `"$HORIZON_BIN" task show "$ARCHON_HORIZON_TASK" --json`) |
+| `ARCHON_HORIZON_PROJECTS` | comma-separated projects this task spans |
+| `HORIZON_BIN`, `HORIZON_GIT` | absolute paths to the CLI and the ledger-git wrapper |
+
+## Pace yourself (usage & interruption risk)
+
+Sessions end for reasons you don't control: rate limits, usage caps, budgets.
+The defense is NOT to avoid work — it is to make interruption cheap:
+
+- **Commit at every coherent point** (plain git into the ledger, below). If
+  `"$HORIZON_BIN" usage --json` shows low budget headroom or recent
+  `rate_limit`/`usage_limit` signals, commit what you have NOW and prefer
+  finishing the piece in flight over opening a new front.
+- If this is the run's **last round** (`ARCHON_HORIZON_ROUND` + 1 ==
+  `ARCHON_HORIZON_ROUNDS`), leave the workspace hand-off-clean: commit, update
+  the roadmap/task status, and write the report as if nobody continues today.
+- Interrupted anyway? Nothing is lost that was committed — the next session
+  resumes from the ledger (see "Resuming" below).
 
 ## One-shot discipline (important)
 

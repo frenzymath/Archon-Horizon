@@ -65,9 +65,17 @@ def _agent_env(role: str, context: HorizonContext) -> dict[str, str]:
         env["ARCHON_HORIZON_RUN"] = run_id
     if context.log_dir is not None:
         env["ARCHON_HORIZON_SESSION"] = context.log_dir.name
+        env["ARCHON_HORIZON_SESSION_DIR"] = str(context.log_dir.resolve())
+    if context.round_index is not None:
+        env["ARCHON_HORIZON_ROUND"] = str(context.round_index)
+    if context.rounds_total is not None:
+        env["ARCHON_HORIZON_ROUNDS"] = str(context.rounds_total)
     task = getattr(context, "task", None)
     if task is not None:
         env["ARCHON_HORIZON_TASK"] = getattr(task, "id", "") or ""
+        title = getattr(task, "title", "") or ""
+        if title:
+            env["ARCHON_HORIZON_TASK_TITLE"] = title
         projects = getattr(task, "projects", None) or ((task.project,) if getattr(task, "project", None) else ())
         if projects:
             env["ARCHON_HORIZON_PROJECTS"] = ",".join(projects)

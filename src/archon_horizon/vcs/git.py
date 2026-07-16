@@ -472,59 +472,12 @@ class WorkspaceGit:
         matched.reverse()  # oldest-first
         return matched
 
-    def run_agent_changed_files(self, run_id: str) -> set[str]:
-        """Workspace-relative paths touched by this run's *agent-authored* commits.
-
-        Provenance-scoped from the ``Archon-Run``/``Archon-Commit`` trailers: the
-        deterministic integration sweep (``kind=integration``) is excluded because
-        it can capture unrelated project files that a *parallel* run left dirty in
-        the shared worktree. Used to keep the live working-tree view of a running
-        session to this run's own files, so a sibling run's uncommitted changes in
-        the same project don't leak in. One ``git log`` call for the whole run.
-        """
-        if not self.is_repo() or not run_id:
-            return set()
-        # Marker is a plain-ASCII sentinel, not a leading \x1f: ``_run`` strips its
-        # output and Python counts \x1c–\x1f as whitespace, so a leading separator
-        # would be eaten off the first commit. File paths can't contain \x1f, so
-        # "ARCHONCOMMIT\x1f" never collides with a name-only line.
-        marker = "ARCHONCOMMIT\x1f"
-        out = self._run(
-            ["log", "--fixed-strings", f"--grep=Archon-Run: {run_id}",
-             "--name-only", "--no-renames",
-             "--format=ARCHONCOMMIT%x1f%s%x1f"
-             "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)"],
-            check=False,
-        ) or ""
-        files: set[str] = set()
-        in_agent = False
-        for line in out.splitlines():
-            if line.startswith(marker):
-                _, subject, kind_field = line.split("\x1f", 2)
-                kinds = [v.strip().lower() for v in kind_field.split("\x1e") if v.strip()]
-                # Trailer is authoritative; older commits without it infer the
-                # integration sweep from its stable subject (matching
-                # session_commits_detailed), everything else is agent work.
-                kind = kinds[-1] if kinds else (
-                    "integration" if subject.startswith("workspace[") and ": integrate " in subject else "agent"
-                )
-                in_agent = kind == "agent"
-            elif in_agent and line.strip():
-                files.add(line.strip())
-        return files
-
-    def numstat(self, base: str | None, sha: str | None, paths: Sequence[str] = ()) -> list[tuple[int, int, str]]:
-        """``(added, deleted, path)`` per changed file. A ``-`` count (binary) reads as 0.
-
-        ``sha=None`` diffs against the current **working tree** (uncommitted
-        state) — used for the live view of a running session that has not
-        committed yet. ``-uall`` includes new untracked files individually."""
+    def numstat(self, base: str | None, sha: str, paths: Sequence[str] = ()) -> list[tuple[int, int, str]]:
+        """``(added, deleted, path)`` per changed file between two commits.
+        A ``-`` count (binary) reads as 0."""
         if not self.is_repo():
             return []
-        head = [base or self._EMPTY_TREE] + ([sha] if sha is not None else [])
-        args = ["diff", "--numstat", *head]
-        if sha is None:
-            args = ["diff", "--numstat", base or self._EMPTY_TREE]
+        args = ["diff", "--numstat", base or self._EMPTY_TREE, sha]
         if paths:
             args += ["--", *paths]
         rows: list[tuple[int, int, str]] = []

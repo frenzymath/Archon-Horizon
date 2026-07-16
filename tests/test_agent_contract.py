@@ -199,3 +199,32 @@ def test_workspace_wide_task_prompt_names_no_single_project(tmp_path: Path) -> N
     )
     prompt = horizon_task_prompt(ctx)
     assert "workspace-wide" in prompt
+
+
+def test_agent_env_carries_full_session_identity(tmp_path: Path) -> None:
+    # The env is the engine-agnostic context channel: run/round/session/task are
+    # exported so Claude Code and Codex sessions can read their own identity.
+    from archon_horizon.agents.harness_agents import HarnessHorizonAgent
+
+    task = HorizonTask(id="T-9", project="ag-main", title="Prove the crux", objective="x")
+    log_dir = tmp_path / "runs" / "0004" / "sessions" / "0002-horizon-T-9"
+    log_dir.mkdir(parents=True)
+    ctx = HorizonContext(
+        workspace=_workspace(tmp_path),
+        run=RunRecord(id="0004", rounds_requested=3),
+        task=task,
+        log_dir=log_dir,
+        round_index=1,
+        rounds_total=3,
+    )
+    harness = _RecordingHarness(resume=False)
+    HarnessHorizonAgent(harness).run_task(ctx)
+
+    env = harness.request.metadata["env"]
+    assert env["ARCHON_HORIZON_RUN"] == "0004"
+    assert env["ARCHON_HORIZON_SESSION"] == "0002-horizon-T-9"
+    assert env["ARCHON_HORIZON_SESSION_DIR"] == str(log_dir.resolve())
+    assert env["ARCHON_HORIZON_ROUND"] == "1"
+    assert env["ARCHON_HORIZON_ROUNDS"] == "3"
+    assert env["ARCHON_HORIZON_TASK"] == "T-9"
+    assert env["ARCHON_HORIZON_TASK_TITLE"] == "Prove the crux"

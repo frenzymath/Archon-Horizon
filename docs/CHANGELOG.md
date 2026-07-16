@@ -26,8 +26,15 @@ rationale and measurements in
 - **HyperGraph engine** — installed by default: the dependency graph is
   generated from per-node files under `<project>/hgraph/` (agents attach
   comments and Maths/Lean reviews; `hgraph frontier` ranks what to prove next;
-  new `hgraph` skill). Degrades gracefully to the vendored leandag, then the
-  parser, if the import is unavailable.
+  new `hgraph` skill). Degrades gracefully to the plain LaTeX-parser DAG if
+  the import is unavailable. The vendored leandag engine is gone.
+- **`horizon ps`** — per-run process registry (`runs/<id>/process.json`):
+  list live runs, reap zombie markers (`--clean`), kill a stuck run
+  (`--kill <run>`); killed/crashed runs resume with `--resume`.
+- **Session identity env vars** — every session now sees
+  `ARCHON_HORIZON_RUN/SESSION/SESSION_DIR/ROUND/ROUNDS/TASK/TASK_TITLE/PROJECTS`
+  (documented in the `horizon` skill), so any engine can read its own context
+  without prompt-parsing.
 - **Engine-native orientation** — `init` writes `CLAUDE.md`/`AGENTS.md`
   pointers to the `horizon` skill, so any engine launched in the workspace
   self-orients without pushed prompt prose.
@@ -55,6 +62,14 @@ rationale and measurements in
 - Dead config from the two-agent era (`roles`, `start_with`, `end_with`,
   `ground_subagents`, `subagent_harness`, `references.transcription`,
   `scheduler.unknown_write_set_policy`) — old keys are ignored, not errors.
+  The `workspace.ground_agent` block is now fully gone too: `discuss`, the
+  post-init advisor, and `horizon subagent` all use the horizon harness.
+- The aggregate per-session "Changes" view (`/api/run/changes`,
+  `/api/run/working-changes` and their UI panel): progress is read from the
+  commit-granular git view (commit cards + per-commit file diffs), which is
+  the durable record anyway.
+- The vendored `leandag/` package and its bridge (hgraph is the rich engine;
+  the parser DAG is the only fallback).
 - The vestigial cross-process commit-lock stack, `project_checkpoint`,
   `ProjectGit`, git-notes helpers; leandag's unused exporters/queries/reporter;
   the in-memory inbox provider; prompt composition and its templates;

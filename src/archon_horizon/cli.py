@@ -23,6 +23,7 @@ from archon_horizon.commands import inbox as inbox_cmd
 from archon_horizon.commands import init as init_cmd
 from archon_horizon.commands import leandag as leandag_cmd
 from archon_horizon.commands import project as project_cmd
+from archon_horizon.commands import ps as ps_cmd
 from archon_horizon.commands import roadmap as roadmap_cmd
 from archon_horizon.commands import run as run_cmd
 from archon_horizon.commands import search as search_cmd
@@ -135,6 +136,7 @@ app.command("leandag")(leandag_cmd.leandag)
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
 app.command("usage")(usage_cmd.usage)
+app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)
 app.command("subagent", hidden=True)(subagent_cmd.subagent)
 

@@ -166,8 +166,8 @@ def build_interactive_launch(
 
 
 def _harness_for_role(cfg, role: str):
-    """Resolve the harness config backing ``ground`` or ``horizon``."""
-    name = cfg.ground_harness if role == "ground" else cfg.horizon_harness
+    """Resolve the harness config for an interactive session (horizon-only)."""
+    name = cfg.horizon_harness
     if not name:
         raise ValueError(f"config.yaml does not define a {role.capitalize()} harness")
     try:
@@ -357,44 +357,26 @@ def run_interactive_captured(
 # a short role brief that points the engine at the workspace, the docs, and the
 # on-disk state, then let the human steer from there.
 
-_ORIENTATION = """\
-You are running inside an **Archon Horizon** workspace at `{root}`.
-
-Archon Horizon orchestrates AI agents that formalize mathematics in Lean 4 across
-multiple projects. To understand the system, read (in the *package install*, not
-necessarily this workspace):
-
-- `README.md` — the detailed, self-contained reference for the whole tool.
-- `docs/` — deeper guides per topic (architecture, workspaces, orchestration,
-  inboxes, blueprints/leandag, dashboard/search, CLI reference).
-
-This workspace's live state lives under `.archon-horizon/` — `runs/` (session
-transcripts and reports), `tasks/`, `inbox/`, `blueprints/`, `roadmap`,
-`memory.md` — and its manifest is `config.yaml`. Read those to see the current
-status and what recent runs did. Prefer the `horizon` CLI for changes."""
-
 _DISCUSS_BRIEF = """\
-You are the **discuss** agent: a human-facing companion, essentially the Ground
-agent but here purely to talk with the human and do what they ask. Your job:
+You are the **discuss** companion for this Archon Horizon workspace — here to
+talk with the human and do what they ask, nothing more.
 
-- Explain the current status of this workspace and what recent runs did (read the
-  run transcripts/reports under `.archon-horizon/runs/`).
-- Answer questions about Archon Horizon itself — read `README.md`/`docs/` and,
-  when a detail isn't documented, the package source.
-- Help manage the workspace: add or adjust projects, tasks, inbox items, roadmap
-  entries, blueprints — using the `horizon` CLI.
+Load the **`horizon`** skill first (`.claude/skills/horizon/SKILL.md`): it
+explains the workspace layout, the `horizon` CLI, and where live state lives
+(`.archon-horizon/` — runs, tasks, inbox, roadmap, blueprints). For questions
+about Archon Horizon itself, read the installed package's README/docs/source.
 
 Rules of engagement:
-- Only *modify* anything when the human explicitly asks you to. Otherwise
-  explain, propose, and wait.
+- Only *modify* anything when the human explicitly asks. Otherwise explain,
+  propose, and wait.
 - Be concrete: cite exact files, task ids, and commands.
-- Start by briefly greeting the human and offering a short status summary, then
-  ask what they'd like to do."""
+- Start by briefly greeting the human with a short status summary (recent runs,
+  open tasks/inbox), then ask what they'd like to do."""
 
 
 def discuss_prompt(root: Path) -> str:
     """Seed prompt for the `horizon discuss` companion agent."""
-    return f"{_ORIENTATION.format(root=root)}\n\n{_DISCUSS_BRIEF}\n"
+    return f"You are in an **Archon Horizon** workspace at `{root}`.\n\n{_DISCUSS_BRIEF}\n"
 
 
 def horizon_seed_prompt(

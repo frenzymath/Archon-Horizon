@@ -219,7 +219,7 @@ def test_init_advisor_with_null_harness_writes_prompt_only(tmp_path: Path) -> No
     prompt = ws / ".archon-horizon" / "runs" / "post-init-advisor" / "prompt.md"
     assert prompt.exists()
     assert not (ws / ".archon-horizon" / "reports" / "post-init-advisor-prompt.md").exists()
-    assert "interactive workspace advisor" in prompt.read_text("utf-8")
+    assert "workspace advisor" in prompt.read_text("utf-8")
 
 
 def test_init_advisor_launches_interactive_claude_backend(
@@ -241,9 +241,8 @@ def test_init_advisor_launches_interactive_claude_backend(
     monkeypatch.setattr("subprocess.run", fake_run)
     config = json.dumps(
         {
-            "ground_kind": "claude-code",
-            "ground_model": "sonnet",
-            "horizon_kind": "null",
+            "horizon_kind": "claude-code",
+            "horizon_model": "sonnet",
         }
     )
 
@@ -252,7 +251,7 @@ def test_init_advisor_launches_interactive_claude_backend(
     argv, kwargs = next(call for call in calls if call[0][0] == "claude")
     assert argv[:3] == ["claude", "--model", "sonnet"]
     assert "-p" not in argv
-    assert "interactive workspace advisor" in argv[-1]
+    assert "workspace advisor" in argv[-1]
     assert kwargs["cwd"] == ws
 
 

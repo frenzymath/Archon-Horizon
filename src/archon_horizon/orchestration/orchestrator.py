@@ -500,6 +500,8 @@ class Orchestrator:
         log_dir: Path | None = None,
         resume_session_id: str | None = None,
         cancel: Cancellation | None = None,
+        round_index: int | None = None,
+        rounds_total: int | None = None,
     ) -> HorizonContext:
         return HorizonContext(
             workspace=self.workspace,
@@ -508,6 +510,8 @@ class Orchestrator:
             log_dir=log_dir,
             resume_session_id=resume_session_id,
             cancel=cancel,
+            round_index=round_index,
+            rounds_total=rounds_total,
         )
 
     # ── run bookkeeping ─────────────────────────────────────────────
@@ -767,6 +771,8 @@ class Orchestrator:
                     self._log_dir(session),
                     resume_session_id,
                     cancel,
+                    round_index=round_index,
+                    rounds_total=run.rounds_requested + run.start_round,
                 )
             )
             stop_watch.set()
@@ -1174,6 +1180,10 @@ class Orchestrator:
         self.last_paused = None
         if runlog is not None:  # a fresh/resumed launch clears any stale pause marker
             (runlog.path / "paused.json").unlink(missing_ok=True)
+        # Register this run's process (`runs/<id>/process.json`) so `horizon ps`
+        # can list live runs, spot zombies (marker present, pid dead), and kill a
+        # stuck one. Removed on clean exit; a crash leaves it for `ps` to reap.
+        self._write_process_marker(runlog)
         # Run-level spend, accumulated from each session's reported usage and
         # checked between sessions against workspace.budget.
         run_tokens_out = 0
@@ -1187,7 +1197,7 @@ class Orchestrator:
 
             if not dry_run:
                 self._queue_focus_for_round(run, initial=(not resume and i == 0))
-            self._write_blueprint_dags(rich=False)  # leandag skill reads a fresh parser DAG during horizon
+            self._write_blueprint_dags(rich=False)  # the leandag/hgraph skills read a fresh DAG during horizon
             candidates = self.task_store.list()
             selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
             # A focus pinned to a task that is not runnable (e.g. it is frozen, or
@@ -1299,7 +1309,33 @@ class Orchestrator:
         self._flush_system_session(runlog)
         self._finalize_system_session()  # close the last system session
         self._collecting = False
+        self._clear_process_marker(runlog)
         return reports
+
+    @staticmethod
+    def _write_process_marker(runlog: RunLog | None) -> None:
+        if runlog is None:
+            return
+        import os
+        import socket
+
+        try:
+            (runlog.path / "process.json").write_text(json.dumps({
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "started_at": utc_now().isoformat(),
+            }), "utf-8")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _clear_process_marker(runlog: RunLog | None) -> None:
+        if runlog is None:
+            return
+        try:
+            (runlog.path / "process.json").unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _write_pause_marker(
         self, runlog: RunLog | None, run: RunRecord, reason: str, retry_after: object = None
@@ -1338,9 +1374,9 @@ class Orchestrator:
         provider.
 
         Publish runs once per collaboration boundary (not per Horizon step), so
-        here we pay for the *rich* leandag DAG: it captures Lean source, dep/rdep
-        counts, and effort, which the dashboard needs. The cheap per-step refresh
-        stays parser-only.
+        here we pay for the *rich* hgraph build: it syncs the per-node files and
+        captures Lean source and dep/rdep counts, which the dashboard needs. The
+        cheap per-step refresh stays parser-only.
         """
         blueprint_refs = self._write_blueprint_dags(rich=True)
 
@@ -1354,10 +1390,10 @@ class Orchestrator:
     def _write_blueprint_dags(self, *, rich: bool = False) -> list[str]:
         """(Re)generate ``.archon-horizon/blueprints/<project>.json`` for every project.
 
-        Run before Horizon as well as at publish, so the leandag skill's DAG file
-        is fresh when the agent consults it mid-round. The mid-round refresh uses
-        the parser DAG because rich leandag scans can be very expensive on large
-        workspaces; publish passes ``rich=True`` once per boundary so the cached
+        Run before Horizon as well as at publish, so the DAG file is fresh when
+        the agent consults it mid-round. The mid-round refresh uses the parser
+        DAG because rich hgraph builds scan the Lean tree (expensive on large
+        workspaces); publish passes ``rich=True`` once per boundary so the cached
         DAG the dashboard serves carries Lean source and dep counts.
         """
         refs: list[str] = []

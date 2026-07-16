@@ -26,6 +26,10 @@ class HorizonContext:
     run: RunRecord
     task: HorizonTask
     log_dir: Path | None = None
+    # Which round of the run this session is (0-based) and the run's planned
+    # total — exported to the agent's env so it can pace multi-round work.
+    round_index: int | None = None
+    rounds_total: int | None = None
     # When resuming, the native engine session id of the interrupted Horizon run.
     resume_session_id: str | None = None
     # Optional cooperative cancellation token supplied by the orchestrator.

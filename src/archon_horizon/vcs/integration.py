@@ -23,10 +23,9 @@ from archon_horizon.core.workspace import Workspace
 from .git import GitError, WorkspaceGit, git_available, neutralize_nested_git
 
 
-# Commit author per acting agent, so `git log --author` / blame separate them.
+# Commit author per acting role, so `git log --author` / blame separate them.
 # The committer identity stays the system one (see git._git_env).
 _ROLE_AUTHORS: dict[str, tuple[str, str]] = {
-    "ground": ("Archon Horizon (Ground)", "ground@archon-horizon.local"),
     "horizon": ("Archon Horizon (Horizon)", "horizon@archon-horizon.local"),
     "system": ("Archon Horizon (System)", "system@archon-horizon.local"),
 }

@@ -15,7 +15,6 @@ from archon_horizon.core.workspace import Workspace
 
 from .dag import build_dag
 from .hgraph_graph import build_project_graph as build_hgraph_graph
-from .leandag_graph import build_project_graph
 from .model import Blueprint
 from .parser import parse_blueprint
 
@@ -68,26 +67,23 @@ def project_dag(workspace: Workspace, name: str) -> dict | None:
 
 
 def project_rich_dag(workspace: Workspace, name: str) -> dict | None:
-    """Rich graph for one project: hgraph → leandag → parser DAG.
+    """Rich graph for one project: hgraph, falling back to the parser DAG.
 
-    hgraph is preferred when installed — its sync also maintains the per-node
-    files (with agent comments/reviews) under ``<project>/hgraph/``. Slow (both
-    engines scan the Lean tree) — call from the build/cache step, not the live
-    per-poll server path.
+    hgraph's sync also maintains the per-node files (with agent comments and
+    reviews) under ``<project>/hgraph/``. Slow (it scans the Lean tree) — call
+    from the build/cache step, not the live per-poll server path.
     """
     proj = workspace.project(name)
     project_root = workspace.root / proj.path
     bp_dir = _find_blueprint_dir(project_root, proj.blueprint_path, workspace.root)
     rich = build_hgraph_graph(project_root, bp_dir)
-    if rich is None:
-        rich = build_project_graph(project_root, bp_dir)
     if rich is not None:
         return rich
     return project_dag(workspace, name)
 
 
 def workspace_dags_rich(workspace: Workspace) -> dict[str, dict]:
-    """Rich DAGs for every project (hgraph/leandag when available, else parser)."""
+    """Rich DAGs for every project (hgraph when available, else the parser)."""
     out: dict[str, dict] = {}
     for name in workspace.projects:
         dag = project_rich_dag(workspace, name)

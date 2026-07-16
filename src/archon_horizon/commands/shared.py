@@ -52,11 +52,11 @@ def github_cli_status() -> tuple[str, str]:
 def agent_author(default: str | None = None) -> str | None:
     """The author to stamp on agent-authored writes, from the run environment.
 
-    The orchestrator exports ``ARCHON_HORIZON_AGENT_ROLE`` (``ground``/``horizon``)
-    for the agent it is running; everything else falls back to ``default``.
+    The orchestrator exports ``ARCHON_HORIZON_AGENT_ROLE`` (``horizon``) for the
+    agent it is running; everything else falls back to ``default``.
     """
     role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    if role in {"ground", "horizon"}:
+    if role == "horizon":
         return role
     return default
 

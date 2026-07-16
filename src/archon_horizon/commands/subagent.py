@@ -52,7 +52,7 @@ class SubagentCommand:
         cfg = load_config(self.root)
         workspace = build_workspace(cfg, self.root)
         harnesses = HarnessRegistry().build_all(cfg.harnesses)
-        default_harness = harnesses.get(cfg.ground_harness or "")
+        default_harness = harnesses.get(cfg.horizon_harness or "")
         registry = build_registry(
             workspace.state_path / "subagents",
             harnesses=harnesses,

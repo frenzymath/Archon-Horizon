@@ -42,8 +42,8 @@ inbox (skill: `horizon-inbox`) for cross-node or cross-session coordination.
 
 ## Relation to the blueprint DAG
 
-The dashboard's blueprint DAG is generated from the hgraph when it is
-installed (falling back to the leandag scan / plain parser otherwise) — so
-keeping the blueprint `\uses{}`/`\lean{}` annotations correct (skill:
-`blueprint-conventions`) is what keeps this graph correct. `horizon leandag`
-still answers cone/dependency queries from the cached DAG (skill: `leandag`).
+The dashboard's blueprint DAG is generated from the hgraph (with a plain
+LaTeX-parser fallback when hgraph is unavailable) — so keeping the blueprint
+`\uses{}`/`\lean{}` annotations correct (skill: `blueprint-conventions`) is
+what keeps this graph correct. `horizon leandag` still answers cone/dependency
+queries from the cached DAG JSON (skill: `leandag`).

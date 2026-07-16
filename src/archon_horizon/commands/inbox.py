@@ -46,7 +46,7 @@ def _resolve_authorship(author: str | None, agent: str | None = None) -> tuple[s
     the environment) keeps whatever ``--author`` they pass."""
     detail = (agent or "").strip() or None
     role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    role = role if role in {"ground", "horizon"} else ""
+    role = role if role == "horizon" else ""
     if role:
         # A subagent that typed its own name into --author: demote it to detail.
         if detail is None and author and author.strip().lower() != role:
