@@ -1,19 +1,14 @@
-"""Git model: workspace manifest repo and out-of-tree project VCS."""
+"""Git model: the single out-of-tree workspace ledger."""
 
 from __future__ import annotations
 
-import json
 import subprocess
-import threading
-import time
 from pathlib import Path
 
 import pytest
 
-from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
-from archon_horizon.vcs import collect_revisions, git_available, project_git_for
-from archon_horizon.vcs.git import ProjectGit, WorkspaceGit
-from archon_horizon.vcs.integration import _COMMIT_QUEUE_STALE_S, _workspace_commit_queue
+from archon_horizon.vcs import git_available
+from archon_horizon.vcs.git import WorkspaceGit
 
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
 
@@ -37,62 +32,6 @@ def test_workspace_git_commits(tmp_path: Path) -> None:
     sha = git.commit("initial")
     assert sha and len(sha) >= 7
     assert git.commit("no changes") is None  # nothing to commit
-
-
-def test_workspace_commit_queue_waits_for_current_holder(tmp_path: Path) -> None:
-    workspace = Workspace(name="ws", root=tmp_path)
-    first_entered = threading.Event()
-    release_first = threading.Event()
-    second_entered = threading.Event()
-
-    def first() -> None:
-        with _workspace_commit_queue(workspace):
-            first_entered.set()
-            assert release_first.wait(timeout=2.0)
-
-    def second() -> None:
-        assert first_entered.wait(timeout=2.0)
-        with _workspace_commit_queue(workspace):
-            second_entered.set()
-
-    t1 = threading.Thread(target=first)
-    t2 = threading.Thread(target=second)
-    t1.start()
-    t2.start()
-    assert first_entered.wait(timeout=2.0)
-    time.sleep(0.1)
-    assert not second_entered.is_set()
-    release_first.set()
-    t1.join(timeout=2.0)
-    t2.join(timeout=2.0)
-    assert second_entered.is_set()
-    assert not (workspace.state_path / "locks" / "commit.lock").exists()
-
-
-def test_workspace_commit_queue_reclaims_stale_cross_host_lock(tmp_path: Path) -> None:
-    # A lock left by a crashed process on *another* host looks alive
-    # (`_process_alive` can't probe cross-host and returns True). Without the
-    # staleness backstop this would wait forever; an aged `created_at` must let
-    # the next committer steal it and proceed.
-    workspace = Workspace(name="ws", root=tmp_path)
-    lock = workspace.state_path / "locks" / "commit.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text(json.dumps({
-        "pid": 999999, "host": "some-other-host", "workspace": "ws",
-        "created_at": time.time() - _COMMIT_QUEUE_STALE_S - 60,
-    }), "utf-8")
-
-    entered = threading.Event()
-
-    def acquire() -> None:
-        with _workspace_commit_queue(workspace):
-            entered.set()
-
-    t = threading.Thread(target=acquire)
-    t.start()
-    assert entered.wait(timeout=2.0), "stale cross-host lock was not reclaimed"
-    t.join(timeout=2.0)
-    assert not lock.exists()
 
 
 def test_files_in_commit_lists_touched_paths(tmp_path: Path) -> None:
@@ -148,30 +87,18 @@ def test_workspace_git_force_adds_horizon_ledger_paths(tmp_path: Path) -> None:
     assert ".archon-horizon/events.jsonl" in tracked
 
 
-def test_project_git_outside_tree_and_manifest(tmp_path: Path) -> None:
+def test_project_files_tracked_through_workspace_ledger(tmp_path: Path) -> None:
+    # There is no per-project repository: a project's history is the single
+    # workspace ledger filtered by pathspec.
     _configure_identity(tmp_path)
     proj_dir = tmp_path / "projects" / "p"
     proj_dir.mkdir(parents=True)
-    git_dir = tmp_path / ".archon-horizon" / "vcs" / "p.git"
-
-    pg = ProjectGit(git_dir=git_dir, work_tree=proj_dir)
-    pg.init()
-    assert git_dir.exists()
-    assert not (proj_dir / ".git").exists()  # no nested repo in the tree
     (proj_dir / "Foo.lean").write_text("def foo := 1\n", "utf-8")
-    sha = pg.commit("add foo")
-    assert sha
 
-    workspace = Workspace(
-        name="ws",
-        root=tmp_path,
-        projects={
-            "p": Project(
-                name="p",
-                path=Path("projects/p"),
-                vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/p.git")),
-            )
-        },
-    )
-    assert project_git_for(workspace, "p") is not None
-    assert collect_revisions(workspace)["p"] == sha
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    sha = git.commit("add foo", paths=["projects/p"])
+    assert sha
+    assert not (proj_dir / ".git").exists()  # no nested repo in the tree
+    assert "projects/p/Foo.lean" in git.files_in_commit(sha)
+    assert [row["sha"] for row in git.log(paths=["projects/p"])] == [sha]

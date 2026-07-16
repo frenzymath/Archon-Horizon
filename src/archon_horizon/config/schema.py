@@ -85,28 +85,11 @@ class HarnessConfig:
 @dataclass(frozen=True, slots=True)
 class SchedulerConfig:
     max_parallel_sessions: int = 1
-    unknown_write_set_policy: str = "lock-project"
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "SchedulerConfig":
         return cls(
             max_parallel_sessions=int(data.get("max_parallel_sessions", 1)),
-            unknown_write_set_policy=data.get("unknown_write_set_policy", "lock-project"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceTranscriptionConfig:
-    """Harness/model override for page-level reference transcription."""
-
-    harness: str | None = None
-    model: str | None = None
-
-    @classmethod
-    def from_raw(cls, data: dict[str, Any]) -> "ReferenceTranscriptionConfig":
-        return cls(
-            harness=str(data["harness"]) if data.get("harness") else None,
-            model=str(data["model"]) if data.get("model") else None,
         )
 
 
@@ -236,52 +219,18 @@ class ProjectConfig:
         )
 
 
-_VALID_ROLES = ("ground", "horizon")
-
-
-def _parse_roles(raw: Any) -> tuple[str, ...]:
-    """Normalize ``workspace.roles`` to an ordered, de-duplicated subset of
-    ``{ground, horizon}``. Accepts a list or a single string; anything empty or
-    unrecognized falls back to both roles (the default alternation)."""
-    if raw is None:
-        return _VALID_ROLES
-    values = [raw] if isinstance(raw, str) else list(raw)
-    seen: list[str] = []
-    for value in values:
-        role = str(value).strip().lower()
-        if role in _VALID_ROLES and role not in seen:
-            seen.append(role)
-    return tuple(seen) if seen else _VALID_ROLES
-
-
 @dataclass(frozen=True, slots=True)
 class WorkspaceConfig:
     name: str
     state_dir: str = ".archon-horizon"
     rounds: int = 1
-    # The run is a flat ground/horizon alternation. By default it opens on
-    # horizon and closes on ground — each round is one Horizon step followed by a
-    # reconcile Ground, giving H-G-H-G-…-G with no upfront planning Ground. Set
-    # ``start_with: ground`` to prepend an opening planning Ground (useful for
-    # unfocused runs that need work selected first), or ``end_with: horizon`` to
-    # drop the final reconcile Ground.
-    start_with: str = "horizon"
-    end_with: str = "ground"
-    # Which agent roles the run loop drives. Default is both, giving the normal
-    # ground/horizon alternation. ``roles: [horizon]`` runs a Horizon-only loop
-    # (every round is a Horizon step, no Ground); ``roles: [ground]`` runs a
-    # Ground-only loop (every round is one Ground session, no Horizon). An empty or
-    # unrecognized value falls back to both.
-    roles: tuple[str, ...] = ("ground", "horizon")
+    # Harness for auxiliary human-driven sessions (`horizon discuss`, the
+    # post-init advisor) and the default for `horizon subagent`. The orchestrated
+    # run loop is horizon-only and never reads this.
     ground_harness: str | None = None
     horizon_harness: str | None = None
-    ground_subagents: tuple[str, ...] | None = None
-    # Harness (and thus model) used to run Ground's subagents. Defaults to the
-    # Ground harness when unset; set to point subagents at a cheaper/larger model.
-    subagent_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     external_libraries: tuple[ExternalLibrary, ...] = ()
-    reference_transcription: ReferenceTranscriptionConfig = field(default_factory=ReferenceTranscriptionConfig)
     harnesses: dict[str, HarnessConfig] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
     github: GithubConfig = field(default_factory=GithubConfig)
@@ -294,25 +243,16 @@ class WorkspaceConfig:
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "WorkspaceConfig":
         ws = data.get("workspace", {})
-        subagents = ws.get("ground_agent", {}).get("subagents")
         freeze = data.get("freeze", {})
         return cls(
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
-            start_with=str(ws.get("start_with", "horizon")).lower(),
-            end_with=str(ws.get("end_with", "ground")).lower(),
-            roles=_parse_roles(ws.get("roles")),
             ground_harness=ws.get("ground_agent", {}).get("harness"),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
-            ground_subagents=tuple(subagents) if subagents is not None else None,
-            subagent_harness=ws.get("ground_agent", {}).get("subagent_harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
             external_libraries=tuple(
                 ExternalLibrary.from_raw(e) for e in (data.get("external_libraries") or ())
-            ),
-            reference_transcription=ReferenceTranscriptionConfig.from_raw(
-                (data.get("references", {}) or {}).get("transcription", {}) or {}
             ),
             harnesses={
                 name: HarnessConfig.from_raw(name, h)
@@ -329,24 +269,3 @@ class WorkspaceConfig:
             freeze_declarations=tuple(freeze.get("declarations", ())),
             freeze_blueprint_nodes=tuple(freeze.get("blueprint_nodes", ())),
         )
-
-    @property
-    def reference_transcription_harness_name(self) -> str | None:
-        """Harness used for page transcription after applying defaults.
-
-        Reference transcription defaults to the same harness used for descriptor
-        subagents, which itself defaults to Ground. A config override under
-        ``references.transcription.harness`` wins.
-        """
-        return self.reference_transcription.harness or self.subagent_harness or self.ground_harness
-
-    @property
-    def reference_transcription_model_name(self) -> str | None:
-        """Model used for page transcription after applying defaults."""
-        if self.reference_transcription.model:
-            return self.reference_transcription.model
-        harness_name = self.reference_transcription_harness_name
-        if harness_name is None:
-            return None
-        harness = self.harnesses.get(harness_name)
-        return harness.model if harness is not None else None

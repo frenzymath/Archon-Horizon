@@ -3,17 +3,17 @@ name: horizon-inbox
 description: Read and act on the Archon Horizon inbox — list/filter agent-ready items, understand labels/kinds, comment, archive, create, and message other projects via the `horizon inbox` CLI.
 ---
 
-The inbox is the durable channel between the human, the Ground agent, the
-Horizon agent, and other projects. Act on it through the CLI; never edit inbox
-files by hand. Prefer `--json` whenever reading command output for exact ids or
+The inbox is the durable channel between the human, agent sessions (present and
+future), and other projects. Act on it through the CLI; never edit inbox files
+by hand. Prefer `--json` whenever reading command output for exact ids or
 fields.
 
 ## Read
 
 - `horizon inbox list` — read the inbox. Use `--json` when you need exact ids,
   labels, scope, author, audience, timestamps, or comments. Use the list filters
-  to narrow without losing the overview: `--to horizon`, `--to ground`,
-  `--to human`, `--project P`, repeated `--kind K`, repeated `--label L`,
+  to narrow without losing the overview: `--to horizon`, `--to human`,
+  `--project P`, repeated `--kind K`, repeated `--label L`,
   `--status open`, `--query TEXT`, `--limit N`, and `--comments N`.
 - Labels are the release gate. Local inbox items default to `agent-ready`, which
   means they are visible to agents at run boundaries. Keep that default for
@@ -21,8 +21,9 @@ fields.
   it helps later agents see that the human has already been notified and avoids
   duplicate reports. Use `not-ready`, `rejected`, or no labels only when there is
   a concrete reason agents should not see or act on the item yet.
-- Audience says who should read the item: empty/general, `horizon`, `ground`,
-  `human`, or `project:<name>`. Scope/project says what the item is about.
+- Audience says who should read the item: empty/general, `horizon`, `human`,
+  or `project:<name>` (older items may carry the legacy `ground` audience).
+  Scope/project says what the item is about.
 - Horizon reads general items, items addressed to `horizon`, and items addressed
   to its project. It should ignore other projects' addressed items.
 - Kinds: `hint` (normal guidance), `issue` (problem to fix/report),
@@ -34,7 +35,7 @@ fields.
 ## Act
 
 Authorship is automatic: every item and comment you create through the CLI is
-attributed to your role (`ground` or `horizon`) from the run environment — you do
+attributed to your role (normally `horizon`) from the run environment — you do
 **not** pass `--author` (a stray `--author blueprint-reviewer` is demoted to the
 `agent` metadata, not used as the author, so the author set stays conventional).
 If you are a dispatched **subagent**, add `--agent <your-name>` (e.g. `--agent
@@ -82,8 +83,8 @@ obvious and then run `horizon inbox archive <id>`.
   when a key step lands, record it there in the same mathematical, legible style.
 - `horizon inbox archive <id>` — soft-delete: keep the item for the record but
   hide it from the dashboard by default. Use for stale, superseded, consumed, or
-  no-longer-key context. Ground is responsible for keeping the inbox tidy this
-  way, including pruning memory/info so they remain small.
+  no-longer-key context. Keeping the inbox tidy this way is your job (or the
+  janitor subagent's) — prune memory/info so they remain small.
 - `horizon inbox complete <id>` — mark an item resolved only when it records work
   you genuinely concluded and want to keep visible outside the archive. Before
   completing, add a short **conclusion comment**: first the mathematical
@@ -92,7 +93,7 @@ obvious and then run `horizon inbox archive <id>`.
   grasp the result and how it was concluded without opening the logs.
 - `horizon inbox add --body "Short title\n\nDescription with details and next action." [--to R] [--project P] [--persistent|--temporary] [--agent <name> if a subagent]`
   — open a new item.
-  - `--to` is the recipient: `horizon`, `ground`, `human`, or `project:<name>`.
+  - `--to` is the recipient: `horizon`, `human`, or `project:<name>`.
     Use `--to project:<name>` to message another project (e.g. "I rewrote your
     `foo` declaration more cleanly, you may want it").
   - `--project` says what the item is ABOUT (its subject).

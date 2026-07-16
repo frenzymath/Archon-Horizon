@@ -295,7 +295,7 @@ def aggregate_session_summary(
     """Aggregate all of a session's commits into one change summary.
 
     ``commits`` is ``[(sha, subject), …]`` oldest-first (from
-    :meth:`WorkspaceGit.session_commits`). Each commit is diffed against its own
+    :meth:`WorkspaceGit.session_commits_detailed`). Each commit is diffed against its own
     git parent (what that commit changed); per-file the deltas are summed (the
     session's own contribution) while the *after* values are taken from the
     latest commit, so the roll-ups reflect the whole session's work without the

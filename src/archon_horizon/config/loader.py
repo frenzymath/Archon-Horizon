@@ -2,9 +2,8 @@
 
 ``build_orchestrator`` is the payoff: a directory containing ``config.yaml``
 becomes a wired, runnable :class:`Orchestrator`. Engine selection is entirely
-config-driven — the Ground/Horizon agents receive whichever ``Harness`` the
-registry built for the names in ``workspace.ground_agent.harness`` /
-``horizon_agent.harness``.
+config-driven — the Horizon agent receives whichever ``Harness`` the registry
+built for the name in ``workspace.horizon_agent.harness``.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from archon_horizon.orchestration.orchestrator import Orchestrator
 from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
 from archon_horizon.runlog import RunLogTree
-from archon_horizon.subagents.registry import build_subagents
 from archon_horizon.store.base import (
     EventLog,
     MemoryStore,

@@ -13,7 +13,7 @@ from archon_horizon.config.loader import build_workspace, load_config
 from archon_horizon.core.tasks import WriteSet
 from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
 from archon_horizon.vcs.git import WorkspaceGit, git_available
-from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session, project_checkpoint
+from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session
 
 
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")

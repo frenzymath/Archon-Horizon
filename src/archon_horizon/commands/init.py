@@ -38,13 +38,6 @@ external_libraries:
   #   path: vendor/vendored
   #   git: https://example.com/vendored.git
 
-references:
-  transcription:
-    # Page-level PDF transcription defaults to the Ground subagent harness.
-    # Override both fields to pin a cheap vision-capable model.
-    # harness: ground-default
-    # model: <vision-capable-model>
-
 harnesses:
   ground-default:
     kind: "{ground_kind}"
@@ -71,11 +64,6 @@ projects: {{}}
 # you hand-authored your own descriptor under one of these names, rename it
 # before ``horizon init --update`` or it will be deleted.
 _LEGACY_SEEDED_SUBAGENTS: tuple[str, ...] = ("blueprint-reviewer", "diff-auditor")
-
-
-def _default_model(kind: str) -> str:
-    # We return empty strings to defer to the harness's own config.
-    return ""
 
 
 def _options_block(kind: str) -> str:
@@ -222,10 +210,10 @@ def _print_config_summary(data: dict) -> None:
     table.add_column("Value", style="#8b5cf6")
     table.add_row("Workspace Name", str(data.get("name", "")))
     
-    ground_model = data.get("ground_model") or _default_model(str(data.get("ground_kind", "")))
+    ground_model = data.get("ground_model")
     table.add_row("Ground Agent", f"{data.get('ground_kind', '')} ({ground_model})")
     
-    horizon_model = data.get("horizon_model") or _default_model(str(data.get("horizon_kind", "")))
+    horizon_model = data.get("horizon_model")
     table.add_row("Horizon Agent", f"{data.get('horizon_kind', '')} ({horizon_model})")
     
     table.add_row("Mathlib Version", str(data.get("mathlib_version", "")))
@@ -516,9 +504,9 @@ class InitCommand:
         data = {
             "name": self.root.resolve().name,
             "ground_kind": "claude-code",
-            "ground_model": None,
+            "ground_model": "",  # blank defers to the engine's own default
             "horizon_kind": "claude-code",
-            "horizon_model": None,
+            "horizon_model": "",
             "mathlib_version": _detect_mathlib_version(self.root),
             "rounds": 5,
             "parallel": 1,
@@ -550,9 +538,10 @@ class InitCommand:
                     inf = old_conf["harnesses"].get("ground-default", {})
                     hor = old_conf["harnesses"].get("horizon-default", {})
                     data["ground_kind"] = inf.get("kind", data["ground_kind"])
-                    data["ground_model"] = inf.get("model", data["ground_model"])
+                    # `model:` with no value parses as None — keep the template blank.
+                    data["ground_model"] = inf.get("model") or data["ground_model"]
                     data["horizon_kind"] = hor.get("kind", data["horizon_kind"])
-                    data["horizon_model"] = hor.get("model", data["horizon_model"])
+                    data["horizon_model"] = hor.get("model") or data["horizon_model"]
                 if "github" in old_conf:
                     data["github_enabled"] = str(old_conf["github"].get("enabled", "false")).lower()
                     data["github_repo"] = old_conf["github"].get("repo", data["github_repo"])
@@ -615,14 +604,14 @@ class InitCommand:
                     log.step(line)
                 data["ground_model"] = Prompt.ask(
                     "Ground agent model",
-                    default=data["ground_model"] or _default_model(data["ground_kind"])
+                    default=data["ground_model"]
                 )
                 if data["horizon_kind"] != data["ground_kind"]:
                     for line in _model_help(data["horizon_kind"]):
                         log.step(line)
                 data["horizon_model"] = Prompt.ask(
                     "Horizon agent model",
-                    default=data["horizon_model"] or _default_model(data["horizon_kind"])
+                    default=data["horizon_model"]
                 )
 
                 for key, label in [("ground_model", "Ground"), ("horizon_model", "Horizon")]:
@@ -650,12 +639,6 @@ class InitCommand:
                 
                 data["goal"] = Prompt.ask("Initial project goal (optional)", default=data.get("goal", ""))
             
-            # Finalize models if not explicitly provided (e.g. from JSON)
-            if not data["ground_model"]:
-                data["ground_model"] = _default_model(data["ground_kind"])
-            if not data["horizon_model"]:
-                data["horizon_model"] = _default_model(data["horizon_kind"])
-
             # Only emit engine-specific harness options for the matching kind, so
             # Codex's `effort` never leaks onto a claude-code harness (or vice-versa).
             data["ground_options"] = _options_block(str(data["ground_kind"]))

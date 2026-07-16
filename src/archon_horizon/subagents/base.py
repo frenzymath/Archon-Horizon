@@ -121,9 +121,9 @@ class DescriptorSubagent(Subagent):
             {directive.strip()}
 
             Report back concisely in whatever structure best fits — lead with the
-            outcome, keep it short, and file inbox items for anything the Ground
-            agent must act on. Write the report to the report path if one is
-            provided, and also return it as your final response.
+            outcome, keep it short, and file inbox items for anything a future
+            session or a human must act on. Write the report to the report path
+            if one is provided, and also return it as your final response.
         """)
 
     def run(self, context: SubagentContext) -> SubagentResult:

@@ -1,12 +1,12 @@
 ---
 name: subagents
-description: How the Ground agent delegates to native subagents to divide review/upkeep work — spawning by name, read-only enforcement, model tiers, and the dynamic descriptor roster.
+description: How the Horizon agent delegates to native subagents to divide review/upkeep work — spawning by name, read-only enforcement, model tiers, and the dynamic descriptor roster.
 ---
 
-Subagents are **Ground's toolkit**: focused helpers the Ground agent spawns to
-divide up review and upkeep after a Horizon run. The Horizon agent does not
-spawn them — it makes its own progress and lets Ground's subagents check it
-afterward.
+Subagents are **your toolkit for delegation**: focused helpers you spawn to
+divide up review and upkeep while you keep proving. There is no separate Ground
+agent — when you judge the work needs tidying or a fresh-eyes check (see the
+`horizon` skill), spawn the right subagent yourself, then carry on.
 
 Each subagent is a single Markdown descriptor in
 `.archon-horizon/subagents/<name>.md`. At the start of every `horizon run` those
@@ -16,8 +16,8 @@ workspace-local:
 - Claude Code → `.claude/agents/<name>.md`
 - Codex → `.codex/agents/<name>.toml`
 
-The current roster is also injected into the Ground prompt from those
-descriptors. Use that summary to pick the right subagent and scope.
+List the descriptors under `.archon-horizon/subagents/` to see the current
+roster; pick the right subagent and scope from their descriptions.
 
 ## Dispatch
 

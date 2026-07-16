@@ -27,7 +27,7 @@ from archon_horizon.core.events import Event
 from archon_horizon.core.freeze import FreezeSet, frozen_violations
 from archon_horizon.core.inbox import InboxItem, InboxKind, InboxStatus, reaches_horizon
 from archon_horizon.core.labels import is_agent_ready
-from archon_horizon.core.permissions import WriteDomain, horizon_write_domain, ground_write_domain
+from archon_horizon.core.permissions import WriteDomain, horizon_write_domain
 from archon_horizon.core.roadmap import Roadmap, RoadmapStatus
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.sessions import RunRecord, SyncBoundary
@@ -48,11 +48,9 @@ from archon_horizon.store.base import (
     TaskStore,
 )
 from archon_horizon.vcs.integration import (
-    author_for,
     integrate_workspace_baseline,
     integrate_workspace_run,
     integrate_workspace_session,
-    project_checkpoint,
 )
 
 from .scheduler import Scheduler
@@ -127,12 +125,6 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
             detail = ", ".join(f"{tid} is {status}" for tid, status in tasks.items())
             return f"Focus task(s) not runnable ({detail}); the scheduler only runs queued tasks."
         return "The pinned focus task(s) were not runnable."
-    if event_type == "ground.failed":
-        reason = data.get("reason") or data.get("failure_reason")
-        rc = data.get("returncode")
-        bits = [b for b in (f"exit {rc}" if rc is not None else "", str(reason) if reason else "") if b]
-        detail = f" ({'; '.join(bits)})" if bits else ""
-        return f"Ground session crashed{detail}; the round's plan/reconcile may be incomplete."
     if event_type == "run.dry-run":
         return f"Dry run planned tasks: {_csv(data.get('planned'))}."
     if event_type == "roadmap.load_failed":
@@ -140,7 +132,7 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
     if event_type == "roadmap.restored":
         return "Restored roadmap from the last clean in-memory copy."
     if event_type == "roadmap.updated":
-        return "Roadmap reloaded after Ground session."
+        return "Roadmap reloaded."
     if event_type == "roadmap.deps_unmet":
         return (
             f"Roadmap milestone {data.get('roadmap_id')} has unmet dependencies "
@@ -276,7 +268,6 @@ def _is_issue_event(event: TranscriptEvent) -> bool:
         "agent.frozen",
         "run.stopped",
         "run.focus_unrunnable",
-        "ground.failed",
     }:
         return True
     status = str(data.get("status") or "")
@@ -313,7 +304,7 @@ class Orchestrator:
     _roadmap_cache: Roadmap | None = field(default=None, repr=False)
     # Orchestrator events buffered into a "system" session transcript, so the
     # deterministic work between agents (commits, sync, integration, publish) is
-    # visible in the Log alongside the ground/horizon sessions.
+    # visible in the Log alongside the horizon sessions.
     _system_buffer: list[TranscriptEvent] = field(default_factory=list, repr=False)
     _collecting: bool = field(default=False, repr=False)
     # The system session currently being written. Consecutive deterministic work
@@ -356,7 +347,7 @@ class Orchestrator:
             status_str = str(data.get('status')).split('.')[-1]
             log.step(f"[{actor}] Finished task: {data.get('task_id')} ({status_str})")
         elif type == "subagent.ran":
-            log.step(f"[ground] Subagent '{data.get('name')}' finished (ok={data.get('ok')})")
+            log.step(f"Subagent '{data.get('name')}' finished (ok={data.get('ok')})")
         elif type == "task.lock_warning":
             log.warn(f"[horizon] Task {data.get('task_id')} overlaps a concurrent run's write set; "
                      "running anyway (advisory lock).")

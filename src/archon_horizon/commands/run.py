@@ -21,8 +21,8 @@ from archon_horizon.log import log
 from .dashboard import LOCAL_DASHBOARD_HOST, resolve_dashboard_host
 from .shared import emit_json, inbox_providers, load_workspace
 
-# The single-agent run targets. ``horizon run ground`` / ``horizon run horizon``
-# drive exactly one session of that role instead of the usual G/H alternation.
+# The single-agent run target: ``horizon run horizon`` drives exactly one
+# Horizon session over the current focus.
 ROLE_TARGETS = ("horizon",)
 
 
@@ -99,18 +99,17 @@ class RunCommand:
                 return
 
             if not self.targets:
-                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `ground`, `horizon`, task names, project names, or files.")
+                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `horizon`, task names, project names, or files.")
                 raise typer.Exit(1)
 
-            # `--supervisor`: the lightweight automated mode — N rounds of Horizon-only
-            # sessions with a scheduled Ground *upkeep* pass every `--upkeep-every`
-            # rounds, instead of the mandatory Ground/Horizon alternation.
+            # `--supervisor`: the lightweight automated mode — N rounds of
+            # Horizon-only sessions over the requested focus.
             if self.supervisor:
                 reports = self._run_supervisor(orch, cfg)
                 self._emit_reports(reports)
                 return
 
-            # `horizon run ground` / `horizon run horizon`: one session of that role.
+            # `horizon run horizon`: one session of the role.
             if len(self.targets) == 1 and self.targets[0] in ROLE_TARGETS:
                 reports = self._run_single_role(orch, self.targets[0])
                 self._emit_reports(reports)
@@ -189,11 +188,11 @@ class RunCommand:
         """The role to launch interactively when its harness declares
         ``backend: interactive``, else ``None``.
 
-        Interactive is a single human-driven session, so we pick the ONE role the
-        target would drive: ``horizon run ground`` → Ground; anything that dispatches
-        Horizon (a task, a project, ``.``/``*``, or ``horizon run horizon``) → Horizon
-        if the Horizon harness opts in. A ``--resume`` counts too: it continues the
-        interrupted run's role interactively (resuming the engine conversation)."""
+        Interactive is a single human-driven session. Every target shape drives a
+        Horizon session (a task, a project, ``.``/``*``, or ``horizon run
+        horizon``), so the Horizon harness's opt-in governs. A ``--resume`` counts
+        too: it continues the interrupted run interactively (resuming the engine
+        conversation)."""
         try:
             cfg, _ = load_workspace(self.root)
         except Exception:
@@ -527,7 +526,7 @@ class RunCommand:
 
 def run(
     ctx: typer.Context,
-    targets: list[str] = typer.Argument(None, help="Run target: '.', '*', 'ground', 'horizon', a task id, a roadmap item id, project names, or files (resolved task > roadmap > project)."),
+    targets: list[str] = typer.Argument(None, help="Run target: '.', '*', 'horizon', a task id, a roadmap item id, project names, or files (resolved task > roadmap > project)."),
     task: str | None = typer.Option(None, "--task", help="Pin one task name."),
     rounds: int | None = typer.Option(None, "--rounds", help="Override configured round count."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only; do not run Horizon."),
@@ -537,7 +536,7 @@ def run(
     ),
     backend: str = typer.Option(
         "default", "--backend",
-        help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine for a single role so you can type prompts (claude/codex sessions are still parsed into the Log) — use with `ground` or `horizon`.",
+        help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine so you can type prompts (claude/codex sessions are still parsed into the Log).",
     ),
     bare: bool = typer.Option(
         False, "--bare",
@@ -549,7 +548,7 @@ def run(
     ),
     run_id: str | None = typer.Option(
         None, "--run",
-        help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving ground/horizon into one run keeps the logs and dashboard grouped. Use with `ground` or `horizon`.",
+        help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving sessions into one run keeps the logs and dashboard grouped. Use with `horizon`.",
     ),
     round_index: int | None = typer.Option(
         None, "--round",
@@ -570,9 +569,8 @@ def run(
     Targets resolve in order **task id > roadmap item id > project/file**: a task
     id runs that human-created task; a roadmap item id infers and runs a task for
     that mathematical milestone; a project name / file / `.` runs an ad-hoc task.
-    `*` runs all queued tasks. A single role — `ground` (one planning session) or
-    `horizon` (one prover session) — runs just that role. Add `--backend
-    interactive` to drive a role in a live terminal.
+    `*` runs all queued tasks. `horizon` runs one prover session over the focus.
+    Add `--backend interactive` to drive the session in a live terminal.
     """
     try:
         dashboard_host = resolve_dashboard_host(host, public)

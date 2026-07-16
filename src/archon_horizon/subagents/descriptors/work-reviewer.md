@@ -31,4 +31,4 @@ Give a clear verdict on whether the work is converging, churning, or stuck, with
 
 The output should be structured and concise, it should be clear if it is really progressing, or faking progress, the reasons should only be clear. 
 
-You write nothing but your report and inbox items — you don't apply fixes. That's the Ground agent's call and Horizon's work.
+You write nothing but your report and inbox items — you don't apply fixes. Acting on them is the Horizon agent's work.

@@ -111,33 +111,6 @@ def test_project_dependencies_are_loaded(tmp_path: Path) -> None:
     assert workspace.project("consumer").depends_on == ("shared",)
 
 
-def test_reference_transcription_config_defaults_and_overrides(tmp_path: Path) -> None:
-    _write_config(tmp_path)
-    cfg = load_config(tmp_path)
-    assert cfg.reference_transcription.harness is None
-    assert cfg.reference_transcription_model_name is None
-    assert cfg.reference_transcription_harness_name == "ground-default"
-
-    body = CONFIG.replace(
-        "projects:\n",
-        "references:\n"
-        "  transcription:\n"
-        "    harness: cheap-vision\n"
-        "    model: flash-transcriber\n"
-        "harnesses:\n"
-        "  cheap-vision:\n"
-        "    kind: null\n"
-        "    model: default-cheap\n"
-        "projects:\n",
-    )
-    overridden = tmp_path / "overridden"
-    overridden.mkdir()
-    _write_config(overridden, body)
-    cfg2 = load_config(overridden)
-    assert cfg2.reference_transcription_harness_name == "cheap-vision"
-    assert cfg2.reference_transcription_model_name == "flash-transcriber"
-
-
 def test_external_libraries_parsed_and_resolved(tmp_path: Path) -> None:
     body = CONFIG.replace(
         "projects:\n",
@@ -565,23 +538,15 @@ def test_resume_run_id_zero_pads_bare_number(tmp_path: Path) -> None:
     assert run.id == "0001"
 
 
-def test_roles_parse_defaults_and_filters() -> None:
-    from archon_horizon.config.schema import _parse_roles
-
-    assert _parse_roles(None) == ("ground", "horizon")          # unset -> both
-    assert _parse_roles([]) == ("ground", "horizon")            # empty -> both
-    assert _parse_roles(["bogus"]) == ("ground", "horizon")     # unknown -> both
-    assert _parse_roles(["horizon"]) == ("horizon",)
-    assert _parse_roles(["ground"]) == ("ground",)
-    assert _parse_roles("horizon") == ("horizon",)              # bare string
-    assert _parse_roles(["Horizon", "GROUND"]) == ("horizon", "ground")  # case-insensitive
-    assert _parse_roles(["horizon", "ground", "horizon"]) == ("horizon", "ground")  # dedup, ordered
-
-
-def test_roles_parsed_from_workspace_config(tmp_path: Path) -> None:
-    body = CONFIG.replace("  rounds: 1\n", "  rounds: 1\n  roles: [horizon]\n")
+def test_unknown_workspace_keys_are_ignored(tmp_path: Path) -> None:
+    # Retired keys from the two-agent era (roles/start_with/end_with) must not
+    # break loading an older config.yaml — they are simply ignored.
+    body = CONFIG.replace(
+        "  rounds: 1\n",
+        "  rounds: 1\n  roles: [horizon]\n  start_with: ground\n  end_with: horizon\n",
+    )
     _write_config(tmp_path, body)
     cfg = load_config(tmp_path)
-    assert cfg.roles == ("horizon",)
+    assert cfg.rounds == 1
 
 

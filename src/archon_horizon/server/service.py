@@ -314,16 +314,11 @@ class WorkspaceService:
             run_id = event.data.get("run_id")
             if isinstance(run_id, str) and run_id:
                 run_events.setdefault(run_id, []).append(serde.to_jsonable(event))
-        # Runs are sequential and there is no run lock any more; the dashboard
-        # reflects liveness from each session's own status meta instead of a
-        # process-liveness probe. (No run is specially highlighted as "the live one".)
-        live_run_id: str | None = None
         return [
             self._run_state(
                 self.stores.run_logs.get(run_id),
                 records.get(run_id, {}),
                 run_events.get(run_id, []),
-                live_run_id,
             )
             for run_id in reversed(self.stores.run_logs.ids())
         ]
@@ -333,7 +328,6 @@ class WorkspaceService:
         run: RunLog,
         record: dict[str, Any],
         events: list[dict[str, Any]],
-        live_run_id: str | None = None,
     ) -> dict[str, Any]:
         sessions = [self._session_state(run.id, session, "") for session in run.sessions()]
         baseline_session = self._baseline_session_state(run.id, events)
@@ -356,9 +350,8 @@ class WorkspaceService:
         flat = _flatten_sessions(sessions)
         # A terminal `run.stopped` event means the orchestrator is gone, so no
         # session is still live regardless of timing. Absent that (a hard crash),
-        # a run with "running" sessions is only truly active when its process
-        # holds the run lock or some session emitted activity recently (the
-        # latter covers concurrent runs the single-owner lock can't see).
+        # a run with "running" sessions is only truly active when a session
+        # emitted activity recently.
         run_ended = any(event.get("type") == "run.stopped" for event in events)
         status_basis = _agentic_sessions(sessions) or flat
         latest_status_session = status_basis[-1] if status_basis else None
@@ -366,10 +359,7 @@ class WorkspaceService:
             latest_status_session is not None
             and latest_status_session["status"] == "running"
             and not run_ended
-            and (
-                run.id == live_run_id
-                or _is_recent(latest_status_session.get("last_at", ""))
-            )
+            and _is_recent(latest_status_session.get("last_at", ""))
         )
         active_session_id = id(latest_status_session) if active else None
         for session in flat:

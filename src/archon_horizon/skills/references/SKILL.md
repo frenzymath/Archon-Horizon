@@ -77,9 +77,10 @@ to an image and **vision-transcribes** it into one self-contained
       model: <cheap vision-capable model, e.g. a Haiku-class model>
   ```
 
-  Don't pick the model inside the prompt; pin it in config so every transcription
-  uses the same cheap vision model. When unset it falls back to the subagent/Ground
-  harness.
+  Don't pick the model inside the prompt; pin it on the page-transcriber
+  descriptor (`tier:`/`model:` in `.archon-horizon/subagents/page-transcriber.md`)
+  so every transcription uses the same cheap vision model. When unset it inherits
+  the parent session's model.
 - **Keep each call ≤5 pages.** Longer ranges lose accuracy; split a big range
   across several `page-transcriber` calls.
 

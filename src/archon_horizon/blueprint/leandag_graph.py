@@ -19,16 +19,6 @@ from typing import Any
 _ENTRY_NAMES = ("web.tex", "print.tex", "content.tex")
 
 
-def leandag_available() -> bool:
-    # leandag is vendored under archon_horizon.leandag, so it is always present;
-    # the try/except stays as a guard against an import-time error in the vendor.
-    try:
-        from archon_horizon import leandag  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
 def _detect_entry(project_root: Path, blueprint_dir: Path | None) -> Path | None:
     dirs: list[Path] = []
     if blueprint_dir is not None:

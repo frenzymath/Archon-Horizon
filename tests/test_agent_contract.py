@@ -188,7 +188,7 @@ def test_prompt_body_loads_from_bundled_default(tmp_path: Path) -> None:
     # With no workspace override, the composer falls back to the bundled md bodies.
     from archon_horizon.agents.prompts import bundled_prompt_names
 
-    assert set(bundled_prompt_names()) == {"ground", "horizon"}
+    assert set(bundled_prompt_names()) == {"horizon"}
     ctx = HorizonContext(
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
@@ -224,8 +224,7 @@ def test_install_prompts_writes_editable_copies(tmp_path: Path) -> None:
     from archon_horizon.agents.prompts import install_prompts
 
     written = install_prompts(tmp_path)
-    assert set(written) == {"ground", "horizon"}
-    assert (tmp_path / ".archon-horizon" / "prompts" / "ground.md").is_file()
+    assert set(written) == {"horizon"}
     assert (tmp_path / ".archon-horizon" / "prompts" / "horizon.md").is_file()
     # Re-installing over identical copies is a no-op.
     assert install_prompts(tmp_path) == []

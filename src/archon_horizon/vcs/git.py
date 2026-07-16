@@ -14,8 +14,7 @@ The git model:
   aside) so its files, not a submodule gitlink, are committed.
 * Structured provenance (run / round / role / session / task / projects) rides
   each commit as **git trailers**, so agents and the dashboard can query it
-  deterministically instead of parsing prose. Computed metrics attach as **git
-  notes**, which can be written/edited after the commit.
+  deterministically instead of parsing prose.
 
 Everything here shells out to ``git`` and degrades gracefully when ``git`` is
 absent (``git_available()`` is False; constructors still build).
@@ -29,7 +28,6 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from archon_horizon.core.workspace import Workspace
 
 
 class GitError(RuntimeError):
@@ -427,25 +425,6 @@ class WorkspaceGit:
         out = self._run(["rev-parse", "--verify", "--quiet", f"{sha}^"], check=False)
         return out or None
 
-    def session_commits(
-        self,
-        run_id: str,
-        session: str,
-        *,
-        kinds: Sequence[str] | None = None,
-    ) -> list[tuple[str, str]]:
-        """``(sha, subject)`` for commits tagged with this run and session.
-
-        ``kinds`` filters the ``Archon-Commit`` trailer (for example ``agent``
-        or ``integration``). Without it this preserves the historical behavior:
-        all commits for the session, oldest-first.
-        """
-        rows = self.session_commits_detailed(run_id, session)
-        allowed = {k.strip().lower() for k in kinds or () if k.strip()}
-        if allowed:
-            rows = [r for r in rows if str(r.get("kind") or "").lower() in allowed]
-        return [(str(r["sha"]), str(r["subject"])) for r in rows]
-
     def session_commits_detailed(self, run_id: str, session: str) -> list[dict[str, str]]:
         """Commit rows for one run/session, oldest-first, with provenance.
 
@@ -600,19 +579,6 @@ class WorkspaceGit:
         listed = self._run(["ls-tree", "-r", "--name-only", sha, "--", path], check=False)
         return out if listed.strip() else None
 
-    def add_note(self, sha: str, text: str) -> None:
-        """Attach (overwrite) a git note on ``sha`` — a place for computed metrics
-        that can be written after the commit without rewriting history."""
-        if self.is_repo():
-            self._run(["notes", "add", "-f", "-m", text, sha], check=False)
-
-    def read_note(self, sha: str) -> str | None:
-        if not self.is_repo():
-            return None
-        out = self._run(["notes", "show", sha], check=False)
-        return out or None
-
-
 def _parse_porcelain(status: str) -> tuple[str, ...]:
     paths: list[str] = []
     for line in status.splitlines():
@@ -623,73 +589,3 @@ def _parse_porcelain(status: str) -> tuple[str, ...]:
             entry = entry.split(" -> ", 1)[1]
         paths.append(entry.strip().strip('"'))
     return tuple(paths)
-
-
-class ProjectGit:
-    """Compatibility wrapper for project-scoped git operations.
-
-    Newer workspace runs commit project files into the workspace repository, but
-    setup and older callers still use this small wrapper when registering a
-    VCS-enabled project.
-    """
-
-    def __init__(self, git_dir: Path, work_tree: Path) -> None:
-        self.git_dir = git_dir
-        self.work_tree = work_tree
-
-    def is_repo(self) -> bool:
-        return self.git_dir.exists()
-
-    def init(self) -> None:
-        if not self.is_repo():
-            self.git_dir.parent.mkdir(parents=True, exist_ok=True)
-            _init_bare(self.git_dir)
-        neutralize_nested_git(self.work_tree)
-        _ensure_repo_hygiene(self.git_dir)
-        _prune_ignored_from_index(self.git_dir, self.work_tree)
-
-    def commit(self, message: str, *, author: tuple[str, str] | None = None) -> str | None:
-        _run(["add", "-A"], git_dir=self.git_dir, work_tree=self.work_tree)
-        status = _run(["status", "--porcelain"], git_dir=self.git_dir, work_tree=self.work_tree)
-        if not status:
-            return None
-        _run(["commit", *_author_args(author), "-m", message], git_dir=self.git_dir, work_tree=self.work_tree)
-        return self.current_sha()
-
-    def ensure_initial_commit(self, message: str = "project: baseline (registered)") -> str | None:
-        self.init()
-        if self.current_sha():
-            return None
-        _run(["add", "-A"], git_dir=self.git_dir, work_tree=self.work_tree)
-        _run(["commit", "--allow-empty", "-m", message], git_dir=self.git_dir, work_tree=self.work_tree)
-        return self.current_sha()
-
-    def current_sha(self) -> str | None:
-        sha = _run(
-            ["rev-parse", "--verify", "--quiet", "HEAD"],
-            git_dir=self.git_dir,
-            work_tree=self.work_tree,
-            check=False,
-        )
-        return sha or None
-
-
-def project_git_for(workspace: Workspace, name: str) -> ProjectGit | None:
-    """Build a :class:`ProjectGit` for a VCS-enabled project, else None."""
-    project = workspace.project(name)
-    if not project.vcs.enabled:
-        return None
-    git_dir = project.vcs.git_dir or (workspace.state_path / "vcs" / f"{name}.git")
-    if not git_dir.is_absolute():
-        git_dir = workspace.root / git_dir
-    return ProjectGit(git_dir=git_dir, work_tree=workspace.project_path(name))
-
-
-def collect_revisions(workspace: Workspace) -> dict[str, str | None]:
-    """Map each VCS-enabled project to its current SHA."""
-    revisions: dict[str, str | None] = {}
-    for name in workspace.projects:
-        git = project_git_for(workspace, name)
-        if git is not None and git.is_repo():
-            revisions[name] = git.current_sha()
-    return revisions

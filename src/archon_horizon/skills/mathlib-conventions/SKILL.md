@@ -48,8 +48,8 @@ When a needed fact truly isn't in mathlib, the failure mode is to leave a
 - **Factor hard steps into their own named, reusable lemmas** rather than a
   monolithic proof — mirroring the blueprint's "split, don't abbreviate" rule.
 - **Record it** so it isn't an invisible dependency: give the new declaration a
-  blueprint node (`\lean{…}` + `\uses{…}`) and note it for the roadmap, so Ground
-  and the DAG can see the new frontier ([[blueprint-conventions]], [[leandag]]).
+  blueprint node (`\lean{…}` + `\uses{…}`) and note it for the roadmap, so future
+  sessions and the DAG can see the new frontier ([[blueprint-conventions]], [[leandag]]).
 
 ## House style (light touch)
 
