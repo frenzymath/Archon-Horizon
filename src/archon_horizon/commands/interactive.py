@@ -338,6 +338,15 @@ def run_interactive_captured(
     sink.emit(TranscriptEvent(
         TranscriptKind.SESSION_END, data={"ok": returncode == 0, "interactive": True}
     ))
+    # Fold any inline subagent events into child sessions now (the same
+    # write-path step a headless harness run does), so the dashboard never has
+    # to derive them on read.
+    try:
+        from archon_horizon.transcript.subagents import materialize_subagent_sessions
+
+        materialize_subagent_sessions(transcript_path.parent)
+    except Exception:
+        pass
     return returncode
 
 

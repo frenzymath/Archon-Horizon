@@ -698,7 +698,7 @@ class InitCommand:
         added_ignores = False
         # `.claude/agents` and `.codex/agents` are compiled from the tracked
         # subagent descriptors at run start — derived, so don't commit them.
-        for entry in (".env", ".archon-horizon/vcs/", ".archon-horizon/locks/", ".claude/agents/", ".codex/agents/"):
+        for entry in (".env", ".archon-horizon/vcs/", ".archon-horizon/locks/", ".archon-horizon/cache/", ".claude/agents/", ".codex/agents/"):
             if entry not in ignores:
                 kept.append(entry)
                 ignores.add(entry)

@@ -78,7 +78,19 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         def _json(self, obj: object, code: int = 200) -> None:
             self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
-        def _api_response(self, obj: object) -> None:
+        def _send_304(self, etag: str) -> None:
+            try:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
+                    raise
+
+        def _api_response(self, obj: object, etag: str | None = None) -> None:
             """Send a GET /api/* JSON payload with conditional-GET + gzip.
 
             The dashboard polls /api/state every 5s and the payload can be several
@@ -86,20 +98,14 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
             instead of re-sending the whole body, and gzip shrinks the payload
             (~10x for this JSON) when it *does* change. Both are safe/generic for
             every /api/* GET, so this is not special-cased to /api/state.
+            ``etag`` overrides the body hash with a precomputed validator (the
+            /api/state change stamp).
             """
             body = json.dumps(obj).encode("utf-8")
-            etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+            if etag is None:
+                etag = '"' + hashlib.sha256(body).hexdigest() + '"'
             if self.headers.get("If-None-Match") == etag:
-                try:
-                    self.send_response(304)
-                    self.send_header("ETag", etag)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                except OSError as exc:
-                    if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
-                        raise
+                self._send_304(etag)
                 return
             encoding: str | None = None
             # Only worth compressing a payload big enough to beat the CPU/overhead;
@@ -157,7 +163,16 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         def do_GET(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             try:
-                if route.startswith("/api/"):
+                if route == "/api/state":
+                    # Short-circuit BEFORE the (expensive) state computation: the
+                    # stamp is a cheap stat-walk over everything state() reads, so
+                    # an unchanged 5s poll costs ~1ms instead of a full recompute.
+                    etag = 'W/"' + service.state_stamp() + '"'
+                    if self.headers.get("If-None-Match") == etag:
+                        self._send_304(etag)
+                        return
+                    self._api_response(service.serve_endpoint(self.path), etag=etag)
+                elif route.startswith("/api/"):
                     self._api_response(service.serve_endpoint(self.path))
                 else:
                     self._serve_asset(route)

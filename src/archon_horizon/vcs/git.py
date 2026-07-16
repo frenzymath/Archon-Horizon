@@ -123,7 +123,12 @@ _COMMON_EXCLUDES = (
 # live under the workspace root (a project work tree never contains these). The
 # ``bin/`` dir holds the auto-installed ``hgit`` wrapper — a regenerable tool, not
 # project state, so it stays out of the ledger even under a broad ``git add -A``.
-_WORKSPACE_EXCLUDES = (".archon-horizon/vcs/", ".archon-horizon/locks/", ".archon-horizon/bin/")
+_WORKSPACE_EXCLUDES = (
+    ".archon-horizon/vcs/",
+    ".archon-horizon/locks/",
+    ".archon-horizon/bin/",
+    ".archon-horizon/cache/",  # dashboard poll caches — derived, never history
+)
 
 # A pre-commit guard installed into every out-of-tree git so an accidental
 # credential (in a transcript, config, or dropped file) is caught before it is

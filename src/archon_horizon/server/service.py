@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
@@ -142,6 +144,9 @@ def _sum_usage(usages: Any) -> dict[str, Any]:
     return total
 
 
+_SESSION_CACHE_VERSION = 1
+
+
 class WorkspaceService:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -160,10 +165,193 @@ class WorkspaceService:
             if self.cfg.github.enabled and self.cfg.github.repo
             else None
         )
+        # ── poll caches ──────────────────────────────────────────────
+        # The dashboard polls /api/state every 5s; on a large workspace a naive
+        # poll re-parses hundreds of MB of transcripts. Completed sessions never
+        # change, so their derived state is cached by file signature (mtime+size
+        # of transcript & meta) — in memory and persisted under
+        # ``<state_dir>/cache/`` so a server restart stays fast. The cache dir is
+        # excluded from the ledger and from the /api/state change stamp.
+        self._session_cache: dict[str, dict[str, Any]] = {}
+        self._session_cache_lock = threading.Lock()
+        self._session_cache_dirty = False
+        self._session_cache_saved_at = 0.0
+        self._load_session_cache()
+        # events.jsonl is append-only: keep the parsed events plus the byte
+        # offset consumed, and parse only the appended tail on each poll.
+        self._events_lock = threading.Lock()
+        self._events_offset = 0
+        self._events_sig: tuple[int, int] | None = None
+        self._events: list[Any] = []
+        # Published blueprint DAGs change only on an explicit sync/publish;
+        # cache the lightened copy by the cache files' signatures.
+        self._dags_sig: tuple | None = None
+        self._dags_light: dict[str, Any] = {}
+        # Per-collection payload caches (tasks / roadmap / inboxes), keyed by a
+        # stat-walk stamp of their directory: hundreds of per-item YAML/JSON
+        # loads become one walk when nothing changed.
+        self._subtree_cache: dict[str, tuple[str, Any]] = {}
+
+    def _session_cache_path(self) -> Path:
+        return self.workspace.state_path / "cache" / "session-states.json"
+
+    def _load_session_cache(self) -> None:
+        try:
+            raw = json.loads(self._session_cache_path().read_text("utf-8"))
+        except (OSError, ValueError):
+            return
+        if raw.get("version") != _SESSION_CACHE_VERSION:
+            return
+        sessions = raw.get("sessions")
+        if isinstance(sessions, dict):
+            self._session_cache = sessions
+
+    def _save_session_cache(self, *, min_interval_s: float = 30.0) -> None:
+        """Persist the session cache (atomically), rate-limited and only when
+        new entries were computed since the last save."""
+        with self._session_cache_lock:
+            if not self._session_cache_dirty:
+                return
+            if time.monotonic() - self._session_cache_saved_at < min_interval_s:
+                return
+            snapshot = dict(self._session_cache)
+            self._session_cache_dirty = False
+            self._session_cache_saved_at = time.monotonic()
+        path = self._session_cache_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"version": _SESSION_CACHE_VERSION, "sessions": snapshot}),
+                "utf-8",
+            )
+            os.replace(tmp, path)
+        except OSError:
+            pass  # the cache is an optimization; never fail a poll over it
+
+    @staticmethod
+    def _stat_sig(path: Path) -> list[int]:
+        try:
+            st = path.stat()
+        except OSError:
+            return [0, 0]
+        return [st.st_mtime_ns, st.st_size]
+
+    def _session_sig(self, session: SessionLog) -> list[int]:
+        return self._stat_sig(session.transcript_path) + self._stat_sig(session.path / "meta.json")
 
     # ── read ────────────────────────────────────────────────────────
 
+    def _events_all(self) -> list[Any]:
+        """All events, parsed incrementally: ``events.jsonl`` is append-only, so
+        after the first full read each poll parses only the appended tail."""
+        path = self.workspace.state_path / "events.jsonl"
+        with self._events_lock:
+            try:
+                st = path.stat()
+            except OSError:
+                self._events_offset, self._events_sig, self._events = 0, None, []
+                return []
+            sig = (st.st_mtime_ns, st.st_size)
+            if sig == self._events_sig:
+                return self._events
+            if st.st_size < self._events_offset:
+                # Truncated/rewritten (should not happen for an append-only log):
+                # fall back to a full re-read.
+                self._events_offset, self._events = 0, []
+            with path.open("rb") as handle:
+                handle.seek(self._events_offset)
+                chunk = handle.read()
+            # Only consume up to the last newline, so a line mid-append is left
+            # for the next poll instead of being parsed as a broken record.
+            cut = chunk.rfind(b"\n")
+            if cut < 0:
+                self._events_sig = sig
+                return self._events
+            for line in chunk[: cut + 1].decode("utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    self._events.append(serde.event_from_dict(json.loads(line)))
+                except (ValueError, KeyError, TypeError):
+                    continue
+            self._events_offset += cut + 1
+            self._events_sig = sig
+            return self._events
+
+    _STAMP_SKIP_DIRS = frozenset({"vcs", "locks", "cache", "search"})
+
+    def state_stamp(self) -> str:
+        """A cheap change stamp over everything ``state()`` reads: config.yaml
+        plus the state tree (minus the ledger, caches, and the search index).
+        The HTTP layer uses it as the /api/state ETag so an unchanged poll is a
+        ~1ms 304 instead of a full state recompute."""
+        max_mtime = 0
+        count = 0
+        total = 0
+        for path in (self.root / "config.yaml",):
+            try:
+                st = path.stat()
+                max_mtime = max(max_mtime, st.st_mtime_ns)
+                count += 1
+                total += st.st_size
+            except OSError:
+                pass
+        state_dir = self.workspace.state_path
+        for dirpath, dirnames, filenames in os.walk(state_dir):
+            if Path(dirpath) == state_dir:
+                dirnames[:] = [d for d in dirnames if d not in self._STAMP_SKIP_DIRS]
+            for name in filenames:
+                try:
+                    st = os.stat(os.path.join(dirpath, name))
+                except OSError:
+                    continue
+                max_mtime = max(max_mtime, st.st_mtime_ns)
+                count += 1
+                total += st.st_size
+        return f"{max_mtime}-{count}-{total}"
+
+    @staticmethod
+    def _subtree_stamp(*roots: Path) -> str:
+        max_mtime = 0
+        count = 0
+        total = 0
+        for root in roots:
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for name in filenames:
+                    try:
+                        st = os.stat(os.path.join(dirpath, name))
+                    except OSError:
+                        continue
+                    max_mtime = max(max_mtime, st.st_mtime_ns)
+                    count += 1
+                    total += st.st_size
+        return f"{max_mtime}-{count}-{total}"
+
+    def _cached_by_stamp(self, key: str, roots: tuple[Path, ...], compute) -> Any:
+        stamp = self._subtree_stamp(*roots)
+        cached = self._subtree_cache.get(key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        value = compute()
+        self._subtree_cache[key] = (stamp, value)
+        return value
+
+    def _light_dags_cached(self) -> dict[str, Any]:
+        """The lightened published DAGs, re-read only when a cache file under
+        ``<state_dir>/blueprints`` changes (they change on publish/sync only)."""
+        blueprint_dir = self.workspace.state_path / "blueprints"
+        sig = tuple(
+            (p.name, *self._stat_sig(p)) for p in sorted(blueprint_dir.glob("*.json"))
+        )
+        if sig != self._dags_sig:
+            self._dags_light = _light_dags(published_dags(self.workspace))
+            self._dags_sig = sig
+        return self._dags_light
+
     def state(self, *, events_tail: int = 50) -> dict[str, Any]:
+        events = self._events_all()
         return {
             "workspace": self.workspace.name,
             "workspace_root": self.workspace.root.as_posix(),
@@ -171,12 +359,26 @@ class WorkspaceService:
             # surfaced so the dashboard can show where this workspace's config,
             # runs, and ledger live.
             "config_dir": self.workspace.state_path.as_posix(),
-            "roadmap": serde.to_jsonable(self.stores.roadmap.load()),
-            "tasks": [serde.to_jsonable(t) for t in self.stores.tasks.list()],
-            "runs": self._runs_state(),
-            "local_inbox": [serde.to_jsonable(i) for i in self.local.list_items()],
-            "github_inbox": (
-                [serde.to_jsonable(i) for i in self.github.list_items()] if self.github else []
+            "roadmap": self._cached_by_stamp(
+                "roadmap",
+                (self.workspace.state_path / "roadmap",),
+                lambda: serde.to_jsonable(self.stores.roadmap.load()),
+            ),
+            "tasks": self._cached_by_stamp(
+                "tasks",
+                (self.workspace.state_path / "tasks",),
+                lambda: [serde.to_jsonable(t) for t in self.stores.tasks.list()],
+            ),
+            "runs": self._runs_state(events),
+            "local_inbox": self._cached_by_stamp(
+                "local_inbox",
+                (self.workspace.state_path / "inbox" / "local",),
+                lambda: [serde.to_jsonable(i) for i in self.local.list_items()],
+            ),
+            "github_inbox": self._cached_by_stamp(
+                "github_inbox",
+                (self.workspace.state_path / "inbox" / "github",),
+                lambda: [serde.to_jsonable(i) for i in self.github.list_items()] if self.github else [],
             ),
             "inbox_providers": self._inbox_provider_state(),
             "memory": self.stores.memory.load(),
@@ -184,11 +386,11 @@ class WorkspaceService:
             # Light DAGs only (heavy statement/proof/lean_source stripped): the
             # Blueprint and DAG pages fetch the full per-project DAG on demand via
             # /api/blueprint/dag, so the 5s poll doesn't re-ship several MB of text.
-            "blueprints": _light_dags(published_dags(self.workspace)),
+            "blueprints": self._light_dags_cached(),
             "projects": self._discover_projects(),
             "libraries": self._search_libraries(),
             "harnesses": self._harness_state(),
-            "events": [serde.to_jsonable(e) for e in self.stores.events.read_all()[-events_tail:]],
+            "events": [serde.to_jsonable(e) for e in events[-events_tail:]],
         }
 
     def _discover_projects(self) -> list[str]:
@@ -307,14 +509,14 @@ class WorkspaceService:
             for name, cfg in self.cfg.harnesses.items()
         }
 
-    def _runs_state(self) -> list[dict[str, Any]]:
+    def _runs_state(self, events: list[Any] | None = None) -> list[dict[str, Any]]:
         records = {run.id: serde.to_jsonable(run) for run in self.stores.runs.list()}
         run_events: dict[str, list[dict[str, Any]]] = {}
-        for event in self.stores.events.read_all():
+        for event in (events if events is not None else self._events_all()):
             run_id = event.data.get("run_id")
             if isinstance(run_id, str) and run_id:
                 run_events.setdefault(run_id, []).append(serde.to_jsonable(event))
-        return [
+        states = [
             self._run_state(
                 self.stores.run_logs.get(run_id),
                 records.get(run_id, {}),
@@ -322,6 +524,8 @@ class WorkspaceService:
             )
             for run_id in reversed(self.stores.run_logs.ids())
         ]
+        self._save_session_cache()
+        return states
 
     def _run_state(
         self,
@@ -396,7 +600,47 @@ class WorkspaceService:
         }
 
     def _session_state(self, run_id: str, session: SessionLog, parent: str) -> dict[str, Any]:
-        materialize_subagent_sessions(session.path)
+        """One session's derived state, served from the signature-keyed cache.
+
+        A completed session's transcript and meta never change, so after the
+        first computation each poll costs two ``stat`` calls per session. The
+        cached node excludes ``children`` (rebuilt from disk every poll so a
+        live session's subagents appear as they materialize) and is returned as
+        a shallow copy because ``_run_state`` annotates/flips top-level keys.
+        """
+        key = str(session.path)
+        sig = self._session_sig(session)
+        with self._session_cache_lock:
+            cached = self._session_cache.get(key)
+        if cached is not None and cached.get("sig") == sig:
+            node = dict(cached["node"])
+        else:
+            node = self._compute_session_state(session)
+            # Re-sign AFTER computing: a live materialization may have grown the
+            # session dir, and computing from a transcript mid-append must not be
+            # remembered under the newer signature.
+            sig_after = self._session_sig(session)
+            if sig_after == sig:
+                with self._session_cache_lock:
+                    self._session_cache[key] = {"sig": sig, "node": dict(node)}
+                    self._session_cache_dirty = True
+        node["run"] = run_id
+        node["parent"] = parent
+        node["children"] = [
+            self._session_state(run_id, child, session.name) for child in session.subsessions()
+        ]
+        return node
+
+    def _compute_session_state(self, session: SessionLog) -> dict[str, Any]:
+        # Fold any inline subagent events into on-disk child sessions. The write
+        # path (harness end) normally does this; running it here covers live
+        # sessions mid-stream and older/crashed sessions that were never
+        # materialized. It happens only on a cache miss — once per session per
+        # server lifetime — never on every poll.
+        try:
+            materialize_subagent_sessions(session.path)
+        except Exception:
+            pass
         events = read_transcript(session.transcript_path) if session.transcript_path.exists() else []
         end = next((event for event in reversed(events) if event.kind == "session_end"), None)
         usage = _sum_usage(event.usage for event in events if event.usage is not None)
@@ -433,11 +677,8 @@ class WorkspaceService:
         elif meta:
             status = "completed"
         ref = session.transcript_path.relative_to(self.root).as_posix() if session.transcript_path.exists() else ""
-        children = [self._session_state(run_id, child, session.name) for child in session.subsessions()]
         return {
-            "run": run_id,
             "session": session.name,
-            "parent": parent,
             "ref": ref,
             "meta": meta,
             "status": status,
@@ -450,7 +691,6 @@ class WorkspaceService:
             "ended_at": end.at.isoformat() if end else "",
             "last_at": events[-1].at.isoformat() if events else "",
             "usage": usage,
-            "children": children,
         }
 
     @staticmethod
@@ -801,7 +1041,8 @@ class WorkspaceService:
     def _collect_session(
         self, run_id: str, session: SessionLog, parent: str, found: list[dict[str, Any]]
     ) -> None:
-        materialize_subagent_sessions(session.path)
+        # Child sessions are materialized on the write path (harness end) and,
+        # for a live session, by the state poll — no need to re-derive here.
         if session.transcript_path.exists():
             found.append({
                 "run": run_id,
