@@ -63,7 +63,6 @@ version = { attr = "archon_horizon.__version__" }
 "archon_horizon" = [
     "skills/**/*.md",
     "subagents/**/*.md",
-    "agents/prompt_templates/*.md",
     "frontend/dist/**/*",
 ]
 

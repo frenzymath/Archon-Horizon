@@ -261,7 +261,6 @@ class RunCommand:
         from .interactive import (
             horizon_seed_prompt,
             interactive_launch_for_role,
-            interactive_role_prompt,
             run_interactive,
             run_interactive_captured,
         )
@@ -286,15 +285,13 @@ class RunCommand:
                 log.info("No resumable engine session found for that run; starting a "
                          "fresh interactive session seeded with its focus instead.")
 
-        # `--bare` is the lightweight harness seed: the only instruction is to load
-        # the `horizon` skill and wait for the user (no composed role brief). The UI
-        # still records the session identically (captured path below).
-        if self.bare:
-            prompt = horizon_seed_prompt(self.root.resolve(), focus=focus)
-        else:
-            prompt = interactive_role_prompt(
-                self.root.resolve(), role, focus=focus, resuming=self.resume is not None
-            )
+        # Every interactive session gets the lightweight seed: the only
+        # instruction is to load the `horizon` skill, then wait for the user —
+        # no composed role brief. (`--bare` is now the default and only shape.)
+        # The UI still records the session identically (captured path below).
+        prompt = horizon_seed_prompt(
+            self.root.resolve(), focus=focus, resuming=self.resume is not None
+        )
         try:
             launch = interactive_launch_for_role(
                 self.root, role, prompt, resume_session_id=resume_session_id
@@ -540,7 +537,7 @@ def run(
     ),
     bare: bool = typer.Option(
         False, "--bare",
-        help="Lightweight interactive seed: the only instruction is to load the `horizon` skill, then wait for you — no composed role brief. Implies `--backend interactive`. The session is still recorded in the Log/dashboard.",
+        help="Shorthand for `--backend interactive`: an interactive session seeded only with 'load the `horizon` skill, then wait for you'. (All interactive sessions use this seed now.) The session is still recorded in the Log/dashboard.",
     ),
     supervisor: bool = typer.Option(
         False, "--supervisor",

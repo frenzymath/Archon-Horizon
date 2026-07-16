@@ -390,6 +390,27 @@ class InitCommand:
             dest.chmod(0o755)
         log.success(f"Wrote {label}.")
 
+    _ORIENTATION_BODY = dedent("""\
+        This is an **Archon Horizon** workspace: AI agents formalize mathematics in
+        Lean 4 here, across one or more projects.
+
+        Before doing anything else, load the **`horizon`** skill — read
+        `.claude/skills/horizon/SKILL.md`. It explains the workspace layout, the
+        `horizon` CLI, the git/commit conventions, and the session discipline
+        (one-shot: run work in the foreground and block on it).
+        """)
+
+    def _install_orientation_files(self) -> None:
+        """Write CLAUDE.md and AGENTS.md pointers at the workspace root.
+
+        Claude Code auto-loads ``CLAUDE.md`` and Codex auto-loads ``AGENTS.md``,
+        so these three lines are the whole engine-native harness: any engine
+        launched in the workspace orients itself from the `horizon` skill. Local
+        edits are preserved (same keep-vs-overwrite policy as skills).
+        """
+        for name in ("CLAUDE.md", "AGENTS.md"):
+            self._sync_managed_file(self.root / name, self._ORIENTATION_BODY, name)
+
     def _interactive_workspace_setup(self) -> None:
         """Pedagogical, optional loops to populate projects, tasks, and hints."""
         import yaml
@@ -761,23 +782,19 @@ class InitCommand:
             verb = "Updated" if self.update else "Installed"
             log.success(f"{verb} {len(installed)} skill(s) under .claude/skills/.")
 
-        # Install the editable agent prompt bodies (ground.md/horizon.md). Same
-        # keep-vs-overwrite policy as skills: update mode force-refreshes to the
-        # bundled versions; a fresh/interactive init keeps local edits unless the
-        # user confirms overwrite.
-        from archon_horizon.agents.prompts import install_prompts
-
-        def _prompt_overwrite(name: str, dest: Path, new_text: str) -> bool:
-            if not self.interactive:
-                return False
-            from rich.prompt import Confirm
-
-            return Confirm.ask(f"Prompt '{name}' has local changes. Overwrite with the bundled version?", default=False)
-
-        installed_prompts = install_prompts(self.root, overwrite=None if self.update else _prompt_overwrite)
-        if installed_prompts:
-            verb = "Updated" if self.update else "Installed"
-            log.success(f"{verb} {len(installed_prompts)} agent prompt(s) under .archon-horizon/prompts/.")
+        # Engine-native orientation: Claude Code auto-loads CLAUDE.md and Codex
+        # auto-loads AGENTS.md, so ANY engine launched in the workspace is
+        # pointed at the `horizon` skill without pushed prompt prose. The old
+        # editable prompt bodies under .archon-horizon/prompts/ are no longer
+        # consumed — the skill is the (editable) contract now.
+        self._install_orientation_files()
+        legacy_prompts = self.root / ".archon-horizon" / "prompts"
+        if self.update and legacy_prompts.is_dir() and any(legacy_prompts.iterdir()):
+            log.warn(
+                "Note: .archon-horizon/prompts/ overrides are no longer used; the "
+                "editable contract is .claude/skills/horizon/SKILL.md. The old files "
+                "were left in place."
+            )
 
         from archon_horizon.config.mcp import install_mcp_for_harnesses, write_mcp_config
 

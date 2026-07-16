@@ -6,11 +6,6 @@ from pathlib import Path
 
 from archon_horizon.cli import main
 from archon_horizon.core.inbox import InboxItem, InboxKind, InboxScope, reaches_horizon
-from archon_horizon.core.sessions import Focus, RunRecord
-from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
-from archon_horizon.config.loader import build_orchestrator
-from archon_horizon.harnesses.base import HarnessRequest, HarnessResult
-from archon_horizon.harnesses.null import NullHarness
 from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 
 
@@ -60,27 +55,21 @@ def test_add_to_persists_audience(tmp_path: Path) -> None:
     assert item.audience == "project:other"
 
 
-def test_horizon_only_sees_addressed_items(tmp_path: Path) -> None:
+def test_horizon_pulls_addressed_items_via_cli(tmp_path: Path, capsys) -> None:
+    # State is pulled, not pushed: the agent reads its addressed items with
+    # `horizon inbox list --to horizon --json` (the `horizon-inbox` skill's path).
+    import json
+
     ws = tmp_path / "ws"
     (ws / "projects" / "ag-main").mkdir(parents=True)
     (ws / "config.yaml").write_text(_CONFIG, "utf-8")
 
-    seen: dict[str, str] = {}
-
-    def record(req: HarnessRequest) -> HarnessResult:
-        seen["prompt"] = req.prompt
-        return HarnessResult(ok=True, text="done")
-
-    local = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local")
     main(["--root", str(ws), "inbox", "add", "--body", "FOR_HORIZON\n\naddressed to horizon", "--to", "horizon"])
     main(["--root", str(ws), "inbox", "add", "--body", "FOR_OTHER\n\naddressed to other", "--to", "project:other"])
+    capsys.readouterr()
 
-    orch = build_orchestrator(ws, harnesses={"inf": NullHarness(""), "hor": NullHarness(record)}, inbox_providers=[local])
-    orch.task_store.put(HorizonTask(
-        id="R-1", project="ag-main", objective="x", title="x",
-        projects=("ag-main",), status=TaskStatus.QUEUED, write_set=WriteSet(projects=("ag-main",)),
-    ))
-    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
-
-    assert "FOR_HORIZON" in seen["prompt"]
-    assert "FOR_OTHER" not in seen["prompt"]  # addressed to another project
+    assert main(["--root", str(ws), "inbox", "list", "--to", "horizon", "--json"]) == 0
+    items = json.loads(capsys.readouterr().out)["items"]
+    bodies = " ".join(item["body"] for item in items)
+    assert "FOR_HORIZON" in bodies
+    assert "FOR_OTHER" not in bodies  # addressed to another project

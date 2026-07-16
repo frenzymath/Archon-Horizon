@@ -1,17 +1,23 @@
-"""Agent prompt/output contract: prompts expose schema, parser consumes it."""
+"""Agent prompt contract: a task directive + "load the `horizon` skill".
+
+The prompt pushes no role prose or workspace state — the skill is the contract
+and state is pulled through the CLI — so these tests pin (a) the small
+directive shape and (b) that the load-bearing conventions actually live in the
+packaged skill files.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from archon_horizon.agents.base import HorizonContext
-from archon_horizon.agents.prompts import compose_horizon_prompt
-from archon_horizon.core.inbox import InboxItem, InboxKind
-from archon_horizon.core.labels import AGENT_READY
+from archon_horizon.agents.prompts import horizon_task_prompt
 from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonTask, WriteSet
 from archon_horizon.core.workspace import Project, Workspace
+
+_SKILLS_DIR = Path(__file__).resolve().parents[1] / "src" / "archon_horizon" / "skills"
 
 
 def _workspace(tmp_path: Path) -> Workspace:
@@ -22,7 +28,7 @@ def _workspace(tmp_path: Path) -> Workspace:
     )
 
 
-def test_horizon_prompt_is_task_scoped(tmp_path: Path) -> None:
+def test_horizon_prompt_is_directive_plus_skill(tmp_path: Path) -> None:
     task = HorizonTask(
         id="T-1",
         project="ag-main",
@@ -37,24 +43,31 @@ def test_horizon_prompt_is_task_scoped(tmp_path: Path) -> None:
         roadmap=Roadmap(),
     )
 
-    prompt = compose_horizon_prompt(ctx)
+    prompt = horizon_task_prompt(ctx)
 
-    assert "Horizon agent" in prompt
-    assert "Task focus" in prompt
-    assert "you choose the strategy from the live Lean state" in prompt
-    assert "write local helper scripts/tools" in prompt
-    assert "## Progress" in prompt
-    assert "4 sorries -> 3 sorries" in prompt
-    assert "inline `-` bullets" in prompt
-    assert "## Why I stopped" in prompt
-    # Horizon owns its task status and records `done` via the CLI when fully complete.
-    assert "fully complete" in prompt
-    assert "task set <task_id> --status done" in prompt
+    # The directive: skill pointer + task identity + one-shot framing.
+    assert "`horizon`" in prompt and "skill" in prompt
+    assert "T-1" in prompt
     assert "Prove Foo.bar" in prompt
-    assert "files=Foo.lean" in prompt  # carried as "Suggested scope"
     assert "roadmap=R-1" in prompt
-    assert "--json" in prompt
-    assert "--author horizon" in prompt
+    assert "ag-main" in prompt
+    assert "one-shot" in prompt
+    # No pushed policy/state: those moved to the skill / the CLI (pull).
+    assert "# Roadmap" not in prompt
+    assert "# Memory" not in prompt
+    assert "# Subagents" not in prompt
+    assert len(prompt) < 2000
+
+
+def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
+    # What the old composed prompt pushed must survive in the packaged skill.
+    skill = (_SKILLS_DIR / "horizon" / "SKILL.md").read_text("utf-8")
+    assert "## Progress" in skill and "## Why I stopped" in skill  # report shape
+    assert "--status done" in skill                                # status ownership
+    assert "FULLY complete" in skill
+    assert "foreground" in skill                                   # one-shot discipline
+    subagents = (_SKILLS_DIR / "subagents" / "SKILL.md").read_text("utf-8")
+    assert "model" in subagents and "cheap" in subagents           # model economy
 
 
 class _RecordingHarness:
@@ -184,47 +197,12 @@ def test_horizon_does_not_retry_when_resumed_session_did_work(tmp_path: Path) ->
     assert len(harness.requests) == 1  # no fallback retry
 
 
-def test_prompt_body_loads_from_bundled_default(tmp_path: Path) -> None:
-    # With no workspace override, the composer falls back to the bundled md bodies.
-    from archon_horizon.agents.prompts import bundled_prompt_names
-
-    assert set(bundled_prompt_names()) == {"horizon"}
+def test_workspace_wide_task_prompt_names_no_single_project(tmp_path: Path) -> None:
     ctx = HorizonContext(
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
-        task=HorizonTask(id="T-1", project="ag-main", objective="x", write_set=WriteSet()),
+        task=HorizonTask(id="T-2", project="", objective="tidy", write_set=WriteSet()),
         roadmap=Roadmap(),
     )
-    assert "You are Archon Horizon's Horizon agent" in compose_horizon_prompt(ctx)
-
-
-def test_workspace_prompt_override_wins(tmp_path: Path) -> None:
-    # A workspace copy at <state_dir>/prompts/<name>.md overrides the bundled body,
-    # so a human can retune the agent's instructions without touching code.
-    ws = _workspace(tmp_path)
-    override_dir = ws.state_path / "prompts"
-    override_dir.mkdir(parents=True)
-    (override_dir / "horizon.md").write_text("CUSTOM HORIZON ROLE PROSE.", "utf-8")
-
-    ctx = HorizonContext(
-        workspace=ws,
-        run=RunRecord(id="S-1", rounds_requested=1),
-        task=HorizonTask(id="T-1", project="ag-main", objective="Prove Foo.bar", write_set=WriteSet()),
-        roadmap=Roadmap(),
-    )
-    prompt = compose_horizon_prompt(ctx)
-    assert "CUSTOM HORIZON ROLE PROSE." in prompt
-    assert "You are Archon Horizon's Horizon agent" not in prompt  # bundled body replaced
-    # Dynamic sections are still injected around the custom body.
-    assert "Prove Foo.bar" in prompt
-    assert "# Skills" in prompt
-
-
-def test_install_prompts_writes_editable_copies(tmp_path: Path) -> None:
-    from archon_horizon.agents.prompts import install_prompts
-
-    written = install_prompts(tmp_path)
-    assert set(written) == {"horizon"}
-    assert (tmp_path / ".archon-horizon" / "prompts" / "horizon.md").is_file()
-    # Re-installing over identical copies is a no-op.
-    assert install_prompts(tmp_path) == []
+    prompt = horizon_task_prompt(ctx)
+    assert "workspace-wide" in prompt

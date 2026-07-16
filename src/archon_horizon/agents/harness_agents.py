@@ -155,7 +155,7 @@ class HarnessHorizonAgent(HorizonAgent):
         self,
         harness: Harness,
         *,
-        compose: Callable[[HorizonContext], str] = prompts.compose_horizon_prompt,
+        compose: Callable[[HorizonContext], str] = prompts.horizon_task_prompt,
     ) -> None:
         self._harness = harness
         self._compose = compose

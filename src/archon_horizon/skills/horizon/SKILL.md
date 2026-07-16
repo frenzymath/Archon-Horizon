@@ -40,7 +40,13 @@ infrastructure is **not** a reason to skip it — start it, build the missing
 lemma/definition yourself as project-local infrastructure, and push it as far as
 you genuinely can. Prefer ambitious progress over defensive avoidance.
 
-If a human launched this session on a specific task/target, start there.
+If this session was launched on a specific task, make concrete progress on that
+task's REAL objective — don't preemptively pivot to easy unrelated wins because
+the objective is large. Leave a `"$HORIZON_BIN" task comment <task_id> --body …`
+at each significant step. You own the task's terminal status (skill:
+`task-status`): set `--status done` only when the objective is FULLY complete;
+`blocked`/`failed` if genuinely stuck; set nothing if it's only partly advanced
+(it returns to the queue).
 
 ## Do the work (Lean)
 
@@ -70,6 +76,20 @@ State lives on disk, so a fresh session (even on another account) continues chea
 read recent ledger history (`project-git` skill: `git log` + `git show` by
 `Archon-Session` trailer) and the previous session's transcript/report under
 `.archon-horizon/runs/` to see what was in flight, then pick up from there.
+
+## Final report (your last message)
+
+Your final message is saved as the session's report — a human or the next
+session should understand the session from it without opening raw logs.
+Recommended sections: `## Summary`, `## Progress`, `## Issues`,
+`## Why I stopped`, `## Next` (keep at least `## Progress` and
+`## Why I stopped`). In `## Progress`, one inline `-` bullet per file/target,
+e.g. `- FileA.lean: 4 sorries -> 3; closed the base case.` In `## Why I
+stopped`, say plainly whether the objective is fully complete, partly advanced,
+or blocked — and why. Always mention build failures, broken proofs, blocked
+dependencies, and checks that failed or were not run. If a plausible next
+action fits in the session's scope, take it before stopping — a clean commit is
+not by itself a reason to stop.
 
 ## Cleaning up the work (you decide, via subagents)
 

@@ -373,18 +373,6 @@ transcripts and reports), `tasks/`, `inbox/`, `blueprints/`, `roadmap`,
 `memory.md` — and its manifest is `config.yaml`. Read those to see the current
 status and what recent runs did. Prefer the `horizon` CLI for changes."""
 
-_ROLE_BRIEF = {
-    "ground": """\
-Act as the **Ground agent**: the human-aligned strategist. You maintain the
-blueprints, dependency DAGs, roadmap, tasks, memory, and inboxes — and supervise
-the Long Horizon prover. You do not run long Lean proof searches yourself.""",
-    "horizon": """\
-Act as the **Long Horizon agent**: the autonomous prover. You turn blueprint
-nodes into checked Lean — read the blueprint node first, build with `lake`,
-diagnose compiler errors, and repair proofs. Report what you proved and what
-remains.""",
-}
-
 _DISCUSS_BRIEF = """\
 You are the **discuss** agent: a human-facing companion, essentially the Ground
 agent but here purely to talk with the human and do what they ask. Your job:
@@ -404,59 +392,40 @@ Rules of engagement:
   ask what they'd like to do."""
 
 
-def interactive_role_prompt(
-    root: Path, role: str, focus: tuple[str, ...] = (), *, resuming: bool = False
-) -> str:
-    """Seed prompt for an interactive `horizon run` session.
-
-    ``focus`` is the task ids / projects / files the human targeted (e.g.
-    ``horizon run T16``); when present it is appended so the session starts on that
-    work instead of the generic role brief. ``resuming`` frames it as continuing an
-    earlier session (the engine conversation may already be in context)."""
-    brief = _ROLE_BRIEF.get(role, _ROLE_BRIEF["ground"])
-    items = ", ".join(f"`{f}`" for f in focus)
-    focus_hint = ""
-    if resuming:
-        target = f" on {items}" if items else ""
-        focus_hint = (
-            f"\n\nYou are RESUMING an earlier interactive session{target}. If that "
-            "conversation is already in context, pick up where you left off — re-read "
-            "the file(s) you were editing and any build output to refresh. Otherwise, "
-            "orient from the workspace state above. Either way, briefly say where "
-            "things stand and what you propose next, then wait for the human (they are "
-            "driving)."
-        )
-    elif focus:
-        focus_hint = (
-            f"\n\nThe human launched this session focused on: {items}. Start there — "
-            "read its blueprint node(s)/task details and the relevant Lean, orient "
-            "yourself, then briefly say what you see and propose the first step before "
-            "diving in (they are driving, so check in rather than running autonomously)."
-        )
-    return f"{_ORIENTATION.format(root=root)}\n\n{brief}{focus_hint}\n"
-
-
 def discuss_prompt(root: Path) -> str:
     """Seed prompt for the `horizon discuss` companion agent."""
     return f"{_ORIENTATION.format(root=root)}\n\n{_DISCUSS_BRIEF}\n"
 
 
-def horizon_seed_prompt(root: Path, focus: tuple[str, ...] = ()) -> str:
-    """The *lightweight* interactive seed: the only instruction is to load the
-    `horizon` skill and wait for the user — no composed role brief, no pushed
-    policy. The skill (editable at ``.claude/skills/horizon/SKILL.md``) carries the
-    orientation and conventions; everything else the agent pulls on demand.
+def horizon_seed_prompt(
+    root: Path, focus: tuple[str, ...] = (), *, resuming: bool = False
+) -> str:
+    """The interactive seed: the only instruction is to load the `horizon` skill
+    and wait for the user — no composed role brief, no pushed policy. The skill
+    (editable at ``.claude/skills/horizon/SKILL.md``) carries the orientation and
+    conventions; everything else the agent pulls on demand.
 
-    ``focus`` (task ids / projects / files the human targeted) is passed through so
-    the agent can start there after loading the skill."""
+    ``focus`` (task ids / projects / files the human targeted) is passed through
+    so the agent can start there after loading the skill; ``resuming`` frames the
+    session as continuing an earlier engine conversation."""
     lines = [
         f"You are in an **Archon Horizon** workspace at `{root}`.",
         "",
         "Load the **`horizon`** skill — it explains where the state lives, the tools, "
         "and the conventions for this workspace. Do that first.",
     ]
-    if focus:
-        items = ", ".join(f"`{f}`" for f in focus)
+    items = ", ".join(f"`{f}`" for f in focus)
+    if resuming:
+        target = f" on {items}" if items else ""
+        lines += [
+            "",
+            f"You are RESUMING an earlier interactive session{target}. If that "
+            "conversation is already in context, pick up where you left off; "
+            "otherwise orient from the workspace state (recent ledger history and "
+            "the previous session's report, as the skill describes). Briefly say "
+            "where things stand and what you propose next.",
+        ]
+    elif focus:
         lines += [
             "",
             f"The user launched this session focused on: {items}. After loading the "
