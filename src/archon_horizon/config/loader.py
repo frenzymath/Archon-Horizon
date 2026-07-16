@@ -208,7 +208,6 @@ def build_orchestrator(
         sync=MultiProviderSyncCoordinator(inbox_providers),
         event_log=stores.events,
         roadmap_store=stores.roadmap,
-        memory_store=stores.memory,
         task_store=stores.tasks,
         inbox_providers=inbox_providers,
         run_store=stores.runs,

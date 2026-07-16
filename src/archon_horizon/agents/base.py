@@ -7,9 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from archon_horizon.core.inbox import InboxItem
-from archon_horizon.core.roadmap import Roadmap
-from archon_horizon.core.sessions import Focus, RunRecord
+from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonResult, HorizonTask
 from archon_horizon.core.types import Metadata
 from archon_horizon.core.workspace import Workspace
@@ -17,15 +15,16 @@ from archon_horizon.core.workspace import Workspace
 
 @dataclass(frozen=True, slots=True)
 class HorizonContext:
+    """What one automated session needs to launch: identity and plumbing only.
+
+    Workspace state (roadmap, inbox, memory, DAG) is NOT carried here — the
+    agent pulls it on demand through the ``horizon`` CLI, as the `horizon`
+    skill describes.
+    """
+
     workspace: Workspace
     run: RunRecord
     task: HorizonTask
-    roadmap: Roadmap
-    accepted_inbox: tuple[InboxItem, ...] = ()
-    memory: str = ""
-    write_domain: tuple[str, ...] = ()
-    previous_report_refs: tuple[str, ...] = ()
-    artifact_refs: tuple[str, ...] = ()
     log_dir: Path | None = None
     # When resuming, the native engine session id of the interrupted Horizon run.
     resume_session_id: str | None = None

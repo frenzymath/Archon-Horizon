@@ -12,7 +12,6 @@ from pathlib import Path
 
 from archon_horizon.agents.base import HorizonContext
 from archon_horizon.agents.prompts import horizon_task_prompt
-from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonTask, WriteSet
 from archon_horizon.core.workspace import Project, Workspace
@@ -40,7 +39,6 @@ def test_horizon_prompt_is_directive_plus_skill(tmp_path: Path) -> None:
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
     )
 
     prompt = horizon_task_prompt(ctx)
@@ -94,7 +92,6 @@ def test_horizon_resumes_native_session_when_engine_supports_it(tmp_path: Path) 
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-1",
     )
 
@@ -117,7 +114,6 @@ def test_horizon_falls_back_to_full_prompt_without_resume_support(tmp_path: Path
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-1",
     )
 
@@ -155,7 +151,6 @@ def test_horizon_retries_fresh_when_native_resume_cannot_start(tmp_path: Path) -
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-gone",
     )
 
@@ -184,7 +179,6 @@ def test_horizon_does_not_retry_when_resumed_session_did_work(tmp_path: Path) ->
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-1",
     )
 
@@ -202,7 +196,6 @@ def test_workspace_wide_task_prompt_names_no_single_project(tmp_path: Path) -> N
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=HorizonTask(id="T-2", project="", objective="tidy", write_set=WriteSet()),
-        roadmap=Roadmap(),
     )
     prompt = horizon_task_prompt(ctx)
     assert "workspace-wide" in prompt

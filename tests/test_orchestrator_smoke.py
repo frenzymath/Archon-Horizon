@@ -25,7 +25,6 @@ from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
 from archon_horizon.store.filesystem import (
     FilesystemEventLog,
-    FilesystemMemoryStore,
     FilesystemRoadmapStore,
     FilesystemTaskStore,
 )
@@ -120,7 +119,6 @@ def _build(
         sync=MultiProviderSyncCoordinator([]),
         event_log=FilesystemEventLog(state / "events.jsonl"),
         roadmap_store=roadmap_store,
-        memory_store=FilesystemMemoryStore(state / "memory.md"),
         task_store=task_store,
         freeze=freeze or FreezeSet(),
     )
@@ -466,13 +464,11 @@ def test_harness_request_carries_cwd(tmp_path: Path) -> None:
     )
     agent = HarnessHorizonAgent(NullHarness(record))
     from archon_horizon.agents.base import HorizonContext
-    from archon_horizon.core.roadmap import Roadmap
 
     ctx = HorizonContext(
         workspace=workspace,
         run=RunRecord(id="S", rounds_requested=1),
         task=HorizonTask(id="T-1", project="p", objective="x", write_set=WriteSet()),
-        roadmap=Roadmap(),
     )
     agent.run_task(ctx)
     assert seen["req"].cwd == tmp_path / "projects" / "p"

@@ -174,7 +174,6 @@ class HarnessHorizonAgent(HorizonAgent):
         request = HarnessRequest(
             prompt=(HORIZON_CONTINUE + full_prompt) if resume else full_prompt,
             cwd=context.workspace.project_path(context.task.project),
-            context_refs=context.previous_report_refs,
             artifact_dir=context.log_dir,
             resume_session_id=resume,
             cancel=context.cancel,

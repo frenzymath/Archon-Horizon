@@ -98,27 +98,32 @@ class RunCommand:
                 self._emit_reports(reports)
                 return
 
-            if not self.targets:
-                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `horizon`, task names, project names, or files.")
+            if not self.targets and not self.supervisor:
+                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `horizon`, task names, project names, or files (or `--supervisor` for all queued work).")
                 raise typer.Exit(1)
 
-            # `--supervisor`: the lightweight automated mode — N rounds of
-            # Horizon-only sessions over the requested focus.
-            if self.supervisor:
-                reports = self._run_supervisor(orch, cfg)
-                self._emit_reports(reports)
-                return
-
-            # `horizon run horizon`: one session of the role.
-            if len(self.targets) == 1 and self.targets[0] in ROLE_TARGETS:
-                reports = self._run_single_role(orch, self.targets[0])
-                self._emit_reports(reports)
-                return
-
-            focus = self._resolve_focus(orch, tuple(self.targets))
-            run = RunRecord(id="", focus=focus, rounds_requested=self.rounds or cfg.rounds)
-            reports = orch.run(run, dry_run=self.dry_run)
+            reports = orch.run(self._build_run(orch, cfg.rounds), dry_run=self.dry_run)
             self._emit_reports(reports)
+
+    def _build_run(self, orch, default_rounds: int) -> RunRecord:
+        """Every launch shape reduces to a focus plus a RunRecord:
+
+        - ``horizon run horizon [targets…]`` drives ONE session over the focus
+          (with ``--run``/``--round`` to append it into an existing run);
+        - ``--supervisor`` drives N rounds over the focus (empty focus = all
+          queued work);
+        - plain targets drive N rounds pinned to the resolved focus.
+        """
+        role_session = bool(self.targets) and self.targets[0] in ROLE_TARGETS
+        focus_targets = tuple(self.targets[1:] if role_session else self.targets)
+        focus = self._resolve_focus(orch, focus_targets) if focus_targets else Focus()
+        rounds = self.rounds or (1 if role_session else default_rounds)
+        return RunRecord(
+            id=self.run_id or "",
+            focus=focus,
+            rounds_requested=rounds,
+            start_round=self.round_index or 0,
+        )
 
     @contextmanager
     def _dashboard_server(self) -> Iterator[None]:
@@ -158,31 +163,6 @@ class RunCommand:
         finally:
             server.shutdown()
             thread.join(timeout=5)
-
-    def _run_single_role(self, orch, role: str):
-        """Drive exactly one Horizon session over the current focus.
-
-        ``--run <id>`` appends the session to an existing (or new) run directory
-        instead of allocating a fresh run, and ``--round <n>`` numbers it — so a
-        human hand-driving one session at a time into a run keeps the logs, session
-        metadata, and commit trailers grouped under that run."""
-        run_id = self.run_id or ""
-        start_round = self.round_index or 0
-        focus = Focus() if not self.targets[1:] else self._resolve_focus(orch, self.targets[1:])
-        run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
-        return orch.run(run, dry_run=self.dry_run)
-
-    def _run_supervisor(self, orch, cfg):
-        """The lightweight automated loop: N rounds of Horizon-only sessions.
-
-        The orchestrator is horizon-only by design — the Horizon agent cleans up the
-        work itself by spawning a subagent (janitor / reviewer) when it judges it
-        useful (see the `horizon` skill). Strictly sequential (one session at a time)."""
-        # `*` / `.` / task / project targets scope the focus; a bare run supervises all queued work.
-        targets = tuple(t for t in self.targets if t not in ("*",))
-        focus = self._resolve_focus(orch, targets) if targets else Focus()
-        run = RunRecord(id="", focus=focus, rounds_requested=self.rounds or cfg.rounds)
-        return orch.run(run, dry_run=self.dry_run)
 
     def _config_interactive_role(self) -> str | None:
         """The role to launch interactively when its harness declares

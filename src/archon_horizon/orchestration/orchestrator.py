@@ -13,21 +13,16 @@ from __future__ import annotations
 import dataclasses
 import json
 import threading
-import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from archon_horizon.agents.base import HorizonAgent, HorizonContext
-from archon_horizon.blueprint.checks import blueprint_coverage, blueprint_lint_issues, dag_consistency_issues
 from archon_horizon.blueprint.workspace import workspace_dags, workspace_dags_rich
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.events import Event
 from archon_horizon.core.freeze import FreezeSet, frozen_violations
-from archon_horizon.core.inbox import InboxItem, InboxKind, InboxStatus, reaches_horizon
-from archon_horizon.core.labels import is_agent_ready
-from archon_horizon.core.permissions import WriteDomain, horizon_write_domain
 from archon_horizon.core.roadmap import Roadmap, RoadmapStatus
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.sessions import RunRecord, SyncBoundary
@@ -37,12 +32,10 @@ from archon_horizon.core.workspace import Workspace
 from archon_horizon.harnesses.base import Cancellation
 from archon_horizon.inboxes.base import InboxProvider
 from archon_horizon.runlog import RunLog, RunLogTree, SessionLog
-from archon_horizon.subagents.base import Subagent, SubagentContext
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 from archon_horizon.transcript.sink import JsonlTranscriptSink
 from archon_horizon.store.base import (
     EventLog,
-    MemoryStore,
     RoadmapStore,
     RunStore,
     TaskStore,
@@ -57,7 +50,10 @@ from .scheduler import Scheduler
 from .sync import SyncCoordinator
 
 
-_TASK_CANCEL_POLL_S = 0.5
+# How often the terminal-status watcher re-reads a running task. It is the only
+# external kill switch for a live session (`horizon task set <id> --status …`),
+# so it stays — but a human close is not latency-critical, so poll gently.
+_TASK_CANCEL_POLL_S = 2.0
 
 
 def _csv(values: object, *, none: str = "none") -> str:
@@ -185,8 +181,6 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         )
     if event_type == "agent.frozen":
         return f"Skipped {data.get('agent')} because that agent is frozen."
-    if event_type == "write_domain.violation":
-        return f"Write-domain violation for task {data.get('task_id')}: {_csv(data.get('paths'))}."
     if event_type == "project.commit":
         project = data.get("project")
         if data.get("changed"):
@@ -293,7 +287,6 @@ class Orchestrator:
     sync: SyncCoordinator
     event_log: EventLog
     roadmap_store: RoadmapStore
-    memory_store: MemoryStore
     task_store: TaskStore
     inbox_providers: Sequence[InboxProvider] = ()
     run_store: RunStore | None = None
@@ -432,20 +425,6 @@ class Orchestrator:
 
     # ── context assembly ────────────────────────────────────────────
 
-    def _accepted_inbox(self) -> tuple[InboxItem, ...]:
-        items: list[InboxItem] = []
-        for provider in self.inbox_providers:
-            for item in provider.list_items():
-                if item.status is InboxStatus.OPEN and is_agent_ready(item.labels):
-                    items.append(item)
-        return tuple(items)
-
-    @staticmethod
-    def _render_memory(items: tuple[InboxItem, ...]) -> str:
-        """Memory now lives in the inbox: render the open MEMORY items as text."""
-        notes = [i for i in items if i.kind is InboxKind.MEMORY]
-        return "\n".join(f"- {i.body.strip()}" for i in notes)
-
     def _load_roadmap(self) -> Roadmap:
         """Load the sharded roadmap, tolerating a malformed item shard.
 
@@ -469,17 +448,6 @@ class Orchestrator:
             return Roadmap()
         self._roadmap_cache = roadmap
         return roadmap
-
-    def _blueprint_summary(self) -> str:
-        lines = []
-        for project, dag in workspace_dags(self.workspace).items():
-            nodes = dag.get("nodes", [])
-            proved = sum(1 for n in nodes if n.get("leanok"))
-            lines.append(
-                f"{project}: {len(nodes)} nodes, {proved} proved, "
-                f"{len(dag.get('edges', []))} edges, {len(dag.get('dangling', []))} dangling"
-            )
-        return "\n".join(lines)
 
     def _active_projects(self, run: RunRecord) -> tuple[str, ...]:
         if run.focus.projects:
@@ -512,74 +480,20 @@ class Orchestrator:
         self,
         run: RunRecord,
         task: HorizonTask,
-        domain: WriteDomain,
-        runlog: RunLog | None,
         log_dir: Path | None = None,
         resume_session_id: str | None = None,
         cancel: Cancellation | None = None,
     ) -> HorizonContext:
-        roadmap = self._load_roadmap()
-        projects = self._task_projects(task)
-        accepted = tuple(
-            i for i in self._accepted_inbox()
-            if any(reaches_horizon(i, p) for p in projects)
-        )
         return HorizonContext(
             workspace=self.workspace,
             run=run,
             task=task,
-            roadmap=roadmap.slice_for_projects(set(projects)),
-            accepted_inbox=accepted,
-            memory=self._render_memory(accepted),
-            write_domain=domain.allow,
             log_dir=log_dir,
             resume_session_id=resume_session_id,
             cancel=cancel,
         )
 
-    def _dirty_files(self) -> frozenset[str]:
-        """Workspace-relative paths dirty in the working tree right now (or empty
-        when git is unavailable). Used to snapshot pre-existing changes so the
-        write-domain check attributes only what a session newly touched."""
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
-
-        if not git_available():
-            return frozenset()
-        return frozenset(WorkspaceGit(self.workspace.root).changed_files())
-
-    def _enforce_write_domain(
-        self, task: HorizonTask, domain: WriteDomain, before: frozenset[str] = frozenset()
-    ) -> None:
-        """Flag (don't revert) files the free Horizon agent wrote outside its lane.
-
-        Only files the session NEWLY changed are considered — ``before`` is the
-        set of paths already dirty when the session started, so pre-existing
-        working-tree changes (manual edits, prior sessions) are never
-        mis-attributed. Violations are logged as events for Ground/humans to inspect.
-        """
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
-
-        if not git_available():
-            return
-        # The state dir is orchestrator-owned (events, runs, run-local reports);
-        # never attribute those writes to the agent.
-        state_prefix = self.workspace.state_dir.as_posix() + "/"
-        changed = tuple(
-            p for p in WorkspaceGit(self.workspace.root).changed_files()
-            if not p.startswith(state_prefix) and p not in before
-        )
-        violations = domain.violations(changed)
-        if not violations:
-            return
-        self._emit(
-            "write_domain.violation",
-            actor="orchestrator",
-            task_id=task.id,
-            paths=list(violations),
-        )
-
-
-    # ── applying a Ground update ────────────────────────────────────
+    # ── run bookkeeping ─────────────────────────────────────────────
 
     @staticmethod
     def _write_run_report(session: SessionLog | None, text: str) -> str | None:
@@ -797,8 +711,6 @@ class Orchestrator:
             session = self._session(runlog, f"horizon-{task.id}")
             started = utc_now()
             task_projects = self._task_projects(task)
-            domain = horizon_write_domain(self.workspace, task_projects)
-            before = self._dirty_files()
             if session is not None:
                 self._write_session_meta(session, {
                     "role": "horizon",
@@ -808,7 +720,6 @@ class Orchestrator:
                     "status": "running",
                     "started_at": started.isoformat(),
                     "projects": list(task_projects),
-                    "dirty_at_start": sorted(before),
                     # Stamp harness/model/effort now so a RUNNING session shows the
                     # real config (e.g. ultracode) live, not a stale/empty value until
                     # it finalizes. Finalize overwrites with the observed run metadata.
@@ -820,8 +731,6 @@ class Orchestrator:
                 self._horizon_context(
                     run,
                     task,
-                    domain,
-                    runlog,
                     self._log_dir(session),
                     resume_session_id,
                     cancel,
@@ -829,7 +738,6 @@ class Orchestrator:
             )
             stop_watch.set()
             watcher.join(timeout=1.0)
-            self._enforce_write_domain(task, domain, before)
             ref = self._write_run_report(session, result.report)
             if ref is not None:
                 self._emit("report.written", name=f"task-{task.id}", ref=ref)
