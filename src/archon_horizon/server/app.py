@@ -139,8 +139,18 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
                     self._json({"error": "not found"}, 404)
                 return
             if dist_dir is None:
+                # No built SPA (a source checkout without `npm run build`): the
+                # /api/* endpoints still serve; the page just says how to build.
                 if route == "/":
-                    self._send(200, service.render_html(live=True).encode("utf-8"), "text/html; charset=utf-8")
+                    notice = (
+                        "<!doctype html><meta charset='utf-8'><title>Archon Horizon</title>"
+                        "<body style='font-family:system-ui;max-width:640px;margin:80px auto'>"
+                        "<h1>Dashboard frontend not built</h1>"
+                        "<p>This install has no packaged <code>frontend/dist</code>. Build it with:</p>"
+                        "<pre>cd src/archon_horizon/frontend && npm install && npm run build</pre>"
+                        "<p>The JSON API is live at <a href='/api/state'>/api/state</a>.</p></body>"
+                    )
+                    self._send(200, notice.encode("utf-8"), "text/html; charset=utf-8")
                 else:
                     self._json({"error": "not found"}, 404)
                 return

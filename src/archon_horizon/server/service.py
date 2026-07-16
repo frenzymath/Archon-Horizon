@@ -1053,19 +1053,6 @@ class WorkspaceService:
         for child in session.subsessions():
             self._collect_session(run_id, child, session.name, found)
 
-    def render_html(self, *, live: bool = True) -> str:
-        from archon_horizon.render.dashboard import render_dashboard
-
-        return render_dashboard(
-            workspace_name=self.workspace.name,
-            roadmap=self.stores.roadmap.load(),
-            local_items=self.local.list_items(),
-            github_items=self.github.list_items() if self.github else (),
-            memory=self.stores.memory.load(),
-            reports=self.stores.reports.list(),
-            live=live,
-        )
-
     def transcript(self, ref: str) -> list[dict[str, Any]]:
         path = (self.root / ref).resolve()
         if self.root.resolve() not in path.parents:  # contain path traversal

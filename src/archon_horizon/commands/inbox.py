@@ -11,18 +11,12 @@ from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
 from archon_horizon.log import log
 from archon_horizon.store import serde
 
+from .shared import agent_author as _agent_author
 from .shared import emit_json, load_workspace, local_inbox, with_provenance
 
 app = typer.Typer(help="Manage the local inbox.", no_args_is_help=True)
 
 _JSON = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout.")
-
-
-def _agent_author(default: str | None = None) -> str | None:
-    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    if role in {"ground", "horizon"}:
-        return role
-    return default
 
 
 def _clean_agent(detail: str | None, role: str) -> str | None:
