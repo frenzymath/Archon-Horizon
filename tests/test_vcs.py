@@ -63,6 +63,55 @@ def test_workspace_git_is_out_of_tree(tmp_path: Path) -> None:
     assert git.commit("initial")  # commits without a root .git
 
 
+def test_workspace_git_resolves_relative_root(tmp_path: Path, monkeypatch) -> None:
+    _configure_identity(tmp_path)
+    workspace = tmp_path / "demo"
+    workspace.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    git = WorkspaceGit(Path("demo"))
+    git.init()
+    (workspace / "config.yaml").write_text("x\n", "utf-8")
+
+    assert git.root == workspace
+    assert git.git_dir == workspace / ".archon-horizon" / "vcs" / "workspace.git"
+    assert git.commit("initial", paths=["config.yaml"])
+
+
+def test_commits_detailed_by_refs_handles_legacy_untagged_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _configure_identity(tmp_path)
+    for key in (
+        "ARCHON_HORIZON_RUN",
+        "ARCHON_HORIZON_SESSION",
+        "ARCHON_HORIZON_AGENT_ROLE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    (tmp_path / "config.yaml").write_text("x\n", "utf-8")
+    sha = git.commit("legacy interactive work", paths=["config.yaml"])
+    assert sha
+
+    rows = git.commits_detailed_by_refs([sha[:10]])
+    assert len(rows) == 1
+    assert rows[0]["sha"] == sha
+    assert rows[0]["kind"] == "agent"
+
+
+def test_workspace_ledger_excludes_raw_transcripts_and_usage(tmp_path: Path) -> None:
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    session = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions" / "s"
+    session.mkdir(parents=True)
+    (session / "transcript.jsonl").write_text("{\"secret\":\"sk-test\"}\n", "utf-8")
+    (session / "usage.json").write_text("{}\n", "utf-8")
+
+    assert git.commit("raw session artifacts", paths=[".archon-horizon/runs"]) is None
+
+
 def test_workspace_git_force_adds_horizon_ledger_paths(tmp_path: Path) -> None:
     _configure_identity(tmp_path)
     git = WorkspaceGit(tmp_path)

@@ -67,11 +67,9 @@ to an image and **vision-transcribes** it into one self-contained
   reading the rendered page image with a vision model preserves it. This is a hard
   rule of the transcription flow.
 - **A small vision model is usually enough.** Faithful page transcription doesn't
-  need a frontier model — a cheap vision-capable model (e.g. Haiku-class)
-  typically suffices. Don't pick the model inside the prompt; pin it on the page-transcriber
-  descriptor (`tier:`/`model:` in `.archon-horizon/subagents/page-transcriber.md`)
-  so every transcription uses the same cheap vision model. When unset it inherits
-  the parent session's model.
+  need a frontier model — a cheap vision-capable model typically suffices. The
+  Horizon agent chooses the model and effort at dispatch time; do not encode that
+  spend policy in `config.yaml` or the descriptor.
 - **Keep each call ≤5 pages.** Longer ranges lose accuracy; split a big range
   across several `page-transcriber` calls.
 

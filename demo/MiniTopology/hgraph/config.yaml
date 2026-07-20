@@ -1,0 +1,3 @@
+blueprint: blueprint/src/content.tex
+lean:
+  - MiniTopology.lean

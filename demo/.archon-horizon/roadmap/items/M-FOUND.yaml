@@ -1,0 +1,18 @@
+id: M-FOUND
+title: Finite topology foundations
+projects:
+- MiniTopology
+summary: Formalize finite separation and compactness before the connectedness chapter.
+status: active
+kind: proof
+priority: normal
+depends_on: []
+inbox_refs: []
+task_refs:
+- DEMO.1
+scope:
+  projects:
+  - MiniTopology
+metadata:
+  author: human
+  created_at: '2026-07-18T08:00:00+00:00'

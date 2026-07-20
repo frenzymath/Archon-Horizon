@@ -56,8 +56,6 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
         write_domain=str(raw["write_domain"]) if raw.get("write_domain") else None,
         read_only=bool(raw.get("read_only", False)),
         default_enabled=bool(raw.get("default_enabled", True)),
-        tier=str(raw["tier"]) if raw.get("tier") else None,
-        model=str(raw["model"]) if raw.get("model") else None,
         prompt_body=text[match.end():],
         source_path=path,
     )
@@ -100,10 +98,6 @@ def descriptor_summary(descriptor_dir: Path) -> str:
     lines: list[str] = []
     for descriptor in descriptors.values():
         tags: list[str] = []
-        if descriptor.model:
-            tags.append(f"model={descriptor.model}")
-        elif descriptor.tier:
-            tags.append(f"tier={descriptor.tier}")
         if descriptor.read_only:
             tags.append("read-only")
         tag = f" [{', '.join(tags)}]" if tags else ""

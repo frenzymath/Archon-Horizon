@@ -1,12 +1,12 @@
 ---
 name: subagents
-description: How the Horizon agent delegates to native subagents to divide review/upkeep work — spawning by name, read-only enforcement, model tiers, and the dynamic descriptor roster.
+description: How the Horizon agent delegates to native subagents for review and upkeep — spawning by name, read-only enforcement, dispatch-time model choice, and the dynamic descriptor roster.
 ---
 
 Subagents are **your toolkit for delegation**: focused helpers you spawn to
-divide up review and upkeep while you keep proving. There is no separate Ground
-agent — when you judge the work needs tidying or a fresh-eyes check (see the
-`horizon` skill), spawn the right subagent yourself, then carry on.
+divide up review and upkeep while you keep proving. The `ground` helper is the
+fresh-context checkpoint for workspace-wide strategy and hygiene; it is a
+subagent, not a second orchestrator role.
 
 Each subagent is a single Markdown descriptor in
 `.archon-horizon/subagents/<name>.md`. At the start of every `horizon run` those
@@ -36,24 +36,20 @@ can still file issues/memory and write its report via the `horizon inbox` CLI;
 that is how read-only agents act. The descriptor's `write_domain` documents what
 a writer is expected to touch (Lean/blueprint/reference source).
 
-## Model tier — you own the spend
+## Model and effort — the Horizon agent owns the spend
 
-A descriptor selects its model engine-agnostically: `tier: small|medium|big`
-(resolved per-harness from that harness's `models:` map) or an explicit `model:`
-override. When neither is set, the subagent inherits the parent session's model
-— which keeps provider routing intact.
+Descriptors intentionally carry no model, tier, or effort setting. Generated
+Claude/Codex descriptors inherit the parent session by default. At dispatch time,
+the Horizon agent chooses the native model and reasoning effort for that helper:
+use the same model/effort for mathematical review, a lighter capable option for
+mechanical search/lint/hygiene, and a vision-capable option for page transcription.
+If the engine cannot express a per-call override, inherit the parent and record
+the choice in the report rather than hiding a model policy in `config.yaml`.
 
-YOU own the model choice for every piece of delegated work — a named subagent,
-a bare Task/Agent spawn, or any workflow fan-out your engine does for you. By
-default a helper inherits YOUR model (the expensive one), so choosing is not
-optional: match each helper's model AND reasoning effort to the difficulty of
-ITS slice. Search, file-finding, transcription, lint, diff review, and other
-mechanical work want a small, cheap model at low effort; reserve the large
-model at high effort for genuinely hard proof reasoning. Fanning out many
-large-model agents at once burns budget fast — spend the expensive tier
-deliberately, and before a big fan-out check `"$HORIZON_BIN" usage --json`:
-if headroom is low, **commit the work in flight first** so an interruption
-mid-fan-out loses nothing.
+The same rule applies to a named subagent, a bare Task/Agent spawn, or any
+workflow fan-out. Match model and effort to the actual slice, and before a large
+fan-out check `"$HORIZON_BIN" usage --json`. If headroom is low, commit work in
+flight first so an interruption loses nothing.
 
 To add or change a subagent, edit its descriptor under
 `.archon-horizon/subagents/` — it recompiles on the next run. Do not rely on a

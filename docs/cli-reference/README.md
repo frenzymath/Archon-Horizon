@@ -37,9 +37,9 @@ Scaffold a new workspace, or refresh Horizon-managed files on an existing one.
 
 | Flag | Description |
 | :--- | :--- |
-| `--config-json <json>` | Non-interactive config seed (e.g. `{"ground_kind":"null"}`). |
+| `--config-json <json>` | Non-interactive config seed (e.g. `{"horizon_kind":"null"}`). |
 | `--interactive` / `--no-interactive` | Prompt through setup (default) or run headless. |
-| `--audit` | After scaffolding, launch the interactive post-init advisor (Ground harness). |
+| `--audit` | After scaffolding, launch the interactive post-init advisor (Horizon harness). |
 | `--update` | Refresh managed artifacts (subagents, skills, MCP, git excludes) on an existing workspace; preserves your `config.yaml` and content. Non-prompting. |
 
 ### `horizon setup`
@@ -53,7 +53,8 @@ Upgrade the installed `archon-horizon` package. Follow with `horizon init --upda
 ## 3. Execution & orchestration
 
 ### `horizon run <target>`
-Drive a Ground/Horizon collaboration run. ([`commands/run.py`](../../src/archon_horizon/commands/run.py))
+Drive the Horizon loop; fresh-context helpers are dispatched by the Horizon
+agent at the checkpoints described in the `horizon` skill. ([`commands/run.py`](../../src/archon_horizon/commands/run.py))
 
 By default, `horizon run` also starts the live dashboard for the duration of the
 run.
@@ -67,7 +68,6 @@ run.
 | `<project>` / `<file>` | Synthesize an ad-hoc task scoped to that project/file. |
 | `.` | Ad-hoc task over **all** configured projects. |
 | `'*'` | Run every queued task (must be the only target). |
-| `ground` | Run a **single** Ground planning session (no alternation). |
 | `horizon` | Run a **single** Horizon prover session over the current focus. |
 
 **Flags:**
@@ -78,13 +78,13 @@ run.
 | `--rounds <n>` | Override the configured round count. |
 | `--dry-run` | Plan only; print what would run, don't invoke Horizon. |
 | `--resume <id\|latest>` | Resume an interrupted run from its last unfinished round. |
-| `--backend <default\|interactive>` | `default` streams a headless transcript (orchestrated). `interactive` hands the terminal to the engine for a single role (`ground`/`horizon`) so you can type prompts. |
+| `--backend <default\|interactive>` | `default` streams a headless transcript (orchestrated). `interactive` hands the terminal to the Horizon engine so you can type prompts. |
 | `--host <host>` / `--port <port>` | Dashboard bind address and port for the run. |
 | `--public` | Bind the run dashboard to `0.0.0.0` for remote VMs, containers, or port-forwarded sessions. |
 | `--no-dashboard` | Do not start the live dashboard; useful for scripts and headless runs. |
 
 ### `horizon discuss`
-Open an **interactive** session with the workspace (using the Ground harness). The agent reads the docs and on-disk state, summarizes status and recent runs, and can manage projects/tasks/inbox/roadmap — but only modifies things when you explicitly ask. ([`commands/discuss.py`](../../src/archon_horizon/commands/discuss.py))
+Open an **interactive** session with the workspace. The agent reads the docs and on-disk state, summarizes status and recent runs, and can manage projects/tasks/inbox/roadmap — but only modifies things when you explicitly ask. ([`commands/discuss.py`](../../src/archon_horizon/commands/discuss.py))
 
 ### `horizon sync`
 Sync inbox providers — e.g. import GitHub issue/PR shadows into the local inbox via the `gh` CLI (see the `github:` config). ([`commands/sync.py`](../../src/archon_horizon/commands/sync.py))
@@ -143,6 +143,6 @@ Implemented in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py)
 | Variable | Purpose |
 | :--- | :--- |
 | `IS_SANDBOX=1` | Allow Claude Code / containerized agents to run under root. |
-| `ARCHON_HORIZON_AGENT_ROLE` | Per-session role (`ground`/`horizon`); enforces agent write-lanes (e.g. agents can't author tasks). |
+| `ARCHON_HORIZON_AGENT_ROLE` | Per-session role (`horizon`; older logs may contain `ground`); enforces agent write-lanes (e.g. agents can't author tasks). |
 | `ARCHON_HORIZON_ALLOW_SECRETS=1` | Bypass the autogit pre-commit secret guard. |
 | `CLAUDE_CONFIG_DIR` / `CODEX_HOME` | Per-harness engine config/auth home (see the harness `options.config_dir`). |

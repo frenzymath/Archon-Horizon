@@ -11,14 +11,18 @@ from __future__ import annotations
 import os
 import subprocess
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from archon_horizon.cli import main
 from archon_horizon.core.events import Event
+from archon_horizon.core.clock import utc_now
 from archon_horizon.runlog import RunLogTree
 from archon_horizon.server.service import WorkspaceService
+from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
+from archon_horizon.transcript.sink import JsonlTranscriptSink
 from archon_horizon.vcs.git import WorkspaceGit, git_available
 from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session
 
@@ -131,3 +135,52 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     diff = service.serve_endpoint(ep)
     assert diff["available"] and "trivial" in diff["diff"]
     assert ep in service.endpoints()
+
+
+def test_legacy_interactive_session_recovers_explicit_transcript_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _identity()
+    ws = tmp_path / "ws"
+    main(["--root", str(ws), "init", "--no-interactive"])
+    main(["--root", str(ws), "project", "add", "proj", "projects/proj"])
+    for key in (
+        "ARCHON_HORIZON_RUN",
+        "ARCHON_HORIZON_SESSION",
+        "ARCHON_HORIZON_AGENT_ROLE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    runs = RunLogTree(ws / ".archon-horizon" / "runs")
+    run = runs.allocate()
+    session = run.new_session("horizon-interactive")
+    started = utc_now() - timedelta(minutes=1)
+    lean = ws / "projects" / "proj" / "Legacy.lean"
+    lean.parent.mkdir(parents=True, exist_ok=True)
+    lean.write_text("theorem legacy : True := by trivial\n", "utf-8")
+    git = WorkspaceGit(ws)
+    git.init()
+    sha = git.commit("Legacy interactive proof", paths=["projects/proj/Legacy.lean"])
+    assert sha
+    session.write_meta({
+        "role": "horizon",
+        "interactive": True,
+        "started_at": started.isoformat(),
+        "ended_at": (utc_now() + timedelta(minutes=1)).isoformat(),
+        "status": "ok",
+    })
+    JsonlTranscriptSink(session.transcript_path).emit(TranscriptEvent(
+        TranscriptKind.TEXT,
+        text=f"## Progress\n\nCompleted and committed as `{sha[:10]}`.",
+    ))
+    (session.path / "report.md").write_text(
+        "# Interactive horizon session\n\nA generic placeholder.\n", "utf-8"
+    )
+
+    service = WorkspaceService(ws)
+    view = service.session_commits_view(run.id, session.name)
+    assert [(row["sha"], row["subject"]) for row in view["commits"]] == [
+        (sha, "Legacy interactive proof")
+    ]
+    ref = session.transcript_path.relative_to(ws).as_posix()
+    assert service.report(ref)["markdown"].startswith("## Progress")

@@ -48,20 +48,14 @@ horizon run '*'
   horizon run --resume <run_id>     # or --resume latest
   ```
 
-### Single-role and interactive runs
+### Interactive runs
 
-Besides the full alternation, you can run **one role** on its own:
-```bash
-horizon run ground     # a single Ground planning session (no alternation)
-horizon run horizon    # a single Horizon prover session over the current focus
-```
-
-Add `--backend interactive` to a role to hand the terminal straight to the engine — headless streaming is replaced by a live TTY, so you can type follow-up prompts and steer the agent yourself:
+Add `--backend interactive` to hand the terminal straight to the Horizon engine — headless streaming is replaced by a live TTY, so you can type follow-up prompts and steer the agent yourself:
 ```bash
 horizon run horizon --backend interactive
 ```
 
-For a purely conversational, human-facing session — explain status, summarize recent runs, and make guided edits to projects/tasks/inbox/roadmap on request — use [`horizon discuss`](../../src/archon_horizon/commands/discuss.py) (a Ground-flavored companion that only modifies things when you ask).
+For a conversational, human-facing session — explain status, summarize recent runs, and make guided edits to projects/tasks/inbox/roadmap on request — use [`horizon discuss`](../../src/archon_horizon/commands/discuss.py).
 
 Run lifecycle and resumption state are tracked in [`core/sessions.py`](../../src/archon_horizon/core/sessions.py); concurrency safety across projects is handled by [`orchestration/locks.py`](../../src/archon_horizon/orchestration/locks.py).
 
@@ -69,7 +63,7 @@ Run lifecycle and resumption state are tracked in [`core/sessions.py`](../../src
 
 ## 2. Collaboration Rounds
 
-When a run is initiated, Horizon executes a structured **collaboration loop** between the Ground and Horizon agents (implemented in [`orchestration/orchestrator.py`](../../src/archon_horizon/orchestration/orchestrator.py)):
+When a run is initiated, Horizon executes a structured loop of proof sessions and fresh-context checkpoints (implemented in [`orchestration/orchestrator.py`](../../src/archon_horizon/orchestration/orchestrator.py)):
 
 ```
 [Target Task / Focus]
@@ -78,10 +72,10 @@ When a run is initiated, Horizon executes a structured **collaboration loop** be
 ┌────────────────────────────────────────────────────────┐
 │ Collaboration Round (Repeated up to configured rounds) │
 │                                                        │
-│  1. Ground Agent analyzes blueprint & roadmap state    │
-│  2. Target theorems & write sets dispatched to Horizon │
-│  3. Horizon Agent writes Lean & runs `lake build`      │
-│  4. Proof repairs & results emitted as structured JSON │
+│  1. Horizon reads task, graph, roadmap, and inbox      │
+│  2. Horizon writes Lean and validates the target       │
+│  3. Ground reviews strategy and workspace state        │
+│  4. Horizon reconciles findings and records progress   │
 └────────────────────────────────────────────────────────┘
          │
          ▼
@@ -95,7 +89,7 @@ When a run is initiated, Horizon executes a structured **collaboration loop** be
 Horizon keeps a sharp distinction between the human's tasks and the agent-maintained roadmap:
 
 - **Tasks (`horizon task`)**: the human's lever for launching sessions — objectives with project scope, write-set, and target files. **Human-authored only**: agents may read and `comment` (to suggest an edit) but cannot `add`/`set`/`remove` (the CLI refuses when `ARCHON_HORIZON_AGENT_ROLE` is set); to propose work an agent opens an inbox item for the human. Modeled in [`core/tasks.py`](../../src/archon_horizon/core/tasks.py), commands in [`commands/task.py`](../../src/archon_horizon/commands/task.py).
-- **Roadmap (`horizon roadmap`)**: the project's **mathematical status** — the main theorems and infrastructure formalized and still to build. Ground maintains it to mirror the real Lean/blueprint state; it is a map that guides the work, **not** a work queue. Marking an item active does not launch anything and the orchestrator never turns roadmap items into tasks on its own. A human launches a milestone with `horizon run <roadmap-id>`, which **infers** a task from the item's scope on demand. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
+- **Roadmap (`horizon roadmap`)**: the project's **mathematical status** — the main theorems and infrastructure formalized and still to build. Horizon maintains it against the real Lean/blueprint state, while Ground checkpoints audit it from fresh context. It is a map that guides the work, **not** a work queue. Marking an item active does not launch anything and the orchestrator never turns roadmap items into tasks on its own. A human launches a milestone with `horizon run <roadmap-id>`, which **infers** a task from the item's scope on demand. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
 
 ### Common Roadmap Commands
 

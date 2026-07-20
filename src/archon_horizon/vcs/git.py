@@ -141,6 +141,10 @@ _WORKSPACE_EXCLUDES = (
     ".archon-horizon/locks/",
     ".archon-horizon/bin/",
     ".archon-horizon/cache/",  # dashboard poll caches — derived, never history
+    # Raw model transcripts and live usage counters stay on the workspace
+    # filesystem for the dashboard; they are too large and may contain secrets.
+    ".archon-horizon/runs/**/sessions/**/transcript.jsonl",
+    ".archon-horizon/runs/**/sessions/**/usage.json",
 )
 
 # A pre-commit guard installed into every out-of-tree git. Two protections:
@@ -400,8 +404,10 @@ class WorkspaceGit:
     """
 
     def __init__(self, root: Path, git_dir: Path | None = None) -> None:
-        self.root = root
-        self.git_dir = git_dir or (root / ".archon-horizon" / "vcs" / "workspace.git")
+        self.root = root.resolve()
+        self.git_dir = git_dir.resolve() if git_dir else (
+            self.root / ".archon-horizon" / "vcs" / "workspace.git"
+        )
 
     def _run(
         self,
@@ -498,7 +504,15 @@ class WorkspaceGit:
                     # them. Project trees are added WITHOUT force, so the excludes and the
                     # project's .gitignore apply — keeping .lake / .olean / .git.disabled
                     # out of the ledger instead of force-committing the whole tree.
-                    state = [p for p in paths if p == "config.yaml" or p.split("/", 1)[0] == ".archon-horizon"]
+                    # ``runs/`` is intentionally added without ``-f`` so the
+                    # raw transcript/usage excludes above apply to new files;
+                    # session metadata and reports remain tracked normally.
+                    state = [
+                        p for p in paths
+                        if p == "config.yaml"
+                        or (p.split("/", 1)[0] == ".archon-horizon"
+                            and p != ".archon-horizon/runs")
+                    ]
                     projects = [p for p in paths if p not in state]
                     if state:
                         self._run(["add", "-f", "--", *state], index_file=index)
@@ -637,6 +651,64 @@ class WorkspaceGit:
         out = self._run(["rev-parse", "--verify", "--quiet", f"{sha}^"], check=False)
         return out or None
 
+    def commit_shas_between(self, base: str | None, head: str | None) -> tuple[str, ...]:
+        """Commits reachable from ``head`` but not ``base``, oldest-first."""
+        if not self.is_repo() or not head or head == base:
+            return ()
+        revision = f"{base}..{head}" if base else head
+        out = self._run(["rev-list", "--reverse", revision], check=False)
+        return tuple(line.strip() for line in out.splitlines() if line.strip())
+
+    def commits_detailed_by_refs(self, refs: Sequence[str]) -> list[dict[str, str]]:
+        """Resolve commit refs and return provenance rows in the given order.
+
+        Invalid refs are ignored. This backs recovery for sessions that recorded
+        the exact commit SHA but predate automatic Archon trailers.
+        """
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for ref in refs:
+            if not ref:
+                continue
+            sha = self._run(
+                ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                check=False,
+            )
+            if not sha or sha in seen:
+                continue
+            seen.add(sha)
+            out = self._run(
+                [
+                    "show", "-s",
+                    "--format=%H%x1f%s%x1f%cI%x1f"
+                    "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Archon-Session,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Archon-Role,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)",
+                    sha,
+                ],
+                check=False,
+            )
+            parts = out.split("\x1f")
+            if len(parts) > 7:
+                continue
+            parts.extend([""] * (7 - len(parts)))
+            full_sha, subject, date, run_trailer, session_trailer, role_trailer, kind_trailer = parts
+            runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
+            sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
+            roles = [v.strip().lower() for v in role_trailer.split("\x1e") if v.strip()]
+            kinds = [v.strip().lower() for v in kind_trailer.split("\x1e") if v.strip()]
+            rows.append({
+                "sha": full_sha,
+                "subject": subject,
+                "date": date,
+                "run": runs[-1] if runs else "",
+                "session": sessions[-1] if sessions else "",
+                "role": roles[-1] if roles else "",
+                "kind": kinds[-1] if kinds else "agent",
+            })
+        return rows
+
     def session_commits_detailed(self, run_id: str, session: str) -> list[dict[str, str]]:
         """Commit rows for one run/session, oldest-first, with provenance.
 
@@ -651,7 +723,7 @@ class WorkspaceGit:
         out = self._run(
             ["log", "--fixed-strings", "--all-match",
              f"--grep=Archon-Run: {run_id}", f"--grep=Archon-Session: {session}",
-             "--format=%H%x1f%s%x1f"
+             "--format=%H%x1f%s%x1f%cI%x1f"
              "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
              "%(trailers:key=Archon-Session,valueonly,separator=%x1e)%x1f"
              "%(trailers:key=Archon-Role,valueonly,separator=%x1e)%x1f"
@@ -661,9 +733,9 @@ class WorkspaceGit:
         matched: list[dict[str, str]] = []
         for line in out.splitlines():
             parts = line.split("\x1f")
-            if len(parts) != 6:
+            if len(parts) != 7:
                 continue
-            sha, subject, run_trailer, session_trailer, role_trailer, kind_trailer = parts
+            sha, subject, date, run_trailer, session_trailer, role_trailer, kind_trailer = parts
             runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
             sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
             if run_id in runs and session in sessions:
@@ -673,6 +745,7 @@ class WorkspaceGit:
                 matched.append({
                     "sha": sha,
                     "subject": subject,
+                    "date": date,
                     "role": roles[-1] if roles else "",
                     "kind": kind,
                 })

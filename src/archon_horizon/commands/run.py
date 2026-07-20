@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import dataclasses
+import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,7 @@ from archon_horizon.core.sessions import Focus, RunRecord
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.log import log
+from archon_horizon.transcript.sink import latest_report_text
 
 from .dashboard import LOCAL_DASHBOARD_HOST, resolve_dashboard_host
 from .shared import emit_json, inbox_providers, load_workspace
@@ -255,6 +257,13 @@ class RunCommand:
         stays ``--resume``-able via the recorded engine session id."""
         from archon_horizon.config.loader import build_stores
         from archon_horizon.core.clock import utc_now
+        from archon_horizon.core.events import Event
+        from archon_horizon.harnesses.command import _horizon_bin
+        from archon_horizon.vcs.git import WorkspaceGit, install_ledger_git_wrapper
+        from archon_horizon.vcs.integration import (
+            integrate_workspace_baseline,
+            integrate_workspace_session,
+        )
 
         from .interactive import (
             horizon_seed_prompt,
@@ -266,6 +275,8 @@ class RunCommand:
         # `focus` = the non-role targets (task ids / projects / files) the human
         # asked for; the interactive session is seeded to start there.
         focus = tuple(t for t in self.targets if t not in ROLE_TARGETS)
+        cfg, workspace = load_workspace(self.root)
+        self._install_native_subagents(cfg, workspace)
         # Prefer the role picked by config routing (`_config_interactive_role`); the
         # plain `--backend interactive` CLI path falls back to the target shape.
         # Only one role exists now (horizon); interactive always drives it.
@@ -307,10 +318,31 @@ class RunCommand:
             run_interactive(launch, self.root)
             return
 
-        cfg, workspace = load_workspace(self.root)
         stores = build_stores(workspace)
         runlog = stores.run_logs.allocate()
-        run = RunRecord(id=runlog.id, focus=Focus(), rounds_requested=1)
+        task = None
+        for target in ((self.task,) if self.task else focus):
+            if not target:
+                continue
+            try:
+                task = stores.tasks.get(target)
+                break
+            except Exception:
+                continue
+        task_id = task.id if task is not None else self.task
+        if task is not None:
+            projects = tuple(task.projects) or ((task.project,) if task.project else ())
+        else:
+            projects = tuple(name for name in focus if name in workspace.projects)
+        run = RunRecord(
+            id=runlog.id,
+            focus=Focus(
+                projects=projects,
+                task=task_id,
+                tasks=(task_id,) if task_id else (),
+            ),
+            rounds_requested=1,
+        )
         try:
             stores.runs.put(run)
         except Exception:
@@ -321,33 +353,124 @@ class RunCommand:
             "interactive": True,
             "engine": launch.engine,
             "engine_session_id": launch.session_id,
+            "task_id": task_id,
+            "projects": list(projects),
             "started_at": utc_now().isoformat(),
         }
         session.write_meta({**base_meta, "status": "running"})
         log.info(f"Recording this interactive session under run {runlog.id} — visible in the dashboard/Log.")
 
+        baseline = integrate_workspace_baseline(
+            workspace,
+            run_id=runlog.id,
+            projects=projects,
+        )
+        ledger = WorkspaceGit(workspace.root)
+        session_base_sha = baseline.sha or ledger.current_sha()
+        base_meta["workspace_base_sha"] = session_base_sha
+        session.write_meta({**base_meta, "status": "running"})
+        stores.events.append(Event(
+            type="workspace.run_baseline",
+            id=hashlib.sha256(f"baseline:{runlog.id}".encode()).hexdigest(),
+            actor="orchestrator",
+            data={
+                "run_id": runlog.id,
+                "sha": baseline.sha,
+                "changed": baseline.changed,
+                "files": list(baseline.files),
+                "projects": list(projects),
+            },
+        ))
+
+        session_env = {
+            **launch.env,
+            "ARCHON_HORIZON_ROOT": str(workspace.root.resolve()),
+            "ARCHON_HORIZON_RUN": runlog.id,
+            "ARCHON_HORIZON_SESSION": session.name,
+            "ARCHON_HORIZON_SESSION_DIR": str(session.path.resolve()),
+            "ARCHON_HORIZON_AGENT_ROLE": role,
+            "ARCHON_HORIZON_ROUND": "0",
+            "ARCHON_HORIZON_ROUNDS": "1",
+            "HORIZON_LEDGER_GIT_DIR": str(WorkspaceGit(workspace.root).git_dir),
+            "HORIZON_LEDGER_WORK_TREE": str(workspace.root.resolve()),
+        }
+        if task_id:
+            session_env["ARCHON_HORIZON_TASK"] = task_id
+        if task is not None and task.title:
+            session_env["ARCHON_HORIZON_TASK_TITLE"] = task.title
+        if projects:
+            session_env["ARCHON_HORIZON_PROJECTS"] = ",".join(projects)
+        wrapper = install_ledger_git_wrapper(workspace.state_path)
+        if wrapper is not None:
+            session_env["HORIZON_GIT"] = str(wrapper.resolve())
+        horizon_bin = _horizon_bin()
+        if horizon_bin:
+            session_env.setdefault("HORIZON_BIN", horizon_bin)
+            session_env["PATH"] = (
+                str(Path(horizon_bin).parent) + os.pathsep + session_env.get("PATH", "")
+            )
+        launch = dataclasses.replace(launch, env=session_env)
+
         returncode = run_interactive_captured(
             launch, self.root, transcript_path=session.transcript_path, role=role, seed_prompt=prompt,
         )
 
+        agent_head = ledger.current_sha()
+        candidate_shas = ledger.commit_shas_between(session_base_sha, agent_head)
+        candidate_rows = ledger.commits_detailed_by_refs(candidate_shas)
+        commit_shas = [
+            row["sha"] for row in candidate_rows
+            if not row.get("session") or row.get("session") == session.name
+        ]
+        report_text = latest_report_text(session.transcript_path)
+        if not report_text:
+            report_text = (
+                f"# Interactive {role} session\n\n"
+                f"A human-driven interactive session (engine: `{launch.engine}`). Its conversation was "
+                f"mirrored into this run's transcript as it happened. Exit code {returncode}.\n"
+            )
+        (session.path / "report.md").write_text(report_text.rstrip() + "\n", "utf-8")
+        integration = integrate_workspace_session(
+            workspace,
+            run_id=runlog.id,
+            session=session.name,
+            role=role,
+            round_index=0,
+            task_id=task_id,
+            projects=projects,
+        )
+        stores.events.append(Event(
+            type="workspace.session.integrated",
+            id=hashlib.sha256(f"integration:{runlog.id}:{session.name}".encode()).hexdigest(),
+            actor="orchestrator",
+            data={
+                "run_id": runlog.id,
+                "session": session.name,
+                "role": role,
+                "task_id": task_id,
+                "projects": list(integration.projects),
+                "workspace_commit": integration.workspace_commit,
+                "workspace_commit_error": integration.workspace_commit_error,
+                "files": list(integration.workspace_files),
+            },
+        ))
         session.write_meta({
             **base_meta,
             "status": "ok" if returncode == 0 else "failed",
             "ended_at": utc_now().isoformat(),
             "returncode": returncode,
+            "workspace_agent_sha": agent_head,
+            "commit_shas": commit_shas,
+            "workspace_commit": integration.workspace_commit,
         })
-        (session.path / "report.md").write_text(
-            f"# Interactive {role} session\n\n"
-            f"A human-driven interactive session (engine: `{launch.engine}`). Its conversation was "
-            f"mirrored into this run's transcript as it happened. Exit code {returncode}.\n",
-            "utf-8",
-        )
+        if integration.workspace_commit_error:
+            log.warn(f"Could not integrate interactive session: {integration.workspace_commit_error}")
 
     def _install_native_subagents(self, cfg, workspace) -> None:
         """Compile descriptors into each engine's workspace-local native agents.
 
-        Done at run start so a change to the descriptors or a harness's tier map
-        takes effect on the next run, with no separate install step.
+        Done at run start so descriptor changes take effect on the next run,
+        with no separate install step.
         """
         try:
             from archon_horizon.subagents.compile import install_subagents

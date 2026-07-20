@@ -29,12 +29,6 @@ class SubagentDescriptor:
     write_domain: str | None = None
     read_only: bool = False
     default_enabled: bool = True
-    # Engine-agnostic model selection for the compiled native subagent.
-    # ``model`` is an explicit override (passed through literally); ``tier`` is a
-    # symbolic size (small/medium/big) resolved per-harness. Neither set → the
-    # native subagent omits ``model`` and inherits the parent session.
-    tier: str | None = None
-    model: str | None = None
     source_path: Path | None = None
 
 

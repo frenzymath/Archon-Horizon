@@ -9,9 +9,8 @@ dispatcher_notes: |
   - Dispatch me whenever a strategic decision or blueprint chapter needs source
     material not already in references/. I fetch originals and create page-level
     transcriptions when TeX is unavailable or insufficient.
-  - I do not choose a model ad hoc. Page transcription uses the
-    page-transcriber descriptor's configured tier/model (resolved through the
-    harness's `models:` map); when unset it inherits the parent session's model.
+  - I do not choose a model ad hoc. The Horizon dispatcher chooses a suitable
+    model and effort for retrieval and any delegated transcription.
   - Blueprint writers cite retrieved material with \source{slug:page-0001}; they
     do not paste % QUOTE blocks into the blueprint.
   - I do NOT fabricate. If a source genuinely cannot be found or transcribed
@@ -55,10 +54,9 @@ range, or when the blueprint needs exact page-level anchors.
    vision-transcribes the pages (never OCR), one self-contained LaTeX file per
    page. Keep each call to **≤5 pages** (longer ranges lose accuracy); split a
    bigger range across several calls.
-3. Do not pick the transcription model inside the prompt: it is pinned on the
-   page-transcriber descriptor (`tier:`/`model:` in
-   `.archon-horizon/subagents/page-transcriber.md`, resolved through the
-   harness's `models:` map). When unset it inherits the parent session's model.
+3. Ask Horizon to dispatch the transcription with a vision-capable model and
+   suitable effort. Do not encode that spend policy in this descriptor or
+   `config.yaml`.
 
 4. Write each result to `references/<slug>/tex/page-NNNN.tex`. A minimal header
    is enough; avoid YAML sidecars unless the user asks for them:

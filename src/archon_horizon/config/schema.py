@@ -16,12 +16,6 @@ from archon_horizon.core.types import Metadata
 
 
 
-# Symbolic model tiers, ordered cheapest → most capable. A subagent descriptor
-# names a tier (engine-agnostic); the harness's ``models`` map turns it into a
-# concrete model. ``big`` defaults to the harness's primary ``model``.
-TIER_ORDER: tuple[str, ...] = ("small", "medium", "big")
-
-
 @dataclass(frozen=True, slots=True)
 class HarnessConfig:
     name: str
@@ -29,43 +23,18 @@ class HarnessConfig:
     command: str | None = None
     args: tuple[str, ...] = ()
     model: str | None = None
-    # tier name → concrete model (e.g. {"small": "haiku", "medium": "sonnet"}).
-    # Must stay within this harness's own provider — native subagents inherit the
-    # parent process env, so a cross-provider tier would not route correctly.
-    models: dict[str, str] = field(default_factory=dict)
     options: Metadata = field(default_factory=dict)
 
     @classmethod
     def from_raw(cls, name: str, data: dict[str, Any]) -> "HarnessConfig":
-        raw_models = data.get("models") or {}
         return cls(
             name=name,
             kind=data["kind"],
             command=data.get("command"),
             args=tuple(data.get("args", ())),
             model=data.get("model"),
-            models={str(k): str(v) for k, v in raw_models.items()},
             options=dict(data.get("options", {})),
         )
-
-    def tier_model(self, tier: str | None) -> str | None:
-        """Resolve a tier name to a concrete model for this harness.
-
-        ``model`` is the primary/``big`` default. A requested tier that isn't
-        filled in falls *up* toward the next-more-capable tier, then to ``model``.
-        Returns ``None`` when nothing is configured, so callers omit the model and
-        let the subagent inherit the parent session's model.
-        """
-        if not tier:
-            return self.model
-        if tier not in TIER_ORDER:
-            return self.models.get(tier) or self.model
-        for t in TIER_ORDER[TIER_ORDER.index(tier):]:
-            if t == "big":
-                return self.models.get("big") or self.model
-            if self.models.get(t):
-                return self.models[t]
-        return self.model
 
     @property
     def config_dir(self) -> str | None:

@@ -18,7 +18,7 @@ In-depth guides for [**Archon Horizon**](../README.md) — workspace-first orche
 
 | Guide | Covers | Key commands |
 | :--- | :--- | :--- |
-| 🏗️ [Architecture & Core Concepts](./architecture/README.md) | The two-agent model (Ground Agent vs. Horizon Agent), multi-project workspaces, harness execution seams, and native subagents. | — |
+| 🏗️ [Architecture & Core Concepts](./architecture/README.md) | The Horizon loop, fresh-context Ground helper, multi-project workspaces, harness execution seams, and native subagents. | — |
 | 📁 [Workspaces & Projects](./workspaces-and-projects/README.md) | Scaffolding a workspace, embedded vs. out-of-tree Git projects, and pre-dispatch freeze protections. | `horizon init`, `horizon project` |
 | 🔧 [Configuration](./configuration/README.md) | Every `config.yaml` section — workspace defaults, harnesses/models, projects, external libraries, GitHub, and freeze rules. | — |
 | ⚙️ [Orchestration & Roadmap](./orchestration-and-roadmap/README.md) | The multi-round collaboration loop, running tasks, milestones, and structured execution reports. | `horizon run`, `horizon roadmap`, `horizon task` |
@@ -39,7 +39,7 @@ Every command supports `--json` for machine-readable output on `stdout`.
 | `horizon init` | Scaffold a workspace, or refresh managed subagents/skills (`--update`). |
 | `horizon setup` | Check and configure external tools (Claude Code, Lean 4 toolchain, …). |
 | `horizon update` | Upgrade the Archon Horizon package. |
-| `horizon run <target>` | Run autoformalization on a task/project, everything (`*`), or a single role (`ground`/`horizon`, `--backend interactive`). |
+| `horizon run <target>` | Run autoformalization on a task/project, everything (`*`), or an interactive Horizon session. |
 | `horizon discuss` | Interactive session to talk with the workspace (status, recent runs, guided edits). |
 | `horizon roadmap` | Manage milestones and the overarching roadmap. |
 | `horizon task` | Create and manage formalization tasks. |

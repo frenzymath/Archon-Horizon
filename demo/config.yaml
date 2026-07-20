@@ -1,0 +1,30 @@
+workspace:
+  name: Mini Geometry Lab
+  state_dir: .archon-horizon
+  rounds: 2
+  horizon_agent:
+    harness: codex-demo
+  scheduler:
+    max_parallel_sessions: 1
+
+harnesses:
+  codex-demo:
+    kind: codex
+    model: gpt-5-codex
+    options:
+      effort: high
+  claude-demo:
+    kind: claude-code
+    model: claude-sonnet-4-20250514
+    options:
+      effort: medium
+
+projects:
+  MiniTopology:
+    path: MiniTopology
+    type: lean
+    blueprint:
+      path: blueprint/src
+
+github:
+  enabled: false

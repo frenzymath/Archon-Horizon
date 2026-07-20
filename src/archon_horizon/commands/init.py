@@ -288,10 +288,10 @@ def _launch_post_init_advisor(root: Path) -> None:
 
     if launch is None:
         prompt_path = _write_post_init_advisor_prompt(root, prompt)
-        log.info(f"Ground harness is 'null'; advisor prompt saved to {prompt_path}.")
+        log.info(f"Horizon harness is 'null'; advisor prompt saved to {prompt_path}.")
         return
 
-    # The prompt is passed directly to the Ground agent — no file is written
+    # The prompt is passed directly to the Horizon session; no file is written
     # in the normal path.
     log.info(f"Launching an interactive workspace advisor using {launch.description}.")
     run_interactive(launch, root)
@@ -802,7 +802,7 @@ def init(
         False,
         "--advisor",
         "--audit",
-        help="After init, launch an interactive workspace advisor using the Ground agent config.",
+        help="After init, launch an interactive workspace advisor using the Horizon harness.",
     ),
     update: bool = typer.Option(
         False,

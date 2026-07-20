@@ -15,12 +15,9 @@
 
 ---
 
-Archon Horizon orchestrates autonomous AI agents that formalize mathematics in **Lean 4** across **multiple interdependent projects**. A workspace is the unit of work: agents plan over shared blueprints and dependency graphs, then run long, self-directed proving sessions, building with `lake`, diagnosing compiler errors, and repairing proofs without constant human supervision. While autonomous by design, Archon Horizon also integrates better human-agent collaboration locally, and external collaboration with GitHub.
+Archon Horizon orchestrates autonomous AI agents that formalize mathematics in **Lean 4** across **multiple interdependent projects**. A workspace is the unit of work: the Horizon agent plans over shared blueprints and dependency graphs, runs long proving sessions, builds with `lake`, and repairs failures without constant human supervision. Fresh-context helpers provide independent review and workspace hygiene without creating a second orchestration loop.
 
-Two roles divide the work:
-
-- **Ground Agent** — the constrained strategist. Maintains LaTeX blueprints, dependency DAGs, roadmaps, inboxes, human-readable artifacts, and prevents the **Horizon Agent** from diverging. 
-- **Horizon Agent** — the autonomous prover. Writes Lean, writes blueprints, runs toolchains, repairs failures, organizes the workspace, creates subprojects, etc.
+The **Horizon Agent** owns the proof loop and decides when to dispatch helpers. The read-only **Ground** helper is a scheduled workspace-wide checkpoint for strategy, graph/task consistency, ledger hygiene, and convergence; `work-reviewer`, `blueprint`, `janitor`, and the other helpers remain available for narrower slices.
 
 > [!NOTE]
 > Archon Horizon is the successor to [**Archon**](https://github.com/frenzymath/Archon), which formalizes research-level mathematics within a *single* project. Horizon generalizes that model to **workspaces of many projects**. The main argument is that LLMs will able to maintain larger and larger formalization projects, **Archon Horizon** will be able to orchestrate them in a scalable workspace.
@@ -37,18 +34,20 @@ Two roles divide the work:
   - [2. Scaffold a workspace](#2-scaffold-a-workspace)
   - [3. Run](#3-run)
 - [CLI Overview](#cli-overview)
+- [Live Demo](#live-demo)
 - [License](#license)
 
 ---
 
 ## Features
 
-- **Two-agent orchestration.** A Ground Agent plans over blueprints, roadmaps, and inboxes and keeps the run on track, while an autonomous Horizon Agent does the actual Lean proving over long, self-directed sessions. The two alternate across configurable collaboration rounds, keeping strategy and execution cleanly separated. → [Architecture](./docs/architecture/README.md)
+- **Fresh-context convergence checks.** The Horizon agent schedules the read-only Ground helper before terminal task completion and during long runs, with narrower `work-reviewer` and `janitor` helpers available as needed. → [Architecture](./docs/architecture/README.md)
 - **Multi-engine harnesses.** Orchestration is decoupled from the execution engine behind a single `Harness` seam, so agents can run on Claude Code, OpenAI Codex, or any custom command. Kimi/Moonshot, DeepSeek, and OpenRouter routing are built in, and a `null` harness keeps tests offline. → [Architecture](./docs/architecture/README.md#3-harness-seam--provider-routing)
 - **Multi-project workspaces.** A workspace holds many interdependent Lean projects under one root — embedded as subdirectories or tracked as out-of-tree Git checkouts (no fragile submodules). Everything (config, models, freezes) is declared in a single [`config.yaml`](./docs/configuration/README.md). → [Workspaces & Projects](./docs/workspaces-and-projects/README.md)
 - **Dual inboxes & standing protections.** Humans and agents collaborate asynchronously through a local filesystem inbox and an optional GitHub shadow-sync, observed only at round boundaries so proof searches are never interrupted mid-flight. Standing protections soft-freeze foundational signatures and files so autonomous runs can't quietly break your API. → [Inboxes](./docs/inboxes-and-communication/README.md)
 - **Blueprints & dependency graphs.** LaTeX-subset blueprints and Lean sources synchronize into a vendored, plain-files semantic graph. `horizon graph` exposes frontier, dependency, review, and comment operations; the dashboard renders a deterministic chapter-collapsed Graphviz view. → [Blueprints & semantic graphs](./docs/blueprints-and-graph/README.md)
 - **Dashboard & offline search.** A live web dashboard renders the DAG (KaTeX), run logs, and inbox, and can export a self-contained static snapshot for GitHub Pages. `horizon search` runs BM25, Loogle-style name, and signature-pattern search over `.lean` sources with no GPU, API key, or network. → [Dashboard & Search](./docs/dashboard-and-search/README.md)
+- **Public demo workspace.** A tiny two-chapter Lean/blueprint fixture ships outside the Python package with synthetic Claude Code and Codex runs, so the dashboard can be explored without credentials. → [Open the live demo](https://axeldlv00.github.io/Archon-Horizon/)
 
 *More depth on every topic — including the full [`config.yaml`](./docs/configuration/README.md) reference — lives in [`docs/`](./docs/README.md).*
 
@@ -87,6 +86,13 @@ horizon init
 `init` walks you through `config.yaml`, adding member Lean projects, and structuring your first tasks. 
 
 👉 See the [Workspaces guide](./docs/workspaces-and-projects/README.md) and the [Configuration guide](./docs/configuration/README.md) for `config.yaml`.
+
+### Live Demo
+
+The [public demo](https://axeldlv00.github.io/Archon-Horizon/) is rebuilt by
+GitHub Actions from [`demo/`](./demo/). It is intentionally small: two blueprint
+chapters, partial Lean coverage, one open issue, and two historical runs showing
+different engines and a Ground review checkpoint.
 
 ### 3. Run
 

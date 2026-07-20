@@ -77,8 +77,8 @@ class InboxDraft:
 def reaches_horizon(item: "InboxItem", project: str | None) -> bool:
     """Whether an item should be injected for the Horizon agent on ``project``.
 
-    The Ground agent triages everything, so it has no such filter; Horizon
-    only sees general items, items addressed to it, or items for its project.
+    Horizon sees general items, items addressed to it, or items for its project.
+    A Ground checkpoint may inspect all inbox items directly during its audit.
     """
     scoped_projects = item.scope.targets("projects")
     if scoped_projects and project not in scoped_projects:

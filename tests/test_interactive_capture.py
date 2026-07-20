@@ -5,16 +5,20 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
+from archon_horizon.cli import main
+from archon_horizon.commands.run import RunCommand
 from archon_horizon.commands.interactive import (
     InteractiveLaunch,
     _InteractiveTailer,
     run_interactive_captured,
 )
-from archon_horizon.transcript.model import TranscriptKind
-from archon_horizon.transcript.sink import read_transcript
+from archon_horizon.server.service import WorkspaceService
+from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
+from archon_horizon.transcript.sink import JsonlTranscriptSink, read_transcript
 
 
 class _ListSink:
@@ -184,3 +188,80 @@ def test_run_interactive_captured_records_full_transcript(tmp_path: Path) -> Non
     assert any(e.kind is TranscriptKind.TEXT and e.text == "seed brief" for e in events)
     assert any(e.kind is TranscriptKind.TEXT and e.text == "first turn" for e in events)
     assert any(e.kind is TranscriptKind.TOOL_CALL and e.tool == "Read" for e in events)
+
+
+def test_interactive_run_tags_and_integrates_agent_commits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    main(["--root", str(workspace), "init", "--no-interactive"])
+    main(["--root", str(workspace), "project", "add", "proj", "projects/proj"])
+
+    launch = InteractiveLaunch(
+        ["fake-engine"],
+        {
+            "PATH": os.environ.get("PATH", ""),
+            "GIT_AUTHOR_NAME": "interactive test",
+            "GIT_AUTHOR_EMAIL": "interactive@example.com",
+            "GIT_COMMITTER_NAME": "interactive test",
+            "GIT_COMMITTER_EMAIL": "interactive@example.com",
+        },
+        "fake interactive engine",
+        engine="claude",
+        session_id="interactive-test-session",
+    )
+
+    import archon_horizon.commands.interactive as interactive_module
+
+    monkeypatch.setattr(
+        interactive_module,
+        "interactive_launch_for_role",
+        lambda *args, **kwargs: launch,
+    )
+
+    def fake_captured(actual, cwd, **kwargs):
+        assert actual.env["ARCHON_HORIZON_RUN"] == "0001"
+        assert actual.env["ARCHON_HORIZON_SESSION"] == "0001-horizon-interactive"
+        assert actual.env["ARCHON_HORIZON_AGENT_ROLE"] == "horizon"
+        assert actual.env["ARCHON_HORIZON_PROJECTS"] == "proj"
+        lean = workspace / "projects" / "proj" / "Demo.lean"
+        lean.write_text("theorem demo : True := by trivial\n", "utf-8")
+        subprocess.run(
+            [actual.env["HORIZON_GIT"], "add", "projects/proj/Demo.lean"],
+            cwd=cwd,
+            env=actual.env,
+            check=True,
+        )
+        subprocess.run(
+            [actual.env["HORIZON_GIT"], "commit", "-m", "Prove the interactive demo"],
+            cwd=cwd,
+            env=actual.env,
+            check=True,
+        )
+        sink = JsonlTranscriptSink(kwargs["transcript_path"])
+        sink.emit(TranscriptEvent(TranscriptKind.TEXT, text="## Progress\n\nInteractive proof completed."))
+        return 0
+
+    monkeypatch.setattr(interactive_module, "run_interactive_captured", fake_captured)
+
+    RunCommand(
+        workspace,
+        targets=("proj",),
+        backend="interactive",
+        dashboard=False,
+    ).run()
+
+    service = WorkspaceService(workspace)
+    view = service.session_commits_view("0001", "0001-horizon-interactive")
+    by_subject = {row["subject"]: row for row in view["commits"]}
+    assert by_subject["Prove the interactive demo"]["kind"] == "agent"
+    assert any(row["kind"] == "integration" for row in view["commits"])
+    session_meta = service.stores.run_logs.get("0001").sessions()[0].read_meta()
+    assert session_meta["commit_shas"] == [by_subject["Prove the interactive demo"]["sha"]]
+    report = service.report(
+        ".archon-horizon/runs/0001/sessions/0001-horizon-interactive/transcript.jsonl"
+    )
+    assert report["markdown"].startswith("## Progress")
+    integration = service._session_integrations("0001")["0001-horizon-interactive"]
+    assert integration["projects"] == ["proj"]
+    assert integration["workspace_commit"]

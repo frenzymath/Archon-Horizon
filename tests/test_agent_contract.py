@@ -65,7 +65,8 @@ def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
     assert "FULLY complete" in skill
     assert "foreground" in skill                                   # one-shot discipline
     subagents = (_SKILLS_DIR / "subagents" / "SKILL.md").read_text("utf-8")
-    assert "model" in subagents and "cheap" in subagents           # model economy
+    assert "model" in subagents and "lighter capable" in subagents  # dispatcher-owned model economy
+    assert "ground" in skill and "before marking" in skill          # fresh-context convergence gate
 
 
 class _RecordingHarness:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -36,7 +37,7 @@ from archon_horizon.inboxes.github import GithubInboxProvider
 from archon_horizon.runlog import RunLog, SessionLog
 from archon_horizon.store import serde
 from archon_horizon.transcript.parsers import observed_effort, observed_model
-from archon_horizon.transcript.sink import read_transcript
+from archon_horizon.transcript.sink import latest_report_text, read_transcript
 from archon_horizon.transcript.subagents import materialize_subagent_sessions
 from archon_horizon.server.git_api import get_git_log, get_git_diff
 from archon_horizon.server.source_api import file_stats, list_lean_files, read_lean_file
@@ -768,6 +769,62 @@ class WorkspaceService:
                 paths.append(self.workspace.project_path(name).relative_to(self.root).as_posix())
         return tuple(paths)
 
+    @staticmethod
+    def _find_session_log(run: RunLog, name: str) -> SessionLog | None:
+        def visit(items: list[SessionLog]) -> SessionLog | None:
+            for item in items:
+                if item.name == name:
+                    return item
+                child = visit(item.subsessions())
+                if child is not None:
+                    return child
+            return None
+
+        return visit(run.sessions())
+
+    def _recovered_session_commits(
+        self, run_id: str, session_name: str, wsgit: WorkspaceGit, meta: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        """Recover exact commit refs for sessions recorded before trailers."""
+        try:
+            session = self._find_session_log(self.stores.run_logs.get(run_id), session_name)
+        except Exception:
+            session = None
+        if session is None:
+            return []
+        refs = [str(ref) for ref in (meta.get("commit_shas") or ()) if ref]
+        if not refs and bool(meta.get("interactive")) and session.transcript_path.is_file():
+            raw = session.transcript_path.read_text("utf-8", errors="ignore")
+            refs = list(dict.fromkeys(re.findall(
+                r"(?<![0-9a-fA-F])([0-9a-fA-F]{7,40})(?![0-9a-fA-F])", raw
+            )))
+        if not refs:
+            return []
+        rows = wsgit.commits_detailed_by_refs(refs)
+        if meta.get("commit_shas"):
+            return rows
+        started = meta.get("started_at")
+        ended = meta.get("ended_at")
+        if not started or not ended:
+            return []
+        try:
+            start_dt = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(str(ended).replace("Z", "+00:00"))
+        except ValueError:
+            return []
+        recovered: list[dict[str, str]] = []
+        for row in rows:
+            try:
+                at = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if start_dt <= at <= end_dt:
+                row = dict(row)
+                row["role"] = row.get("role") or str(meta.get("role") or "horizon")
+                row["kind"] = row.get("kind") or "agent"
+                recovered.append(row)
+        return recovered
+
     def session_commits_view(self, run_id: str, session: str) -> dict[str, Any]:
         """Per-COMMIT change view for one session: each commit the session made
         (message + per-file table vs that commit's own git parent), so the
@@ -781,10 +838,22 @@ class WorkspaceService:
         if wsgit is None:
             return {"run": run_id, "session": session, "commits": []}
         info = self._session_integrations(run_id).get(session) or {}
-        projects = [p for p in (info.get("projects") or []) if p]
+        try:
+            session_log = self._find_session_log(self.stores.run_logs.get(run_id), session)
+            session_meta = session_log.read_meta() if session_log is not None else {}
+        except Exception:
+            session_meta = {}
+        projects = [p for p in (info.get("projects") or session_meta.get("projects") or []) if p]
         paths = self._project_paths(projects) or tuple()
         commits_out: list[dict[str, Any]] = []
-        for r in wsgit.session_commits_detailed(run_id, session):
+        rows = wsgit.session_commits_detailed(run_id, session)
+        known = {row["sha"] for row in rows}
+        for row in self._recovered_session_commits(run_id, session, wsgit, session_meta):
+            if row["sha"] not in known:
+                rows.append(row)
+                known.add(row["sha"])
+        rows.sort(key=lambda row: row.get("date", ""))
+        for r in rows:
             sha = r["sha"]
             summary = session_change_summary(self.root, sha, paths, base=None)
             commits_out.append({
@@ -861,8 +930,15 @@ class WorkspaceService:
             raise ValueError("report ref escapes the workspace")
         report_path = path.parent / "report.md"
         recommendation_path = path.parent / "recommendation.md"
+        markdown = report_path.read_text("utf-8") if report_path.is_file() else ""
+        # Interactive sessions historically wrote a generic placeholder after
+        # exit. Prefer the final assistant message so old logs become useful too.
+        if not markdown.strip() or markdown.lstrip().startswith("# Interactive "):
+            transcript_report = latest_report_text(path)
+            if transcript_report:
+                markdown = transcript_report
         return {
-            "markdown": report_path.read_text("utf-8") if report_path.is_file() else "",
+            "markdown": markdown,
             "recommendation": (
                 recommendation_path.read_text("utf-8")
                 if recommendation_path.is_file()

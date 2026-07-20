@@ -102,6 +102,25 @@ at each significant step. You own the task's terminal status (skill:
 `blocked`/`failed` if genuinely stuck; set nothing if it's only partly advanced
 (it returns to the queue).
 
+## Fresh-context checkpoints
+
+The old Ground pass is no longer a second orchestrator role, but independent
+review is still part of convergence. Spawn the **`ground`** subagent at these
+checkpoints:
+
+- before marking a multi-step task `done`;
+- after every two substantive Horizon sessions on a long-running task;
+- immediately after a strategy pivot, a broad workspace edit, or a surprising
+  clean/build result.
+
+Give it the task/project scope and ask it to inspect the actual ledger diff,
+blueprint graph, Lean state, roadmap, inbox, and reports with fresh context. It
+is read-only on source and reports issues/memory; reconcile its findings before
+continuing. Use **`work-reviewer`** for a narrow diff/proof audit and **`janitor`**
+when the main concern is workspace hygiene. A one-session task may skip the
+periodic checkpoint, but must still obtain a fresh-context review before a
+terminal `done` claim.
+
 ## Warnings are work
 
 Commands report problems for a reason — never scroll past them. `lake build`
@@ -204,14 +223,13 @@ not by itself a reason to stop.
 
 ## Cleaning up the work (you decide, via subagents)
 
-There is **no separate Ground agent** running alongside you. *You* are the only
-driver. When you judge the workspace needs tidying — the roadmap or memory has
-drifted, the inbox is piling up, the blueprint↔Lean correspondence needs checking,
-or you want a fresh-eyes review of what you just did — **spawn a subagent** to do
-it, then carry on. This is a judgement call, not a schedule: clean up when it's
-worth it, not on a timer. Available subagents (see the `subagents` skill):
+There is no second orchestrator role running alongside you. *You* are the driver,
+and the **`ground`** subagent is the scheduled fresh-context checkpoint when the
+workspace or strategy needs an external view. Available helpers (see the
+`subagents` skill):
 
 - **janitor** — workspace hygiene: roadmap/READMEs concise, inbox from overflowing.
+- **ground** — workspace-wide strategy, graph, ledger, and convergence review.
 - **work-reviewer** — fresh-context review of your last work; is it converging?
 - **blueprint** — Lean ↔ blueprint statement/`\uses` correctness for a scoped slice.
 - **reference-retriever**, **debug**, **page-transcriber** — as needed.
