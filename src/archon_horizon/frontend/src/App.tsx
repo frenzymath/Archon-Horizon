@@ -2302,6 +2302,40 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
   );
 }
 
+function lifecycleIdentity(event: any): string {
+  const data = event?.data ?? {};
+  if (data.subagent_key) return `key:${String(data.subagent_key)}`;
+  if (data.name) return `name:${String(data.name)}`;
+  return '';
+}
+
+/** Pair lifecycle end rows with their dispatch row without changing the stored
+ * append-only transcript. Native engines do not always report a duration, but
+ * both give us timestamps and a stable tool/task identity. */
+function annotateSubagentDurations(events: any[] | null): any[] | null {
+  if (!events) return events;
+  const starts = new Map<string, any>();
+  const startsByName = new Map<string, any>();
+  return events.map((event) => {
+    if (event?.kind === 'subagent_start') {
+      const identity = lifecycleIdentity(event);
+      if (identity) starts.set(identity, event);
+      if (event.data?.name) startsByName.set(String(event.data.name), event);
+      return event;
+    }
+    if (event?.kind !== 'subagent_end' || event.data?.duration_seconds != null) return event;
+    const identity = lifecycleIdentity(event);
+    const start = (identity ? starts.get(identity) : null)
+      ?? (event.data?.name ? startsByName.get(String(event.data.name)) : null);
+    const duration = durationSeconds(start?.at, event.at);
+    if (duration === null) return event;
+    return {
+      ...event,
+      data: { ...event.data, started_at: start.at, duration_seconds: duration },
+    };
+  });
+}
+
 function TranscriptViewer({
   events,
   harnesses,
@@ -2325,7 +2359,8 @@ function TranscriptViewer({
   nextSessionStart?: string;
   activeTickSession?: string;
 }) {
-  const start = events?.find((event: any) => event.kind === 'session_start');
+  const displayEvents = useMemo(() => annotateSubagentDurations(events), [events]);
+  const start = displayEvents?.find((event: any) => event.kind === 'session_start');
   const prompt = start?.data?.prompt ? stripAnsi(String(start.data.prompt)).trim() : '';
   const harness = start?.data?.harness ?? session?.meta?.data?.harness ?? '';
   const harnessConfig = harness ? harnesses?.[harness] : undefined;
@@ -2335,12 +2370,12 @@ function TranscriptViewer({
   // keying by the reversed position would reassign every row's open/collapsed
   // state to a different event whenever a new event is prepended, which both
   // reopens rows the user had closed and breaks native scroll anchoring.
-  const ordered = events
-    ? events
+  const ordered = displayEvents
+    ? displayEvents
         .map((event: any, idx: number) => ({ event, idx }))
         .filter(({ event }: any) => event.kind !== 'session_start' && event.kind !== 'session_meta')
         .reverse()
-    : events;
+    : displayEvents;
   const role = session ? sessionRole(session) : '';
   const groups = role === 'subagent' ? null : groupSubagents(ordered);
   // Progressive rendering: paint the newest events immediately and stream the
@@ -2362,7 +2397,7 @@ function TranscriptViewer({
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
   // the session meta is written at the end of the run).
-  const observedModel = events?.find((event: any) => event?.data?.model)?.data?.model;
+  const observedModel = displayEvents?.find((event: any) => event?.data?.model)?.data?.model;
   // Only what this run actually recorded: session meta, or the model the engine
   // stamped onto its own event stream. Never the live harnessConfig — config.yaml
   // drifts over time, so backfilling a past run from it would mislabel it. When
@@ -2566,6 +2601,7 @@ function SessionParameters({
 const EVENT_COLORS: Record<string, string> = {
   thinking: '#7c3aed', text: '#2563eb', tool_call: '#d97706',
   tool_result: '#059669', error: '#dc2626', session_start: '#64748b', session_end: '#64748b',
+  subagent_start: '#7c3aed', subagent_end: '#15803d',
 };
 // Render text/thinking as markdown (after stripping terminal ANSI); everything
 // else stays monospace. The input prompt is rendered by TranscriptViewer.
@@ -2969,7 +3005,34 @@ function ToolResultView({ event, text }: { event: any; text: string }) {
   );
 }
 
+function SubagentLifecycleView({ event }: { event: any }) {
+  const data = event.data ?? {};
+  const started = event.kind === 'subagent_start';
+  const name = String(data.name || 'subagent');
+  const status = String(data.status || (started ? 'running' : 'closed'));
+  const duration = data.duration_seconds != null ? formatSeconds(Number(data.duration_seconds)) : '';
+  return (
+    <div className={`subagent-lifecycle-card ${started ? 'started' : 'ended'}`}>
+      <span className="subagent-lifecycle-glyph" aria-hidden="true">{started ? '↗' : status === 'completed' ? '✓' : '■'}</span>
+      <div className="subagent-lifecycle-main">
+        <strong>{name}</strong>
+        <span>{started ? 'agent dispatched' : `agent ${status}`}</span>
+        {data.summary && String(data.summary) !== event.text ? <small>{String(data.summary)}</small> : null}
+      </div>
+      <div className="subagent-lifecycle-meta">
+        {data.nickname ? <span>{String(data.nickname)}</span> : null}
+        {data.subagent_type ? <span>{String(data.subagent_type)}</span> : null}
+        {data.model ? <span>{shortModel(String(data.model))}</span> : null}
+        {duration ? <span>{duration}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function EventBodyView({ event, text }: { event: any; text: string }) {
+  if (event.kind === 'subagent_start' || event.kind === 'subagent_end') {
+    return <SubagentLifecycleView event={event} />;
+  }
   if (event.kind === 'usage') return <UsageBlock usage={event.usage ?? event.data} />;
   if (event.kind === 'tool_call' && event.data?.actor && text) {
     return (
@@ -2999,7 +3062,15 @@ const TranscriptEvent = React.memo(function TranscriptEvent({ event, forceOpen }
   useEffect(() => { if (forceOpen !== null) setOpen(forceOpen); }, [forceOpen]);
   const color = EVENT_COLORS[event.kind] ?? 'var(--text-muted)';
   const fullLabel = event.tool ? event.tool : event.kind;
-  const label = event.tool ? shortTool(event.tool) : event.kind === 'session_start' ? 'input' : event.kind;
+  const label = event.tool
+    ? shortTool(event.tool)
+    : event.kind === 'session_start'
+      ? 'input'
+      : event.kind === 'subagent_start'
+        ? 'agent start'
+        : event.kind === 'subagent_end'
+          ? 'agent end'
+          : event.kind;
   const tag = commandTag(event);
   const preview = text.slice(0, 120).replace(/\s+/g, ' ');
   // Click anywhere in the row to expand/collapse a long event — but don't fight

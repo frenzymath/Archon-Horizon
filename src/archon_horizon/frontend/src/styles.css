@@ -1146,6 +1146,19 @@ button.danger { color: var(--red); }
 .subagent-name { font-weight: 700; color: var(--text-primary); }
 .subagent-model { font-size: 10.5px; font-weight: 600; color: #6d28d9; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 999px; padding: 0 6px; white-space: nowrap; }
 .subagent-count { margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--text-muted); }
+
+/* Compact parent-log lifecycle rows: delegation should be visible even when the
+   native child transcript lives in a separate engine-owned file. */
+.subagent-lifecycle-card { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 7px 10px; border: 1px solid color-mix(in srgb, #7c3aed 30%, var(--border)); border-radius: 6px; background: color-mix(in srgb, #7c3aed 5%, var(--bg-secondary)); }
+.subagent-lifecycle-card.ended { border-color: color-mix(in srgb, #15803d 30%, var(--border)); background: color-mix(in srgb, #15803d 5%, var(--bg-secondary)); }
+.subagent-lifecycle-glyph { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; color: #7c3aed; background: color-mix(in srgb, #7c3aed 12%, transparent); font-weight: 800; }
+.subagent-lifecycle-card.ended .subagent-lifecycle-glyph { color: #15803d; background: color-mix(in srgb, #15803d 12%, transparent); }
+.subagent-lifecycle-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.subagent-lifecycle-main strong { color: var(--text-primary); font-size: 12px; }
+.subagent-lifecycle-main > span { color: var(--text-secondary); font-size: 11px; }
+.subagent-lifecycle-main small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70ch; }
+.subagent-lifecycle-meta { display: flex; align-items: center; gap: 5px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.subagent-lifecycle-meta span { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); background: var(--bg-primary); font-size: 10.5px; white-space: nowrap; }
 .sublog-lines { padding-bottom: 4px; }
 .transcript-viewer.role-subagent .log-line,
 .subagent-sublog .log-line {

@@ -13,6 +13,7 @@ stream, already tagged with ``parent_tool_use_id`` by ``parse_claude_line``.)
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from pathlib import Path
 
@@ -92,6 +93,18 @@ class CodexHarness(CommandHarness):
             sub = header.get(nest)
             if isinstance(sub, dict) and (found := pick(sub)):
                 return found
+        # Codex 0.144+ records the descriptor under the spawn provenance rather
+        # than as a top-level agent_role.
+        source = header.get("source")
+        subagent = source.get("subagent") if isinstance(source, dict) else None
+        spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+        if isinstance(spawn, dict):
+            nickname = spawn.get("agent_nickname")
+            if isinstance(nickname, str) and nickname.strip():
+                return nickname.strip()
+            agent_path = spawn.get("agent_path")
+            if isinstance(agent_path, str) and agent_path.strip():
+                return agent_path.rstrip("/").rsplit("/", 1)[-1]
         return None
 
     def _rollout_events(self, child: Path | None) -> list[TranscriptEvent]:
@@ -141,9 +154,18 @@ class CodexHarness(CommandHarness):
         sink.emit(TranscriptEvent(TranscriptKind.SESSION_META, data=dict(attrs)))
         for line in child.read_text("utf-8", errors="replace").splitlines():
             for event in parse_codex_rollout_line(line):
-                event.data["subagent_thread_id"] = thread_id
+                if event.kind is TranscriptKind.SUBAGENT_END:
+                    # Lifecycle rows belong visibly to the parent timeline.  Do
+                    # not tag this one with subagent_thread_id, which would make
+                    # the UI fold the closure row inside the child sublog.
+                    event.data["subagent_key"] = thread_id
+                else:
+                    event.data["subagent_thread_id"] = thread_id
                 if "subagent_type" in attrs:
                     event.data["subagent_type"] = attrs["subagent_type"]
+                    if event.kind is TranscriptKind.SUBAGENT_END:
+                        event.data["name"] = attrs["subagent_type"]
+                        event = dataclasses.replace(event, text=f"{attrs['subagent_type']} completed")
                 sink.emit(event)
         return True
 

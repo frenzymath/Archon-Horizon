@@ -26,6 +26,11 @@ class TranscriptKind(StrEnum):
     TEXT = "text"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    # Explicit delegation lifecycle rows.  These remain in the parent transcript
+    # (rather than being folded into the child's sublog), so it is immediately
+    # visible when work was delegated and when that delegated turn stopped.
+    SUBAGENT_START = "subagent_start"
+    SUBAGENT_END = "subagent_end"
     USAGE = "usage"
     # A transient, non-fatal notice (e.g. "retrying after a 529") — surfaced in
     # the transcript but NEVER counted as a session failure. Distinct from ERROR

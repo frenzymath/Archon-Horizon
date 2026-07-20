@@ -89,6 +89,64 @@ def test_codex_tailer_detects_new_rollout(tmp_path: Path) -> None:
     assert tailer._locate() == new  # the freshly-created rollout is picked up
 
 
+def test_codex_tailer_surfaces_child_dispatch_and_completion(tmp_path: Path) -> None:
+    home = tmp_path / "codex"
+    sessions = home / "sessions" / "2026" / "07" / "20"
+    sessions.mkdir(parents=True)
+    launch = InteractiveLaunch([], {"CODEX_HOME": str(home)}, "x", engine="codex")
+    sink = _ListSink()
+    tailer = _InteractiveTailer(launch, sink)  # snapshot before this session exists
+
+    parent_id = "019f-parent"
+    parent = sessions / f"rollout-parent-{parent_id}.jsonl"
+    parent.write_text("\n".join([
+        json.dumps({
+            "timestamp": "2026-07-20T05:40:00Z", "type": "session_meta",
+            "payload": {"id": parent_id, "source": "cli"},
+        }),
+        json.dumps({
+            "timestamp": "2026-07-20T05:41:00Z", "type": "response_item",
+            "payload": {
+                "type": "function_call", "name": "spawn_agent", "call_id": "spawn-1",
+                "arguments": json.dumps({"task_name": "signature_audit", "message": "omitted"}),
+            },
+        }),
+    ]) + "\n", "utf-8")
+    tailer._file = tailer._locate()
+    assert tailer._file == parent
+
+    child = sessions / "rollout-child.jsonl"
+    child.write_text("\n".join([
+        json.dumps({
+            "timestamp": "2026-07-20T05:41:00Z", "type": "session_meta",
+            "payload": {"source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": parent_id,
+                "agent_path": "/root/signature_audit",
+                "agent_nickname": "Harvey",
+                "depth": 1,
+            }}}},
+        }),
+        json.dumps({
+            "timestamp": "2026-07-20T05:41:01Z", "type": "turn_context",
+            "payload": {"model": "gpt-5.6-sol", "effort": "ultra"},
+        }),
+        json.dumps({
+            "timestamp": "2026-07-20T05:43:00Z", "type": "event_msg",
+            "payload": {"type": "task_complete"},
+        }),
+    ]) + "\n", "utf-8")
+
+    tailer._drain()
+    starts = [event for event in sink.events if event.kind is TranscriptKind.SUBAGENT_START]
+    ends = [event for event in sink.events if event.kind is TranscriptKind.SUBAGENT_END]
+    assert len(starts) == 1 and starts[0].data["name"] == "signature_audit"
+    assert len(ends) == 1
+    assert ends[0].data["name"] == "signature_audit"
+    assert ends[0].data["nickname"] == "Harvey"
+    assert ends[0].data["model"] == "gpt-5.6-sol"
+    assert ends[0].data["duration_seconds"] == 120
+
+
 def test_run_interactive_captured_records_full_transcript(tmp_path: Path) -> None:
     cfg = tmp_path / "cfg"
     transcript = tmp_path / "runs" / "sessions" / "transcript.jsonl"

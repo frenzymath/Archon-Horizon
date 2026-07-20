@@ -11,14 +11,19 @@ argv from a role's harness config and hand the terminal straight to the engine
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+
+from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +242,9 @@ class _InteractiveTailer(threading.Thread):
         # For codex we can't pin the session id, so snapshot the rollout files that
         # exist BEFORE launch and treat the first new one as this session's file.
         self._codex_seen: set[str] = set()
+        self._codex_parent_id: str | None = None
+        self._codex_children: dict[str, dict[str, object]] = {}
+        self._codex_child_scan_at = 0.0
         if launch.engine == "codex":
             try:
                 self._codex_seen = {p.as_posix() for p in _codex_sessions_dir(launch.env).glob("**/rollout-*.jsonl")}
@@ -270,19 +278,164 @@ class _InteractiveTailer(threading.Thread):
                 self._offset = handle.tell()
         except OSError:
             return
-        if not chunk:
+        if chunk:
+            buffer = self._leftover + chunk
+            lines = buffer.split(b"\n")
+            self._leftover = lines.pop()  # trailing (possibly incomplete) fragment
+            for raw in lines:
+                if not raw.strip():
+                    continue
+                decoded = raw.decode("utf-8", "replace")
+                try:
+                    if self._launch.engine == "codex" and self._codex_parent_id is None:
+                        obj = json.loads(decoded)
+                        payload = obj.get("payload", {}) if isinstance(obj, dict) else {}
+                        if obj.get("type") == "session_meta" and isinstance(payload, dict):
+                            native_id = payload.get("id")
+                            if isinstance(native_id, str) and native_id:
+                                self._codex_parent_id = native_id
+                    for event in self._parser(decoded):
+                        self._sink.emit(event)
+                except Exception:
+                    continue  # a single malformed line must never kill the tailer
+        if self._launch.engine == "codex":
+            self._drain_codex_child_lifecycles()
+
+    def _drain_codex_child_lifecycles(self) -> None:
+        """Surface direct Codex child ``task_complete`` events in the parent log.
+
+        Interactive Codex writes every spawned thread to its own rollout.  We do
+        not mirror those large transcripts here; we only follow their metadata
+        and terminal marker so the dashboard gets a compact dispatch/closure
+        timeline while the parent TUI remains open.
+        """
+        if not self._codex_parent_id:
             return
-        buffer = self._leftover + chunk
-        lines = buffer.split(b"\n")
-        self._leftover = lines.pop()  # trailing (possibly incomplete) fragment
-        for raw in lines:
-            if not raw.strip():
-                continue
+        # Discover at a lower frequency than the parent-file drain: recursive
+        # session discovery is cheap occasionally, but wasteful four times/sec.
+        now = time.monotonic()
+        if now >= self._codex_child_scan_at:
+            self._codex_child_scan_at = now + 2.0
             try:
-                for event in self._parser(raw.decode("utf-8", "replace")):
+                for path in _codex_sessions_dir(self._launch.env).glob("**/rollout-*.jsonl"):
+                    key = path.as_posix()
+                    if path != self._file and key not in self._codex_seen:
+                        self._codex_children.setdefault(key, {
+                            "offset": 0, "leftover": b"", "accepted": None, "last_complete": None,
+                        })
+            except OSError:
+                pass
+        candidates = [Path(key) for key, state in self._codex_children.items() if state.get("accepted") is not False]
+        for path in candidates:
+            key = path.as_posix()
+            state = self._codex_children[key]
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(int(state["offset"]))
+                    chunk = handle.read()
+                    state["offset"] = handle.tell()
+            except (OSError, ValueError):
+                continue
+            if not chunk:
+                continue
+            buffer = state.get("leftover", b"") + chunk
+            if not isinstance(buffer, bytes):
+                buffer = chunk
+            lines = buffer.split(b"\n")
+            state["leftover"] = lines.pop()
+            for raw in lines:
+                if not raw.strip():
+                    continue
+                try:
+                    obj = json.loads(raw.decode("utf-8", "replace"))
+                except (ValueError, TypeError):
+                    continue
+                payload = obj.get("payload", {}) if isinstance(obj, dict) else {}
+                if not isinstance(payload, dict):
+                    continue
+                if obj.get("type") == "session_meta":
+                    source = payload.get("source", {})
+                    subagent = source.get("subagent", {}) if isinstance(source, dict) else {}
+                    spawn = subagent.get("thread_spawn", {}) if isinstance(subagent, dict) else {}
+                    if not isinstance(spawn, dict):
+                        state["accepted"] = False
+                        continue
+                    state["accepted"] = spawn.get("parent_thread_id") == self._codex_parent_id
+                    if state["accepted"]:
+                        agent_path = spawn.get("agent_path")
+                        if isinstance(agent_path, str) and agent_path:
+                            state["agent_path"] = agent_path
+                            state["name"] = agent_path.rstrip("/").rsplit("/", 1)[-1]
+                        nickname = spawn.get("agent_nickname")
+                        if isinstance(nickname, str) and nickname:
+                            state["nickname"] = nickname
+                        state["depth"] = spawn.get("depth")
+                        state["started_at"] = obj.get("timestamp")
+                    continue
+                if state.get("accepted") is not True:
+                    continue
+                if obj.get("type") == "turn_context":
+                    model = payload.get("model")
+                    effort = payload.get("effort")
+                    if isinstance(model, str) and model:
+                        state["model"] = model
+                    if isinstance(effort, str) and effort:
+                        state["effort"] = effort
+                if obj.get("type") == "event_msg" and payload.get("type") == "task_complete":
+                    completed_at = obj.get("timestamp")
+                    completed_epoch = payload.get("completed_at")
+                    try:
+                        if (
+                            isinstance(completed_at, str)
+                            and isinstance(completed_epoch, (int, float))
+                            and abs(
+                                datetime.fromisoformat(completed_at.replace("Z", "+00:00")).timestamp()
+                                - float(completed_epoch)
+                            ) > 5
+                        ):
+                            continue  # forked parent-history completion, not this child turn
+                    except ValueError:
+                        pass
+                    if completed_at == state.get("last_complete"):
+                        continue
+                    state["last_complete"] = completed_at
+                    attrs = {
+                        "nickname": state.get("nickname"),
+                        "model": state.get("model"),
+                        "effort": state.get("effort"),
+                        "depth": state.get("depth"),
+                        "started_at": state.get("started_at"),
+                    }
+                    duration_ms = payload.get("duration_ms")
+                    if isinstance(duration_ms, (int, float)):
+                        attrs["duration_seconds"] = max(0, float(duration_ms) / 1000)
+                    try:
+                        if "duration_seconds" not in attrs and isinstance(state.get("started_at"), str) and isinstance(completed_at, str):
+                            started = datetime.fromisoformat(str(state["started_at"]).replace("Z", "+00:00"))
+                            ended = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                            attrs["duration_seconds"] = max(0, (ended - started).total_seconds())
+                    except ValueError:
+                        pass
+                    event = TranscriptEvent(
+                        TranscriptKind.SUBAGENT_END,
+                        text=f"{state.get('name') or 'Subagent'} completed",
+                        data={
+                            "lifecycle": "subagent",
+                            "status": "completed",
+                            "engine": "codex",
+                            "name": state.get("name") or "subagent",
+                            "subagent_key": state.get("agent_path") or key,
+                            **{k: v for k, v in attrs.items() if v is not None and v != ""},
+                        },
+                    )
+                    if isinstance(completed_at, str):
+                        try:
+                            event = dataclasses.replace(
+                                event, at=datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                            )
+                        except ValueError:
+                            pass
                     self._sink.emit(event)
-            except Exception:
-                continue  # a single malformed line must never kill the tailer
 
     def run(self) -> None:
         if self._parser is None:
