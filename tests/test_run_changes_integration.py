@@ -128,6 +128,17 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     via = service.serve_endpoint(f"/api/session/commits?run={run.id}&session={s1.name}")
     assert via["commits"] == view["commits"]
     assert f"/api/session/commits?run={run.id}&session={s1.name}" in service.endpoints()
+    assert all(row.get("created_at") for row in view["commits"])
+    page = service.serve_endpoint(
+        f"/api/session/commits?run={run.id}&session={s1.name}&offset=1&limit=1"
+    )
+    assert page["total"] == len(view["commits"])
+    assert page["offset"] == 1 and len(page["commits"]) == 1
+    assert page["has_more"] is True
+    assert (
+        f"/api/session/commits?run={run.id}&session={s1.name}&offset=1&limit=1"
+        in service.endpoints()
+    )
 
     # A single commit's file diff resolves via the &sha= param.
     disc = by_subject["Discharge a"]

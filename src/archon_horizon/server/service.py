@@ -825,7 +825,14 @@ class WorkspaceService:
                 recovered.append(row)
         return recovered
 
-    def session_commits_view(self, run_id: str, session: str) -> dict[str, Any]:
+    def session_commits_view(
+        self,
+        run_id: str,
+        session: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
         """Per-COMMIT change view for one session: each commit the session made
         (message + per-file table vs that commit's own git parent), so the
         dashboard shows progress at *commit* granularity — the commit message
@@ -836,7 +843,15 @@ class WorkspaceService:
 
         wsgit = WorkspaceGit(self.root) if git_available() else None
         if wsgit is None:
-            return {"run": run_id, "session": session, "commits": []}
+            return {
+                "run": run_id,
+                "session": session,
+                "commits": [],
+                "total": 0,
+                "offset": max(0, offset),
+                "next_offset": None,
+                "has_more": False,
+            }
         info = self._session_integrations(run_id).get(session) or {}
         try:
             session_log = self._find_session_log(self.stores.run_logs.get(run_id), session)
@@ -853,6 +868,11 @@ class WorkspaceService:
                 rows.append(row)
                 known.add(row["sha"])
         rows.sort(key=lambda row: row.get("date", ""))
+        total = len(rows)
+        start = max(0, offset)
+        if limit is not None:
+            page_size = max(1, min(100, limit))
+            rows = rows[start:start + page_size]
         for r in rows:
             sha = r["sha"]
             summary = session_change_summary(self.root, sha, paths, base=None)
@@ -860,6 +880,7 @@ class WorkspaceService:
                 "sha": sha,
                 "short_sha": sha[:10],
                 "subject": r.get("subject", ""),
+                "created_at": r.get("date", ""),
                 "role": r.get("role") or info.get("role"),
                 "kind": r.get("kind", ""),  # "agent" | "integration" | …
                 "files": summary.get("files", []),
@@ -868,7 +889,16 @@ class WorkspaceService:
                 "sorry_delta": summary.get("sorry_delta", 0),
                 "other_count": summary.get("other_count", 0),
             })
-        return {"run": run_id, "session": session, "commits": commits_out}
+        next_offset = start + len(commits_out) if limit is not None and start + len(commits_out) < total else None
+        return {
+            "run": run_id,
+            "session": session,
+            "commits": commits_out,
+            "total": total,
+            "offset": start,
+            "next_offset": next_offset,
+            "has_more": next_offset is not None,
+        }
 
     def session_file_diff(self, run_id: str, session: str, path: str, *, sha: str) -> dict[str, Any]:
         """Unified diff of one file in ONE commit (vs that commit's own parent) —
@@ -1146,7 +1176,13 @@ class WorkspaceService:
             for session in sessions:
                 eps.append(f"/api/session/commits?run={run_id}&session={session.name}")
                 try:
-                    for c in self.session_commits_view(run_id, session.name).get("commits", []):
+                    all_commits = self.session_commits_view(run_id, session.name).get("commits", [])
+                    for offset in range(len(all_commits)):
+                        eps.append(
+                            f"/api/session/commits?run={run_id}&session={session.name}"
+                            f"&offset={offset}&limit=1"
+                        )
+                    for c in all_commits:
                         for f in c.get("files", []):
                             if f.get("category") in ("lean", "blueprint"):
                                 eps.append(
@@ -1221,9 +1257,20 @@ class WorkspaceService:
                 return {"diff": get_git_diff(self._project_path(proj), commit)}
             return {"diff": ""}
         if parsed.path == "/api/session/commits":
+            try:
+                offset = max(0, int((query.get("offset") or ["0"])[0]))
+            except ValueError:
+                offset = 0
+            raw_limit = (query.get("limit") or [""])[0]
+            try:
+                limit = max(1, int(raw_limit)) if raw_limit else None
+            except ValueError:
+                limit = None
             return self.session_commits_view(
                 (query.get("run") or [""])[0],
                 (query.get("session") or [""])[0],
+                offset=offset,
+                limit=limit,
             )
         if parsed.path == "/api/session/file-diff":
             return self.session_file_diff(

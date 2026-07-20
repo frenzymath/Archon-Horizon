@@ -2257,7 +2257,14 @@ function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: s
       <button className="commit-card-head" onClick={() => setOpen(!open)} title={commit.sha}>
         <span className="change-caret">{open ? '▾' : '▸'}</span>
         <span className={`commit-kind ${commit.kind || 'other'}`}>{isAgent ? (commit.role || 'agent') : (commit.kind || 'commit')}</span>
-        <span className="commit-subject">{commit.subject}</span>
+        <span className="commit-copy">
+          <span className="commit-subject">{commit.subject}</span>
+          {commit.created_at && (
+            <time className="commit-time" dateTime={commit.created_at} title={commit.created_at}>
+              {formatDateTime(commit.created_at)}
+            </time>
+          )}
+        </span>
         {commit.sorry_delta !== 0 && (
           <span className="commit-stat"><AfterDelta after={commit.lean?.sorry_after ?? 0} delta={commit.sorry_delta} goodWhenNegative /> sorry</span>
         )}
@@ -2284,20 +2291,54 @@ function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: s
 // message + diff IS the progress record. Fetched lazily from /api/session/commits.
 function SessionCommitsPanel({ runId, session }: { runId: string; session: string }) {
   const [commits, setCommits] = useState<CommitChange[] | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [error, setError] = useState<string>('');
   useEffect(() => {
     let live = true;
-    getSessionCommits(runId, session)
-      .then((d) => { if (live) setCommits(d.commits ?? []); })
-      .catch(() => { if (live) setCommits([]); });
-    return () => { live = false; };
+    let frame: number | undefined;
+    let offset = 0;
+    setCommits(null);
+    setTotal(null);
+    setError('');
+
+    const loadNext = async () => {
+      try {
+        const page = await getSessionCommits(runId, session, offset, 1);
+        if (!live) return;
+        setTotal(page.total ?? null);
+        setCommits((current) => [...(current ?? []), ...(page.commits ?? [])]);
+        if (page.has_more && page.next_offset != null) {
+          offset = page.next_offset;
+          frame = requestAnimationFrame(() => { void loadNext(); });
+        }
+      } catch {
+        if (live) setError('Unable to load the remaining commits.');
+      }
+    };
+    void loadNext();
+    return () => {
+      live = false;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
   }, [runId, session]);
-  if (!commits || commits.length === 0) return null;
+  if (commits === null) {
+    return (
+      <details className="log-panel commits-panel" open>
+        <summary>Commits</summary>
+        <p className="empty commit-loading">Loading commit history…</p>
+      </details>
+    );
+  }
+  if (commits.length === 0) return null;
   return (
     <details className="log-panel commits-panel" open>
-      <summary>Commits <span className="commits-count">{commits.length}</span></summary>
+      <summary>
+        Commits <span className="commits-count">{total == null ? commits.length : `${commits.length}/${total}`}</span>
+      </summary>
       <div className="commit-cards">
         {commits.map((c) => <CommitCard key={c.sha} commit={c} runId={runId} session={session} />)}
       </div>
+      {error && <p className="empty commit-loading">{error}</p>}
     </details>
   );
 }

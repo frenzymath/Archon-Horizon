@@ -164,6 +164,7 @@ export interface CommitChange {
   sha: string;
   short_sha: string;
   subject: string;
+  created_at?: string;
   role?: string;
   kind: string; // 'agent' | 'integration' | …
   files: SessionChangeFile[];
@@ -172,15 +173,32 @@ export interface CommitChange {
   sorry_delta: number;
   other_count: number;
 }
-export interface SessionCommits { run: string; session: string; commits: CommitChange[] }
+export interface SessionCommits {
+  run: string;
+  session: string;
+  commits: CommitChange[];
+  total?: number;
+  offset?: number;
+  next_offset?: number | null;
+  has_more?: boolean;
+}
 export interface FileDiff { path: string; available: boolean; diff: string; truncated?: boolean }
 // Raw interpolation (no encode): run ids/sessions/paths are bare and the path
 // must match the Python endpoint registry exactly for static-mode hashing.
 export const getSessionFileDiff = (runId: string, session: string, path: string, sha: string) =>
   getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}&sha=${sha}`);
 // Per-commit change view for one session (message + per-file table per commit).
-export const getSessionCommits = (runId: string, session: string) =>
-  getJson<SessionCommits>(`/api/session/commits?run=${runId}&session=${session}`);
+export const getSessionCommits = (
+  runId: string,
+  session: string,
+  offset?: number,
+  limit?: number,
+) => {
+  let url = `/api/session/commits?run=${runId}&session=${session}`;
+  if (offset !== undefined) url += `&offset=${offset}`;
+  if (limit !== undefined) url += `&limit=${limit}`;
+  return getJson<SessionCommits>(url);
+};
 
 export interface SearchResult {
   name: string | null;
