@@ -47,11 +47,13 @@ Ordinary git: the ledger's index tracks HEAD, so `add` then `commit` records you
 files on top of it. Horizon's own commits stage in a private index and never leave
 anything staged in your way.
 
+- **Prefer the pathspec commit** — name the paths on the commit itself:
+  `"$HORIZON_GIT" commit -m "…" -- path/to/File.lean`
+  It records exactly those files, ignores whatever else may be staged, and git
+  builds its tree from the **current** HEAD — so it cannot silently revert a
+  concurrent session's files the way a commit built on a stale index can.
 - Stage **explicit paths** you changed rather than `add -A` — the work tree is the
   whole workspace, so `-A` can sweep in unrelated files.
-- To be surgical, name the paths on the commit itself — this ignores whatever else
-  may be staged and records exactly those files:
-  `"$HORIZON_GIT" commit -m "…" -- path/to/File.lean`
 - `Archon-Run`/`Session`/`Role`/`Task`/`Projects` trailers are stamped for you by a
   hook from the session env; your message stays clean.
 - Build artifacts (`.lake`, `*.olean`, …) and secrets are excluded/blocked
@@ -68,6 +70,41 @@ make a perfectly real SHA look fabricated:
 ```bash
 "$HORIZON_GIT" ls-tree --name-only HEAD -- path/to/File.lean   # empty ⇒ NOT in HEAD
 ```
+
+## Concurrent sessions and the clobber guard
+
+Several sessions may commit to the ledger at once. A commit whose index was
+seeded from an older HEAD (e.g. `read-tree`, then a concurrent session commits,
+then you commit) produces a tree that *lacks* the other session's new files —
+plain git would commit it without any error and silently delete their work.
+The ledger's `pre-commit` guard now rejects any commit that stages deletions
+you did not ask for:
+
+- *"this commit would DELETE N tracked file(s) you did not change"* — your
+  index base is stale (or you are committing through a polluted shared index).
+  **Do not override.** Re-seed and retry; your own edits are safe in the
+  working tree, which concurrent commits never touch:
+
+  ```bash
+  "$HORIZON_GIT" read-tree HEAD
+  "$HORIZON_GIT" add -- <your files>
+  "$HORIZON_GIT" commit -m "…"          # or just: commit -m "…" -- <your files>
+  ```
+
+- Deleting a file **on purpose** (moved/retired): set
+  `ARCHON_HORIZON_ALLOW_DELETIONS=1` for that one commit.
+
+At the **end of the session**, re-verify content — not just that HEAD moved —
+since a stale-based commit elsewhere could have landed after yours (the guard
+blocks new offenders, but belt-and-braces):
+
+```bash
+"$HORIZON_GIT" cat-file -e HEAD:path/to/File.lean && \
+"$HORIZON_GIT" show HEAD:path/to/File.lean | diff -q - path/to/File.lean
+```
+
+If you were clobbered anyway: `read-tree HEAD`, re-add your files from the
+working tree, commit once.
 
 ## Reading history / a project's diff
 

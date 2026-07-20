@@ -21,7 +21,7 @@ from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
 from archon_horizon.commands import inbox as inbox_cmd
 from archon_horizon.commands import init as init_cmd
-from archon_horizon.commands import leandag as leandag_cmd
+from archon_horizon.commands import graph as graph_cmd
 from archon_horizon.commands import project as project_cmd
 from archon_horizon.commands import ps as ps_cmd
 from archon_horizon.commands import roadmap as roadmap_cmd
@@ -132,7 +132,16 @@ app.add_typer(task_cmd.app, name="task")
 app.add_typer(project_cmd.app, name="project")
 app.add_typer(skills_cmd.app, name="skills")
 app.command("blueprint")(blueprint_cmd.blueprint)
-app.command("leandag")(leandag_cmd.leandag)
+app.command(
+    "graph",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        # Forward --help to the vendored argparse command so
+        # `horizon graph frontier --help` shows frontier's options.
+        "help_option_names": [],
+    },
+)(graph_cmd.graph)
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
 app.command("usage")(usage_cmd.usage)

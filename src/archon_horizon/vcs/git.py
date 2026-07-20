@@ -23,9 +23,11 @@ absent (``git_available()`` is False; constructors still build).
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -33,6 +35,14 @@ from pathlib import Path
 
 class GitError(RuntimeError):
     pass
+
+
+def _is_ref_race(exc: GitError) -> bool:
+    """True when a commit failed only because a concurrent writer held/advanced
+    the ref or index — serialization doing its job, safe to retry. The first two
+    are git's own errors; the third is the pre-commit guard's stale-base reject."""
+    text = str(exc)
+    return "cannot lock ref" in text or "index.lock" in text or "ledger HEAD advanced" in text
 
 
 def git_available() -> bool:
@@ -47,6 +57,7 @@ def _run(
     cwd: Path | None = None,
     check: bool = True,
     index_file: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> str:
     cmd = ["git"]
     if git_dir is not None:
@@ -60,7 +71,7 @@ def _run(
         capture_output=True,
         text=True,
         check=False,
-        env=_git_env(index_file),
+        env=_git_env(index_file, extra_env),
     )
     if check and completed.returncode != 0:
         raise GitError(f"{' '.join(cmd)} failed: {completed.stderr.strip()}")
@@ -132,19 +143,63 @@ _WORKSPACE_EXCLUDES = (
     ".archon-horizon/cache/",  # dashboard poll caches — derived, never history
 )
 
-# A pre-commit guard installed into every out-of-tree git so an accidental
-# credential (in a transcript, config, or dropped file) is caught before it is
-# committed. High-confidence formats only, to avoid blocking ordinary content;
-# set ARCHON_HORIZON_ALLOW_SECRETS=1 to bypass in a pinch.
+# A pre-commit guard installed into every out-of-tree git. Two protections:
+#
+# 1. Secrets: an accidental credential (in a transcript, config, or dropped
+#    file) is caught before it is committed. High-confidence formats only, to
+#    avoid blocking ordinary content; ARCHON_HORIZON_ALLOW_SECRETS=1 bypasses.
+#
+# 2. Silent clobbers on the shared ledger: a commit whose index was seeded
+#    from a STALE HEAD (a concurrent session committed since the read-tree)
+#    produces a tree that simply lacks the other session's new files — git
+#    commits it without any error and the files are deleted. Likewise a plain
+#    commit through a polluted shared index sweeps in thousands of staged
+#    deletions. Both present the same way at commit time: staged deletions the
+#    committer never asked for. The guard:
+#      - if ARCHON_COMMIT_BASE is set (Archon's own integration commits set it
+#        to the sha the private index was seeded from), require it to still be
+#        HEAD — a cheap compare-and-swap; the caller re-seeds and retries;
+#      - otherwise (an agent's plain git) reject any commit that stages
+#        deletions, unless ARCHON_HORIZON_ALLOW_DELETIONS=1 says they are
+#        intentional. New/modified files are always fine.
 _SECRET_HOOK = r"""#!/bin/sh
-# Auto-installed by Archon Horizon. Blocks commits introducing obvious secrets.
-[ "$ARCHON_HORIZON_ALLOW_SECRETS" = "1" ] && exit 0
-added=$(git diff --cached --no-color -U0 --diff-filter=AM 2>/dev/null | grep '^+' | grep -v '^+++')
-hit=$(printf '%s\n' "$added" | grep -Ein \
-  'ghp_[0-9A-Za-z]{30,}|gho_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|sk-ant-[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----')
-if [ -n "$hit" ]; then
-  echo "Archon Horizon: possible secret in staged changes; commit blocked." >&2
-  echo "Remove it, or set ARCHON_HORIZON_ALLOW_SECRETS=1 to override." >&2
+# Auto-installed by Archon Horizon. Blocks obvious secrets and silent clobbers.
+if [ "$ARCHON_HORIZON_ALLOW_SECRETS" != "1" ]; then
+  added=$(git diff --cached --no-color -U0 --diff-filter=AM 2>/dev/null | grep '^+' | grep -v '^+++')
+  hit=$(printf '%s\n' "$added" | grep -Ein \
+    'ghp_[0-9A-Za-z]{30,}|gho_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|sk-ant-[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----')
+  if [ -n "$hit" ]; then
+    echo "Archon Horizon: possible secret in staged changes; commit blocked." >&2
+    echo "Remove it, or set ARCHON_HORIZON_ALLOW_SECRETS=1 to override." >&2
+    exit 1
+  fi
+fi
+
+head=$(git rev-parse --verify --quiet HEAD) || head=""
+[ -n "$head" ] || exit 0   # first commit: nothing to clobber
+
+if [ -n "$ARCHON_COMMIT_BASE" ]; then
+  if [ "$ARCHON_COMMIT_BASE" != "$head" ]; then
+    echo "Archon Horizon: ledger HEAD advanced since this index was seeded" >&2
+    echo "(base $ARCHON_COMMIT_BASE, HEAD $head). Committing now would silently" >&2
+    echo "revert the concurrent session's files. Re-seed and retry." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+[ "$ARCHON_HORIZON_ALLOW_DELETIONS" = "1" ] && exit 0
+dels=$(git diff --cached --name-only --diff-filter=D 2>/dev/null)
+if [ -n "$dels" ]; then
+  n=$(printf '%s\n' "$dels" | wc -l | tr -d ' ')
+  echo "Archon Horizon: this commit would DELETE $n tracked file(s) you did not change, e.g.:" >&2
+  printf '%s\n' "$dels" | head -5 >&2
+  echo "This almost always means the index was seeded from a stale HEAD (a concurrent" >&2
+  echo "session committed since your read-tree) or you are committing through the" >&2
+  echo "polluted shared index — committing would silently destroy that work." >&2
+  echo "Fix: re-seed against the current HEAD and re-add ONLY your files:" >&2
+  echo "  git read-tree HEAD && git add -- <your files> && git commit ..." >&2
+  echo "If the deletions ARE intentional, set ARCHON_HORIZON_ALLOW_DELETIONS=1 for this commit." >&2
   exit 1
 fi
 exit 0
@@ -320,7 +375,7 @@ def _files_in_commit(git_dir: Path, work_tree: Path, sha: str) -> tuple[str, ...
     return tuple(line.strip() for line in out.splitlines() if line.strip())
 
 
-def _git_env(index_file: Path | None = None) -> dict[str, str]:
+def _git_env(index_file: Path | None = None, extra: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Archon Horizon")
     env.setdefault("GIT_AUTHOR_EMAIL", "archon-horizon@local")
@@ -330,6 +385,8 @@ def _git_env(index_file: Path | None = None) -> dict[str, str]:
         # Stage into a PRIVATE index instead of the repo's shared one. See
         # WorkspaceGit.commit for why this matters.
         env["GIT_INDEX_FILE"] = str(index_file)
+    if extra:
+        env.update(extra)
     return env
 
 
@@ -346,7 +403,14 @@ class WorkspaceGit:
         self.root = root
         self.git_dir = git_dir or (root / ".archon-horizon" / "vcs" / "workspace.git")
 
-    def _run(self, args: Sequence[str], *, check: bool = True, index_file: Path | None = None) -> str:
+    def _run(
+        self,
+        args: Sequence[str],
+        *,
+        check: bool = True,
+        index_file: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> str:
         # cwd=root so relative pathspecs resolve against the work tree; the
         # explicit --git-dir means git never discovers a parent .git.
         return _run(
@@ -356,6 +420,7 @@ class WorkspaceGit:
             cwd=self.root,
             check=check,
             index_file=index_file,
+            extra_env=extra_env,
         )
 
     def is_repo(self) -> bool:
@@ -413,8 +478,10 @@ class WorkspaceGit:
             # from a snapshot of HEAD, so committing against a HEAD that has since
             # advanced would write a tree that silently reverts the other writer's
             # files. Comparing HEAD before/after staging turns that data loss into
-            # a retry.
-            for _ in range(3):
+            # a retry. Concurrent `horizon run` processes against one shared
+            # ledger make this window real, so allow several attempts.
+            attempts = 5
+            for attempt in range(attempts):
                 head = self.current_sha()
                 self._run(["read-tree", head] if head else ["read-tree", "--empty"], index_file=index)
                 # Drop now-ignored paths inherited from HEAD, so this commit records
@@ -454,11 +521,38 @@ class WorkspaceGit:
                 args = ["commit", *_author_args(author)]
                 if allow_empty:
                     args.append("--allow-empty")
-                self._run([*args, "-m", message], index_file=index)
+                try:
+                    # ARCHON_COMMIT_BASE lets the pre-commit guard verify the
+                    # index is still based on the current HEAD at hook time —
+                    # closing the window between the staleness check above and
+                    # the commit, where a concurrent writer's files would be
+                    # silently reverted by our (now stale) tree.
+                    self._run(
+                        [*args, "-m", message],
+                        index_file=index,
+                        extra_env={"ARCHON_COMMIT_BASE": head} if head else None,
+                    )
+                except GitError as exc:
+                    # A writer we didn't see (an agent's plain `git`, another
+                    # run's boundary commit) beat us to the ref between the HEAD
+                    # check above and the commit: git's own compare-and-swap
+                    # rejects with "cannot lock ref 'HEAD': is at X but expected
+                    # Y" (or an index.lock collision). Transient — re-seed from
+                    # the new HEAD and try again.
+                    if attempt + 1 < attempts and _is_ref_race(exc):
+                        time.sleep(0.1 * (attempt + 1) + random.uniform(0.0, 0.2))
+                        continue
+                    raise
                 # HEAD moved; keep the shared index tracking it so the plain `git`
                 # an agent runs still sees a normal, HEAD-mirroring index.
                 _sync_index_to_head(self.git_dir, self.root)
                 return self.current_sha()
+            # Every attempt lost the race. Surface it — falling through to None
+            # would report "nothing changed" for a commit that was never made.
+            raise GitError(
+                f"workspace commit lost the ledger race {attempts} times "
+                "(concurrent writers keep advancing HEAD); try again"
+            )
 
         raise GitError("ledger HEAD kept moving while staging; commit abandoned after 3 attempts")
 

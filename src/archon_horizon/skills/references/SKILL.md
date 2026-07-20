@@ -104,4 +104,4 @@ If a source can't be found and verified, it's recorded `status: not_found` — t
 that as "no citation available," and write no math attributed to it.
 
 Related skills: `blueprint-conventions` for where `\source{...}` sits among the
-other blueprint annotations, and `leandag` for how a node's `sources` feed the DAG.
+other blueprint annotations, and `hgraph` for how a node's `sources` feed the DAG.

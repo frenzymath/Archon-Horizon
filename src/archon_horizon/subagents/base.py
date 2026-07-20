@@ -108,7 +108,7 @@ class DescriptorSubagent(Subagent):
             for all projects), indexed by `references/manifest.yaml`. The
             blueprint dependency DAG for a project is the generated JSON
             at `.archon-horizon/blueprints/<project>.json`. Tool and format know-how
-            is documented as skills under `.claude/skills/` (e.g. `leandag`,
+            is documented as skills under `.claude/skills/` (e.g. `hgraph`,
             `blueprint-conventions`, `lean-check`, `leansearch`, `horizon-inbox`,
             `project-git`, `references`); read the relevant skill instead of guessing how a tool
             or format works. In particular, a project has NO `.git` at its root —

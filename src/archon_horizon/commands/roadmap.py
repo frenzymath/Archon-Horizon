@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 
+from archon_horizon.core.collection_health import roadmap_health_warnings
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.roadmap import (
     Roadmap,
@@ -71,10 +72,14 @@ def _save(store, items: tuple[RoadmapItem, ...]) -> None:
     store.save(Roadmap(items=items, updated_at=utc_now()))
 
 
-def _warn_hierarchy(items) -> list[str]:
-    """Surface parent↔child status inconsistencies (never auto-fix: the state
-    may be intentional — the editor decides whether to correct it)."""
-    warnings = hierarchy_status_warnings(items)
+def _roadmap_warnings(items) -> list[str]:
+    """All advisory roadmap warnings, with no automatic state changes."""
+    return [*hierarchy_status_warnings(items), *roadmap_health_warnings(items)]
+
+
+def _warn_roadmap(items) -> list[str]:
+    """Surface roadmap advisories; the editor decides whether to act."""
+    warnings = _roadmap_warnings(items)
     for warning in warnings:
         log.warn(warning)
     return warnings
@@ -115,7 +120,7 @@ def list_items(
                 }
                 for it, d in rows
             ],
-            "warnings": hierarchy_status_warnings(items),
+            "warnings": _roadmap_warnings(items),
         })
         return
     if not items:
@@ -137,7 +142,7 @@ def list_items(
         [("  " * d + i.id, _status_cell(i), "  " * d + i.title) for i, d in rows],
         title="Roadmap" + (f" · {focus} subtree" if focus else ""),
     )
-    _warn_hierarchy(items)
+    _warn_roadmap(items)
 
 
 @app.command("set")
@@ -193,10 +198,10 @@ def set_item(
     items[idx] = dataclasses.replace(item, metadata=metadata, **changes)
     _save(store, tuple(items))
     if as_json:
-        emit_json({**_item_dict(items[idx]), "warnings": hierarchy_status_warnings(items)})
+        emit_json({**_item_dict(items[idx]), "warnings": _roadmap_warnings(items)})
         return
     log.success(f"Updated roadmap item {item_id} ({', '.join(changes) or 'no fields'}).")
-    _warn_hierarchy(items)
+    _warn_roadmap(items)
 
 
 @app.command("add")
@@ -242,10 +247,10 @@ def add_item(
     _save(store, tuple(items))
     store.append_history(item_id, _history_entry(actor, "created", after=item.status.value, note="opened"))
     if as_json:
-        emit_json({**_item_dict(item), "warnings": hierarchy_status_warnings(items)})
+        emit_json({**_item_dict(item), "warnings": _roadmap_warnings(items)})
         return
     log.success(f"Added roadmap item {item_id}.")
-    _warn_hierarchy(items)
+    _warn_roadmap(items)
 
 
 @app.command("comment")
@@ -262,10 +267,13 @@ def comment_item(
         log.error(f"No roadmap item {item_id!r}.")
         raise typer.Exit(1)
     store.add_comment(item_id, body, author or agent_author())
+    items = store.load().items
     if as_json:
-        emit_json({"id": item_id, "commented": True})
+        warnings = _roadmap_warnings(items)
+        emit_json({"id": item_id, "commented": True, **({"warnings": warnings} if warnings else {})})
         return
     log.success(f"Commented on roadmap item {item_id}.")
+    _warn_roadmap(items)
 
 
 @app.command("remove")
@@ -281,3 +289,4 @@ def remove_item(
         raise typer.Exit(1)
     _save(store, tuple(items))
     log.success(f"Removed roadmap item {item_id}.")
+    _warn_roadmap(items)

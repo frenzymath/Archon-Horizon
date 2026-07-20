@@ -28,11 +28,6 @@ dependencies = [
     "click>=8.1",
     "rich>=13",
     "pyfiglet>=1.0",
-    # The preferred dependency-graph engine: per-node files with agent-editable
-    # comments/reviews under <project>/hgraph/ (see blueprint/hgraph_graph.py).
-    # Installed by default; the code still degrades gracefully to the vendored
-    # leandag scan, then the parser DAG, if the import is unavailable.
-    "hgraph @ git+https://github.com/AxelDlv00/hgraph.git",
 ]
 
 [project.optional-dependencies]
@@ -65,6 +60,7 @@ version = { attr = "archon_horizon.__version__" }
 "archon_horizon" = [
     "skills/**/*.md",
     "subagents/**/*.md",
+    "hgraph/*.md",
     "frontend/dist/**/*",
 ]
 

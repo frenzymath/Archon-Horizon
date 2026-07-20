@@ -52,7 +52,7 @@ type PageProps = {
 };
 
 // Keep one crashing view from blanking the whole dashboard, and surface the
-// error message (e.g. a vis-network DataSet throw) instead of a white screen.
+// error message (e.g. a graph renderer exception) instead of a white screen.
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
@@ -1036,6 +1036,30 @@ function orderedRoadmapTree(items: any[]): Array<{ item: any; depth: number }> {
   return out;
 }
 
+// Prune the ordered tree rows to what an expand/collapse state shows: a
+// collapsed item keeps its own row but hides every following row that is
+// deeper (its subtree). Also annotates each row with whether it has children
+// in THIS row list (post-filtering) and how many rows its subtree holds, so
+// the toggle can label what it hides.
+function visibleRoadmapRows(
+  rows: Array<{ item: any; depth: number }>,
+  collapsed: Set<string>,
+): Array<{ item: any; depth: number; hasChildren: boolean; subtreeSize: number }> {
+  const out: Array<{ item: any; depth: number; hasChildren: boolean; subtreeSize: number }> = [];
+  let skipDepth: number | null = null;
+  rows.forEach((row, i) => {
+    if (skipDepth !== null) {
+      if (row.depth > skipDepth) return;
+      skipDepth = null;
+    }
+    let subtreeSize = 0;
+    while (i + 1 + subtreeSize < rows.length && rows[i + 1 + subtreeSize].depth > row.depth) subtreeSize++;
+    out.push({ ...row, hasChildren: subtreeSize > 0, subtreeSize });
+    if (collapsed.has(row.item.id)) skipDepth = row.depth;
+  });
+  return out;
+}
+
 function RoadmapPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const items = state.roadmap?.items ?? [];
@@ -1079,6 +1103,24 @@ function RoadmapPage({ state, reload }: PageProps) {
   // Tree order (parents above sub-items) computed once over the visible items.
   const orderedFiltered = orderedRoadmapTree(filteredItems);
 
+  // Expand/collapse of sub-item trees. Ids of items that have children in the
+  // filtered set — the targets of "Collapse all".
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const parentIds = useMemo(() => {
+    const byId = new Set(filteredItems.map((i: any) => i.id));
+    const ids = new Set<string>();
+    for (const it of filteredItems) {
+      const parent = roadmapParent(it);
+      if (parent && parent !== it.id && byId.has(parent)) ids.add(parent);
+    }
+    return ids;
+  }, [filteredItems]);
+  const toggleCollapsed = (id: string) => setCollapsedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
   return (
     <div className="page">
       <Panel title="Roadmap" subtitle={`${filteredItems.length} item${filteredItems.length === 1 ? '' : 's'}`}>
@@ -1097,6 +1139,12 @@ function RoadmapPage({ state, reload }: PageProps) {
           <div className="search-facet-group"><span className="search-facet-label">Status</span>
             <ChipMultiSelect options={ROADMAP_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Roadmap status filter" />
           </div>
+          {parentIds.size > 0 && (
+            <div className="search-facet-group"><span className="search-facet-label">Tree</span>
+              <button className="text-action" onClick={() => setCollapsedIds(new Set(parentIds))}>Collapse all</button>
+              <button className="text-action" onClick={() => setCollapsedIds(new Set())}>Expand all</button>
+            </div>
+          )}
         </div>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
         {(state.roadmap_warnings ?? []).map((w: string) => (
@@ -1109,9 +1157,29 @@ function RoadmapPage({ state, reload }: PageProps) {
             <div key={proj as string} className="roadmap-project-group">
               <h3>{proj}</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {orderedFiltered.filter(({ item }) => itemProjects(item).includes(proj)).map(({ item, depth }) => (
-                  <div key={item.id} style={{ marginLeft: `${Math.min(depth, 6) * 1.5}rem` }}>
-                    <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                {visibleRoadmapRows(
+                  orderedFiltered.filter(({ item }) => itemProjects(item).includes(proj)),
+                  collapsedIds,
+                ).map(({ item, depth, hasChildren, subtreeSize }) => (
+                  <div key={item.id} style={{ marginLeft: `${Math.min(depth, 6) * 1.5}rem`, display: 'flex', alignItems: 'flex-start', gap: '0.35rem' }}>
+                    {hasChildren ? (
+                      <button
+                        className="tree-toggle button-reset"
+                        onClick={() => toggleCollapsed(item.id)}
+                        aria-expanded={!collapsedIds.has(item.id)}
+                        title={collapsedIds.has(item.id)
+                          ? `Show ${subtreeSize} sub-item${subtreeSize === 1 ? '' : 's'}`
+                          : `Hide ${subtreeSize} sub-item${subtreeSize === 1 ? '' : 's'}`}
+                      >
+                        {collapsedIds.has(item.id) ? '▸' : '▾'}
+                        {collapsedIds.has(item.id) && <span className="tree-toggle-count">{subtreeSize}</span>}
+                      </button>
+                    ) : (
+                      <span className="tree-toggle-spacer" aria-hidden="true" />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1859,28 +1927,34 @@ function Transcripts({ state }: { state?: any }) {
 
   // Live-tail the open transcript + its report: fetch on select, then poll so
   // new events and the final report appear without a manual page refresh.
+  //
+  // Only a *live* session needs the tail. A `session_end` in the stream means the
+  // transcript is closed and can never gain another event, so we stop polling it
+  // — re-fetching a finished multi-MB transcript every 3s rebuilt every event
+  // object, which defeated the row memoization and re-ran the markdown/KaTeX
+  // conversion in every expanded panel. `report.md` is written just *after* the
+  // stream closes, so keep polling a couple of cycles past `session_end` to catch
+  // it before going quiet for good.
   useEffect(() => {
     if (!selected) { setEvents(null); setReport(''); setRecommendation(''); return; }
     let cancelled = false;
-    const load = () => {
-      getTranscript(selected).then((e) => { if (!cancelled) setEvents(e); }).catch(() => { if (!cancelled) setEvents([]); });
-      getReport(selected)
-        .then((r) => {
-          if (!cancelled) {
-            setReport(r?.markdown ?? '');
-            setRecommendation(r?.recommendation ?? '');
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setReport('');
-            setRecommendation('');
-          }
-        });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let graceLeft = 2;
+    const load = async () => {
+      const [tx, rep] = await Promise.all([
+        getTranscript(selected).then((e) => e, () => null),
+        getReport(selected).then((r) => r, () => null),
+      ]);
+      if (cancelled) return;
+      setEvents(tx ?? []);
+      setReport(rep?.markdown ?? '');
+      setRecommendation(rep?.recommendation ?? '');
+      const ended = Array.isArray(tx) && tx.some((event: any) => event?.kind === 'session_end');
+      if (ended && graceLeft-- <= 0) return;
+      timer = setTimeout(load, 3000);
     };
     load();
-    const id = setInterval(load, 3000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); };
   }, [selected]);
 
   return (
@@ -1931,6 +2005,50 @@ function subagentLabel(event: any): string {
 type LogGroup =
   | { sub: false; item: { event: any; idx: number } }
   | { sub: true; id: string; label: string; items: { event: any; idx: number }[] };
+
+/** How many log entries a list renders before it asks. Also the size of one
+ * "show more" step. Sessions run to ~900 events at the tail, and a single tool
+ * result can be hundreds of KB, so rendering a whole session on open costs far
+ * more than anyone reads — the newest events are the ones you came for. */
+const EVENT_PAGE = 120;
+
+/** One subagent's events as a collapsible sublog.
+ *
+ * The parent list counts a whole group as one entry, so a subagent that ran
+ * hundreds of events would paint all of them in a single frame no matter how the
+ * outer cap is set. Cap the inner list the same way. (Collapsing wouldn't help:
+ * `<details>` mounts its children whether or not it's open.) */
+function SubagentSublog({ group }: { group: Extract<LogGroup, { sub: true }> }) {
+  const [limit, setLimit] = useState(EVENT_PAGE);
+  const model = group.items.find(({ event }) => event?.data?.model)?.event?.data?.model;
+  const hidden = Math.max(0, group.items.length - limit);
+  return (
+    <details className="log-panel subagent-sublog" open>
+      <summary>
+        <span className="role-badge role-subagent">S</span>
+        <span className="subagent-name">{group.label}</span>
+        {model ? <span className="subagent-model" title="Model used by this subagent">{model}</span> : null}
+        <UsageChips usage={subagentGroupUsage(group.items)} />
+        <span className="subagent-count">{group.items.length} events</span>
+      </summary>
+      <div className="log-lines sublog-lines">
+        {group.items.slice(0, limit).map(({ event, idx }) => (
+          <TranscriptEvent key={idx} event={event} forceOpen={null} />
+        ))}
+        {hidden > 0 && <ShowMoreButton hidden={hidden} onMore={() => setLimit((l) => l + EVENT_PAGE)} />}
+      </div>
+    </details>
+  );
+}
+
+function ShowMoreButton({ hidden, onMore }: { hidden: number; onMore: () => void }) {
+  return (
+    <button type="button" className="log-expand-more" onClick={onMore}>
+      Show {Math.min(hidden, EVENT_PAGE)} more
+      <span className="log-expand-rest">{hidden} older {hidden === 1 ? 'entry' : 'entries'} hidden</span>
+    </button>
+  );
+}
 
 function sumUsage(usages: any[]) {
   let hasCost = false;
@@ -2228,9 +2346,18 @@ function TranscriptViewer({
   // Progressive rendering: paint the newest events immediately and stream the
   // rest in over the next frames, so a long session doesn't block on rendering
   // every event before anything shows. Reset the ramp when the session changes.
+  //
+  // The ramp only covers the capped slice. Past `EVENT_PAGE` the older tail is
+  // rendered on request rather than automatically: the git panel, the report and
+  // the newest events answer most of what you open a session for, and paying to
+  // render the whole history before you've asked for it is what made this slow.
   const renderList: any[] = groups ?? ordered ?? [];
-  const shownCount = useProgressiveCount(renderList.length, { resetKey: selected, initial: 40, step: 100 });
-  const remaining = renderList.length - shownCount;
+  const [limit, setLimit] = useState(EVENT_PAGE);
+  useEffect(() => { setLimit(EVENT_PAGE); }, [selected]);
+  const capped = Math.min(renderList.length, limit);
+  const shownCount = useProgressiveCount(capped, { resetKey: selected, initial: 40, step: 100 });
+  const rendering = capped - shownCount;
+  const hidden = renderList.length - capped;
   const title = session?.meta?.name ?? session?.session ?? 'Log';
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
@@ -2299,31 +2426,18 @@ function TranscriptViewer({
       <div className="log-lines">
         {groups ? groups.slice(0, shownCount).map((group, i) =>
           group.sub ? (
-            <details key={`sub-${group.id}-${i}`} className="log-panel subagent-sublog" open>
-              <summary>
-                <span className="role-badge role-subagent">S</span>
-                <span className="subagent-name">{group.label}</span>
-                {(() => {
-                  const m = group.items.find(({ event }) => event?.data?.model)?.event?.data?.model;
-                  return m ? <span className="subagent-model" title="Model used by this subagent">{m}</span> : null;
-                })()}
-                <UsageChips usage={subagentGroupUsage(group.items)} />
-                <span className="subagent-count">{group.items.length} events</span>
-              </summary>
-              <div className="log-lines sublog-lines">
-                {group.items.map(({ event, idx }) => (
-                  <TranscriptEvent key={idx} event={event} forceOpen={null} />
-                ))}
-              </div>
-            </details>
+            <SubagentSublog key={`sub-${group.id}-${i}`} group={group} />
           ) : (
             <TranscriptEvent key={group.item.idx} event={group.item.event} forceOpen={null} />
           ),
         ) : ordered?.slice(0, shownCount).map(({ event, idx }: any) => (
           <TranscriptEvent key={idx} event={event} forceOpen={null} />
         ))}
-        {remaining > 0 && (
-          <p className="empty transcript-empty transcript-loading-more">Rendering {remaining} more event{remaining === 1 ? '' : 's'}…</p>
+        {rendering > 0 && (
+          <p className="empty transcript-empty transcript-loading-more">Rendering {rendering} more event{rendering === 1 ? '' : 's'}…</p>
+        )}
+        {hidden > 0 && rendering === 0 && (
+          <ShowMoreButton hidden={hidden} onMore={() => setLimit((l) => l + EVENT_PAGE)} />
         )}
       </div>
       {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} nextSessionStart={nextSessionStart} tick={sessionKey(session) === activeTickSession} />}
@@ -2500,7 +2614,7 @@ function commandTag(event: any): string | null {
     const cmd = String(event.data?.input?.command ?? event.data?.command ?? '');
     if (/horizon-subagent\.py/.test(cmd)) return 'subagent';
     if (/\bhorizon\s+inbox\b/.test(cmd)) return 'inbox';
-    if (/\bhorizon\s+leandag\b/.test(cmd)) return 'dag';
+    if (/\bhorizon\s+graph\b/.test(cmd)) return 'dag';
     if (/\bhorizon\s+blueprint\b/.test(cmd)) return 'blueprint';
     if (/\bhorizon\s+search\b/.test(cmd)) return 'search';
     if (/\blake\b|\blean\b/.test(cmd)) return 'lean';

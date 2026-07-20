@@ -39,7 +39,7 @@ Pass `--host`, `--port`, or `--public` to `horizon run` to control that server,
 or `--no-dashboard` to run without the UI.
 
 The server is implemented in [`server/app.py`](../../src/archon_horizon/server/app.py) (with data assembled by [`server/service.py`](../../src/archon_horizon/server/service.py) and Git/source endpoints in [`server/git_api.py`](../../src/archon_horizon/server/git_api.py) and [`server/source_api.py`](../../src/archon_horizon/server/source_api.py)); the CLI entry point is [`commands/dashboard.py`](../../src/archon_horizon/commands/dashboard.py), and the SPA source lives under [`frontend/`](../../src/archon_horizon/frontend). It provides real-time visualization and management features:
-- **Interactive DAG Viewer**: Explore blueprint dependency graphs rendered with KaTeX and interactive node selection.
+- **Interactive chapter graph**: Explore a deterministic Graphviz layout with chapters collapsed by default, one-chapter expansion, filtering, and node selection.
 - **Roadmap & Task Tracker**: Monitor ongoing execution runs, inspect step-by-step run logs, and view milestone progress.
 - **Inbox Management**: Directly review, triage, and comment on workspace inbox hints and issues.
 

@@ -20,7 +20,7 @@ SKILLS_ROOT = Path(__file__).parent
 # ever *writes* bundled skills, so without this a retired skill lives on in every
 # existing workspace and keeps teaching a removed workflow. Pruning is by explicit
 # name — never "anything not bundled" — so a workspace's own custom skills survive.
-_RETIRED_SKILLS = ("horizon-commit",)
+_RETIRED_SKILLS = ("horizon-commit", "leandag")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +55,28 @@ def available_skills() -> list[Skill]:
         fm = _parse_frontmatter((directory / "SKILL.md").read_text("utf-8"))
         skills.append(Skill(name=fm.get("name", directory.name), description=fm.get("description", "")))
     return skills
+
+
+def stale_skills(root: Path) -> list[str]:
+    """Bundled skills whose installed copy is missing or out of date.
+
+    Skills are written to a workspace only by ``init`` / ``horizon skills
+    install``, so a workspace freezes its guidance at install time while the
+    package moves on — agents then follow text that no longer matches the tools.
+    This reports the drift; it never writes, because the `horizon` skill is
+    advertised as per-workspace editable, so a difference here may be a
+    deliberate local edit rather than staleness. The caller decides.
+    """
+    out: list[str] = []
+    for directory in _skill_dirs():
+        dest = root / ".claude" / "skills" / directory.name / "SKILL.md"
+        try:
+            if dest.read_text("utf-8") == (directory / "SKILL.md").read_text("utf-8"):
+                continue
+        except OSError:
+            pass  # missing (or unreadable) counts as stale
+        out.append(directory.name)
+    return out
 
 
 def install_skills(root: Path, *, overwrite=None) -> list[str]:

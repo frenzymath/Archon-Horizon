@@ -27,7 +27,20 @@ from archon_horizon.core.tasks import (
 )
 
 
+# Types that are already JSON scalars and can never be a dataclass, Enum,
+# datetime, Path, or container. Matched by EXACT type, so an `Enum` that
+# subclasses `str`/`int` (e.g. `class TaskStatus(str, Enum)`) still falls
+# through to the Enum branch below and serializes as its value.
+_JSON_SCALARS = frozenset({str, int, float, bool, type(None)})
+
+
 def to_jsonable(obj: Any) -> Any:
+    # Scalars dominate by a wide margin — event payloads are mostly strings and
+    # numbers, and a large workspace's `state()` recurses here ~700k times per
+    # call. Settling them in one exact-type hash lookup, before the isinstance
+    # ladder, is worth the early return.
+    if type(obj) in _JSON_SCALARS:
+        return obj
     if isinstance(obj, ItemScope):
         return {k: to_jsonable(v) for k, v in compact_scope(obj).items()}
     if is_dataclass(obj) and not isinstance(obj, type):

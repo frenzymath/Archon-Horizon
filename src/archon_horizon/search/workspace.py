@@ -36,11 +36,33 @@ def resolve_source_roots(root: Path, cfg: WorkspaceConfig) -> dict[str, Path]:
         if proj.exists():
             roots[name] = proj
 
-    # One pass over all package dirs, matched case-insensitively by basename.
+    # Package dirs matched case-insensitively by basename. Configured projects'
+    # own ``.lake/packages`` come first: that scan is cheap and deterministic,
+    # and — unlike the recursive glob, which does not follow symlinks — it works
+    # when a project (or its checkout) is symlinked to a shared copy.
     package_dirs: dict[str, Path] = {}
-    for pkg in root.glob("**/.lake/packages/*"):
-        if pkg.is_dir():
+
+    def _note(pkg: Path) -> None:
+        if pkg.is_dir():  # follows symlinks: shared checkouts are often links
             package_dirs.setdefault(pkg.name.lower(), pkg)
+
+    for proj in roots.values():
+        packages = proj / ".lake" / "packages"
+        if packages.is_dir():
+            for pkg in sorted(packages.iterdir()):
+                _note(pkg)
+
+    # Fall back to a whole-workspace sweep only if something is still missing
+    # (a lake project nested below a configured path, say) — it walks every
+    # tree under the root, which is slow on large workspaces.
+    unresolved = any(
+        not (library_package_names(lib.name) & set(package_dirs))
+        for lib in cfg.external_libraries
+        if not lib.path
+    )
+    if unresolved:
+        for pkg in root.glob("**/.lake/packages/*"):
+            _note(pkg)
 
     for lib in cfg.external_libraries:
         if lib.path:

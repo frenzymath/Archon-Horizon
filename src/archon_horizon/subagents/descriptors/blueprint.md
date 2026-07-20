@@ -16,7 +16,7 @@ scales to thousands of projects.
 
 The Horizon agent edits blueprints freely and without strong constraint; you are
 the independent check on that. Consult the `blueprint-conventions` skill for
-format and house style, `leandag` for the dependency DAG, and `project-git` for
+format and house style, `hgraph` for the dependency DAG, and `project-git` for
 diffing recent Lean — don't guess.
 
 ## What you do for your slice
@@ -53,7 +53,7 @@ diffing recent Lean — don't guess.
   aligned with the blueprint. When the **blueprint** is the one that's wrong, fix
   it. When the **Lean** is wrong (or the mismatch needs Horizon's attention), file
   an inbox `issue` for the next Horizon agent rather than papering over it.
-- **Make the cone finite and clean.** Walk your target's cone (`leandag`): every
+- **Make the cone finite and clean.** Walk your target's cone (`hgraph`): every
   dependency needs a statement, a finite-effort complete proof, and a full
   `\uses{}` set. No isolated nodes, no dangling `\uses`. Fix LaTeX in scope
   (syntax, `\uses{}`/`\label{}`/`\lean{}`).

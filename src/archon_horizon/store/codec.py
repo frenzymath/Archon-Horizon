@@ -40,9 +40,20 @@ class YamlCodec(Codec):
         import yaml  # noqa: F401  (fail fast at construction, not import time)
 
         self._yaml = yaml
+        # `safe_load` always uses PyYAML's pure-Python loader, which is several
+        # times slower than the libyaml-backed one. Reading is hot — the
+        # dashboard's state poll parses hundreds of small YAML files (tasks,
+        # roadmap, inbox, run records) — so prefer `CSafeLoader`, which parses
+        # the same safe subset and yields identical data. It exists only when
+        # PyYAML was built against libyaml, hence the fallback.
+        #
+        # Only the loader is swapped: `CSafeDumper` formats its output slightly
+        # differently, and these files are human-editable and diffed in the
+        # ledger, so writes stay on the pure-Python dumper.
+        self._loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
     def dumps(self, data: Any) -> str:
         return self._yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
     def loads(self, text: str) -> Any:
-        return self._yaml.safe_load(text)
+        return self._yaml.load(text, Loader=self._loader)

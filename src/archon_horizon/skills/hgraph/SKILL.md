@@ -1,25 +1,25 @@
 ---
 name: hgraph
-description: Per-node progress on the dependency graph — hgraph keeps one file per statement/Lean declaration under <project>/hgraph/, agents attach comments (failure memory) and Maths/Lean reviews to nodes, and `hgraph frontier` ranks what to prove next. Preferred over raw leandag queries when hgraph is installed.
+description: The dependency graph — Horizon's vendored hgraph core keeps one file per statement/Lean declaration under <project>/hgraph/; `horizon graph frontier` ranks work and agents attach node-scoped comments and reviews. This is the only DAG engine.
 ---
 
 Each project may carry an **hgraph**: a plain-files semantic graph under
 `<project>/hgraph/` — one Markdown node per blueprint statement and per Lean
 declaration, typed edges (`uses` = the hard dependency DAG, `formalizes` =
-informal↔formal identity). `hgraph sync` (run automatically at run boundaries)
+informal↔formal identity). `horizon graph sync` (run automatically at run boundaries)
 reconciles the blueprint + Lean sources into it; your **authored** additions
 (comments, reviews, metadata) are never touched by sync. The files are
 committed to the workspace ledger like everything else.
 
-Run the CLI from the project directory (or pass the project path as the last
-argument). Address nodes by `label:<latex-label>` or `decl:<lean-fqname>` —
-raw ids are opaque hashes. Most commands accept `--json`.
+Use `"$HORIZON_BIN" graph -p <project> …`; when a workspace has one project,
+`-p` is optional. Address nodes by `label:<latex-label>` or
+`decl:<lean-fqname>` — raw ids are opaque hashes. Most commands accept `--json`.
 
 ## Sync it yourself — and act on the warnings
 
 Don't wait for the run boundary: after you change blueprint statements,
-`\uses{}`/`\lean{}` annotations, or Lean declarations, run `hgraph sync` in the
-project and **read its output**. Sync prints warnings for exactly the defects
+`\uses{}`/`\lean{}` annotations, or Lean declarations, run
+`"$HORIZON_BIN" graph -p <project> sync` and **read its output**. Sync prints warnings for exactly the defects
 you can fix on the spot: `\uses{X} has no blueprint node` (missing/mistyped
 label), `\lean{Name} not found in Lean sources` (renamed or unwritten
 declaration), stale nodes whose source vanished. Fix what your change caused
@@ -30,33 +30,39 @@ comments/reviews/metadata.
 
 ## Read
 
-- `hgraph list --state ready` — nodes whose dependencies are all closed:
+- `"$HORIZON_BIN" graph -p <project> list --state ready` — nodes whose dependencies are all closed:
   provable *now*. Other states: `closed`, `blocked`, `formalized_open`.
-- `hgraph frontier` — the ready nodes ranked by how many downstream nodes a
+- `"$HORIZON_BIN" graph -p <project> frontier` — the ready nodes ranked by how many downstream nodes a
   proof would unlock. **Use this when picking the next node to prove.**
-- `hgraph get label:thm:foo` — one node: statement, `lean_status`
+- `"$HORIZON_BIN" graph -p <project> get label:thm:foo` — one node: statement, `lean_status`
   (`lean_ok | mathlib_ok | sorry | empty`, derived from scanning the Lean, not
   from `\leanok`), deps, attached comments/reviews.
-- `hgraph ancestors label:thm:foo` — the dependency cone.
-- `hgraph stats` — per-state counts for the project.
+- `"$HORIZON_BIN" graph -p <project> ancestors label:thm:foo` — the dependency cone.
+- `"$HORIZON_BIN" graph -p <project> stats` — per-state counts for the project.
 
 ## Write — per-node progress lives WITH the node
 
 - **Comment = failure memory / progress note on that node.** When an approach
   fails or you learn something node-specific, record it where the next session
   will look first:
-  `hgraph add comment label:thm:foo --author agent --content "tried simp+ring, fails because …"`
+  `"$HORIZON_BIN" graph -p <project> add comment label:thm:foo --author agent --content "tried simp+ring, fails because …"`
 - **Review = a Maths / Lean verdict** (independent axes, `good|bad`):
-  `hgraph add review label:thm:foo --maths good --lean bad --lean-comment "statement ok; proof has a sorry at the succ case"`
-- **Metadata**: `hgraph modify node label:thm:foo --set status=verified`
+  `"$HORIZON_BIN" graph -p <project> add review label:thm:foo --maths good --lean bad --lean-comment "statement ok; proof has a sorry at the succ case"`
+- **Metadata**: `"$HORIZON_BIN" graph -p <project> modify node label:thm:foo --set status=verified`
 
 Prefer node comments over inbox items for anything scoped to ONE node; use the
 inbox (skill: `horizon-inbox`) for cross-node or cross-session coordination.
 
-## Relation to the blueprint DAG
+An edge `source --uses--> target` means *source depends on target*. A node is
+"ready" when all of its dependencies are closed; prefer `frontier`, which ranks
+ready nodes by what they unlock. The dashboard provides the workspace project
+switcher and the chapter-collapsed Graphviz view.
 
-The dashboard's blueprint DAG is generated from the hgraph (with a plain
-LaTeX-parser fallback when hgraph is unavailable) — so keeping the blueprint
-`\uses{}`/`\lean{}` annotations correct (skill: `blueprint-conventions`) is
-what keeps this graph correct. `horizon leandag` still answers cone/dependency
-queries from the cached DAG JSON (skill: `leandag`).
+## Relation to the blueprint
+
+The DAG **is** the hgraph — there is no second engine and no parser fallback.
+It is generated by resolving the blueprint's `\uses{}`/`\lean{}` annotations
+against the real Lean sources, so keeping those annotations correct (skill:
+`blueprint-conventions`) is exactly what keeps this graph correct. Unresolved
+references surface as `horizon graph sync` warnings and as `dangling` entries — read
+the warnings rather than trusting `dangling` alone.

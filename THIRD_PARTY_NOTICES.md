@@ -5,12 +5,12 @@ vendors and interoperates with the third-party components listed below.
 
 ## Vendored in-repo
 
-### leandag
+### hgraph core
 
-- Upstream: https://github.com/AxelDlv00/LeanDAG (v0.1.0)
-- Local path: `src/archon_horizon/leandag/`
-- Notes: The dependency-graph engine is vendored so it ships in-repo with no
-  external git install, with minimal local edits noted in its `__init__.py`.
+- Upstream: https://github.com/AxelDlv00/hgraph
+- Imported revision: `0678df4d86978872181c9f601befe1fad876615e`
+- Local path: `src/archon_horizon/hgraph/`
+- License: Apache-2.0 (the repository root `LICENSE` applies)
 
 ## Runtime dependencies (not bundled)
 

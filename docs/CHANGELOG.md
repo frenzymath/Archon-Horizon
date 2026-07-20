@@ -23,11 +23,11 @@ rationale and measurements in
   between sessions. A limit/budget stop writes `runs/<id>/paused.json` (reason,
   advertised retry window, focus, resume command) and `horizon run` exits with
   code 3 so relaunch loops can tell "paused, resumable" from failure.
-- **HyperGraph engine** — installed by default: the dependency graph is
-  generated from per-node files under `<project>/hgraph/` (agents attach
-  comments and Maths/Lean reviews; `hgraph frontier` ranks what to prove next;
-  new `hgraph` skill). Degrades gracefully to the plain LaTeX-parser DAG if
-  the import is unavailable. The vendored leandag engine is gone.
+- **Vendored semantic graph** — the dependency graph is generated from
+  per-node files under `<project>/hgraph/`; agents attach comments and
+  Maths/Lean reviews, and `horizon graph frontier` ranks what to prove next.
+  Horizon owns the implementation and has no external graph dependency or
+  secondary DAG engine.
 - **`horizon ps`** — per-run process registry (`runs/<id>/process.json`):
   list live runs, reap zombie markers (`--clean`), kill a stuck run
   (`--kill <run>`); killed/crashed runs resume with `--resume`.
@@ -68,10 +68,10 @@ rationale and measurements in
   `/api/run/working-changes` and their UI panel): progress is read from the
   commit-granular git view (commit cards + per-commit file diffs), which is
   the durable record anyway.
-- The vendored `leandag/` package and its bridge (hgraph is the rich engine;
-  the parser DAG is the only fallback).
+- The former embedded DAG package, parser fallback, and standalone DAG command;
+  `horizon graph` is the single graph surface.
 - The vestigial cross-process commit-lock stack, `project_checkpoint`,
-  `ProjectGit`, git-notes helpers; leandag's unused exporters/queries/reporter;
+  `ProjectGit`, git-notes helpers; the old graph exporters/queries/reporter;
   the in-memory inbox provider; prompt composition and its templates;
   write-domain enforcement (`core/permissions.py`); the legacy Python-rendered
   dashboard fallback (a no-dist install now gets build instructions; the JSON
@@ -103,9 +103,8 @@ a **Ground agent** (blueprints, DAG, roadmap, reports, inboxes) and a
   boundaries only.
 - **Roadmap, tasks, runs, reports, events, memory** stores with YAML/JSON
   codecs; tasks are human-only, agents organize pending work via the roadmap.
-- **Blueprint → DAG.** A LaTeX-subset blueprint parser building a dependency
-  DAG, plus the vendored **leandag** engine for Lean/blueprint graph queries and
-  effort estimates (KaTeX renders the graph).
+- **Blueprint → DAG.** A LaTeX-subset blueprint parser building dependency
+  graphs for Lean/blueprint queries and dashboard rendering.
 - **Permissions & freeze.** Deterministic freeze enforcement before dispatch and
   write-set locks; protections stored as persistent inbox items.
 - **Native subagents.** Read-only starter descriptors (blueprint-reviewer,
@@ -116,7 +115,7 @@ a **Ground agent** (blueprints, DAG, roadmap, reports, inboxes) and a
 - **Workspace search** (`horizon search`) over mathlib, workspace projects, and
   configured `external_libraries`.
 - **CLI** (`horizon`): `init`, `setup`, `update`, `run`, `inbox`, `roadmap`,
-  `task`, `project`, `skills`, `blueprint`, `leandag`, `search`, `sync`,
+  `task`, `project`, `skills`, `blueprint`, graph queries, `search`, `sync`,
   `dashboard`. Every command supports `--json` (pure JSON on stdout, human chrome
   on stderr).
 - **Version stamping.** `horizon init` records the Horizon version in

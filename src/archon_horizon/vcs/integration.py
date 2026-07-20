@@ -15,7 +15,10 @@ commit and read what it touched without parsing prose.
 
 from __future__ import annotations
 
+import os
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from archon_horizon.core.workspace import Workspace
@@ -35,9 +38,48 @@ def author_for(role: str | None) -> tuple[str, str] | None:
     return _ROLE_AUTHORS.get((role or "").strip().lower())
 
 # Orders integration commits when the dashboard server thread and the run loop
-# commit from the same process. Runs are sequential (one session at a time on
-# the single ledger), so no cross-process lock is needed.
+# commit from the same process.
 _WORKSPACE_COMMIT_LOCK = threading.Lock()
+
+
+@contextmanager
+def _cross_process_commit_lock(workspace: Workspace, timeout: float = 120.0):
+    """Serialize boundary commits across concurrent ``horizon run`` processes.
+
+    A workspace deliberately running several projects in parallel (one run per
+    project, possibly under different accounts) shares ONE ledger; without this,
+    two runs starting in the same second race the baseline commit and one fails
+    with ``cannot lock ref 'HEAD': is at X but expected Y``. An OS ``flock`` is
+    used because it dies with the holder — no stale-lock reclaim needed. On
+    platforms without ``fcntl`` (Windows) this degrades to no cross-process
+    lock; the retry in :meth:`WorkspaceGit.commit` still resolves races there.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    lock_dir = workspace.state_path / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_dir / "workspace-commit.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise GitError(
+                        f"timed out after {timeout:.0f}s waiting for the workspace "
+                        "commit lock (another run is committing to the ledger)"
+                    )
+                time.sleep(0.2)
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        yield
+    finally:
+        os.close(fd)  # closing the fd releases the flock
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +173,7 @@ def integrate_workspace_run(
         for name in projects:
             if name in workspace.projects:
                 neutralize_nested_git(workspace.project_path(name))
-        with _WORKSPACE_COMMIT_LOCK:
+        with _WORKSPACE_COMMIT_LOCK, _cross_process_commit_lock(workspace):
             git = WorkspaceGit(workspace.root)
             git.init()
             # Drop any stale submodule gitlink left from before a project's nested

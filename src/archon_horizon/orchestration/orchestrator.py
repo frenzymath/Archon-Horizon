@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from archon_horizon.agents.base import HorizonAgent, HorizonContext
-from archon_horizon.blueprint.workspace import workspace_dags, workspace_dags_rich
+from archon_horizon.blueprint.workspace import workspace_dags
 from archon_horizon.config.schema import BudgetConfig
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.events import Event
@@ -124,6 +124,12 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         return "The pinned focus task(s) were not runnable."
     if event_type == "run.dry-run":
         return f"Dry run planned tasks: {_csv(data.get('planned'))}."
+    if event_type == "skills.stale":
+        return (
+            f"Workspace skills differ from the bundled ones ({_csv(data.get('skills'))}); "
+            "agents will follow this workspace's copy. Run `horizon skills install` to "
+            "refresh (it overwrites local edits)."
+        )
     if event_type == "roadmap.load_failed":
         return f"Roadmap load failed: {data.get('error')}."
     if event_type == "roadmap.restored":
@@ -695,11 +701,16 @@ class Orchestrator:
 
     def _horizon_step(
         self, run: RunRecord, task: HorizonTask, runlog: RunLog | None, *, round_index: int,
-        resume_session_id: str | None = None,
+        rounds_total: int, resume_session_id: str | None = None,
     ) -> HorizonResult | None:
         """One Horizon session: run a single task. Returns its result, or ``None``
         if it could not run (frozen / lock conflict) so the caller skips the
-        reconcile pairing for it."""
+        reconcile pairing for it.
+
+        ``rounds_total`` is the exclusive upper bound on ``round_index`` for this
+        invocation, so the agent's last round is the one where
+        ``round_index + 1 == rounds_total``. The caller owns that arithmetic —
+        it is the only place that knows how far a resume batch extends."""
         self.sync.sync(SyncBoundary.BEFORE_HORIZON)
 
         if self._agent_frozen("horizon"):
@@ -772,7 +783,7 @@ class Orchestrator:
                     resume_session_id,
                     cancel,
                     round_index=round_index,
-                    rounds_total=run.rounds_requested + run.start_round,
+                    rounds_total=rounds_total,
                 )
             )
             stop_watch.set()
@@ -1184,6 +1195,13 @@ class Orchestrator:
         # can list live runs, spot zombies (marker present, pid dead), and kill a
         # stuck one. Removed on clean exit; a crash leaves it for `ps` to reap.
         self._write_process_marker(runlog)
+        # Skills are written only by `init` / `horizon skills install`, so a
+        # long-lived workspace keeps whatever it was initialized with while the
+        # package moves on — agents then follow guidance that no longer matches
+        # the tools they have. Surface the drift rather than silently rewriting:
+        # the `horizon` skill is advertised as per-workspace editable, so a
+        # difference may be an intentional local edit.
+        self._warn_stale_skills()
         # Run-level spend, accumulated from each session's reported usage and
         # checked between sessions against workspace.budget.
         run_tokens_out = 0
@@ -1197,7 +1215,9 @@ class Orchestrator:
 
             if not dry_run:
                 self._queue_focus_for_round(run, initial=(not resume and i == 0))
-            self._write_blueprint_dags(rich=False)  # the leandag/hgraph skills read a fresh DAG during horizon
+            # The hgraph skill reads a fresh DAG during horizon; only
+            # the run's own projects need refreshing here.
+            self._write_blueprint_dags(projects=self._run_scope_projects(run))
             candidates = self.task_store.list()
             selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
             # A focus pinned to a task that is not runnable (e.g. it is frozen, or
@@ -1242,6 +1262,15 @@ class Orchestrator:
             for n, task in enumerate(selected):
                 result = self._horizon_step(
                     run, task, runlog, round_index=base + i,
+                    # Rounds run as ``base + i`` for ``i`` in ``range(total_rounds)``,
+                    # so the agent's last round is ``base + total_rounds - 1``. A
+                    # resume extends ``total_rounds`` past ``rounds_requested``
+                    # (it drives a fresh batch on top of what already ran), so this
+                    # must track ``total_rounds`` — deriving it from
+                    # ``rounds_requested`` would leave the agent's
+                    # ``ROUND + 1 == ROUNDS`` last-round check never true on a
+                    # resumed run, and it would never hand off cleanly.
+                    rounds_total=base + total_rounds,
                     resume_session_id=h_resume if n == 0 else None,
                 )
                 if result is None:
@@ -1312,6 +1341,18 @@ class Orchestrator:
         self._clear_process_marker(runlog)
         return reports
 
+    def _warn_stale_skills(self) -> None:
+        """Emit a warning when the workspace's installed skills differ from the
+        bundled ones. Never fails a run — this is hygiene, not correctness."""
+        try:
+            from archon_horizon.skills.registry import stale_skills
+
+            names = stale_skills(self.workspace.root)
+        except Exception:
+            return
+        if names:
+            self._emit("skills.stale", skills=list(names))
+
     @staticmethod
     def _write_process_marker(runlog: RunLog | None) -> None:
         if runlog is None:
@@ -1376,9 +1417,11 @@ class Orchestrator:
         Publish runs once per collaboration boundary (not per Horizon step), so
         here we pay for the *rich* hgraph build: it syncs the per-node files and
         captures Lean source and dep/rdep counts, which the dashboard needs. The
-        cheap per-step refresh stays parser-only.
+        cheap per-step refresh stays parser-only. Both are scoped to the run's
+        own projects — an unscoped run still covers the whole workspace via
+        ``_run_scope_projects``'s fallback.
         """
-        blueprint_refs = self._write_blueprint_dags(rich=True)
+        blueprint_refs = self._write_blueprint_dags(projects=self._run_scope_projects(run))
 
         self._emit(
             "publish.completed",
@@ -1387,17 +1430,23 @@ class Orchestrator:
             blueprints=blueprint_refs,
         )
 
-    def _write_blueprint_dags(self, *, rich: bool = False) -> list[str]:
-        """(Re)generate ``.archon-horizon/blueprints/<project>.json`` for every project.
+    def _write_blueprint_dags(self, *, projects: tuple[str, ...] | None = None) -> list[str]:
+        """(Re)generate ``.archon-horizon/blueprints/<project>.json``.
 
-        Run before Horizon as well as at publish, so the DAG file is fresh when
-        the agent consults it mid-round. The mid-round refresh uses the parser
-        DAG because rich hgraph builds scan the Lean tree (expensive on large
-        workspaces); publish passes ``rich=True`` once per boundary so the cached
-        DAG the dashboard serves carries Lean source and dep counts.
+        Run before every Horizon round as well as at publish, so the agent always
+        consults a DAG that reflects the blueprint and Lean as they stand. Always
+        a full hgraph sync: measured at ~4.5s for the largest project in use
+        (5113 nodes; ~2s of that is the sync itself, which parallelizes its Lean
+        parsing), against ~2.5s for a read-only build. Two seconds a round is not
+        worth a second engine, a staleness tier, or the bugs both cost — an
+        earlier note in this file put the sync at "200+ seconds", but that was
+        the cost of the since-removed per-node ``descendants()`` scan, not sync.
+
+        ``projects`` scopes the rebuild to the run's own projects (other
+        projects keep their cached JSON); ``None`` rebuilds every project.
         """
         refs: list[str] = []
-        dags = workspace_dags_rich(self.workspace) if rich else workspace_dags(self.workspace)
+        dags = workspace_dags(self.workspace, projects)
         if not dags:
             return refs
         out_dir = self.workspace.state_path / "blueprints"
@@ -1405,25 +1454,11 @@ class Orchestrator:
         counts: dict[str, dict[str, int]] = {}
         for project, dag in dags.items():
             path = out_dir / f"{project}.json"
-            # Never DOWNGRADE a rich (hgraph/leandag, Lean-source-bearing) cache
-            # to the cheap parser DAG: the mid-round refresh (rich=False) would
-            # otherwise strip the Lean source the dashboard shows, forcing a
-            # manual "Synchronize". Only overwrite a rich cache with another rich build.
-            if not rich and path.exists():
-                try:
-                    existing = json.loads(path.read_text("utf-8"))
-                    if (existing.get("meta") or {}).get("engine") in ("leandag", "hgraph"):
-                        continue
-                except (OSError, ValueError):
-                    pass
             path.write_text(json.dumps(dag, indent=2, sort_keys=True), "utf-8")
             refs.append(path.relative_to(self.workspace.root).as_posix())
             counts[project] = {
                 "nodes": len(dag.get("nodes", ())),
                 "edges": len(dag.get("edges", ())),
             }
-        # Only announce the rich rebuild (once per boundary); the mid-round
-        # parser refresh is transient scaffolding for the leandag skill.
-        if rich:
-            self._emit("blueprint.dags", projects=counts)
+        self._emit("blueprint.dags", projects=counts)
         return refs

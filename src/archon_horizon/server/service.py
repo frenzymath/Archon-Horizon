@@ -22,7 +22,7 @@ from archon_horizon.log import log
 
 from archon_horizon.blueprint.chapters import project_chapters
 from archon_horizon.blueprint.checks import is_countable
-from archon_horizon.blueprint.workspace import published_dag, published_dags, workspace_dags, workspace_dags_rich
+from archon_horizon.blueprint.workspace import published_dag, published_dags, workspace_dags
 from archon_horizon.config.loader import build_stores, build_workspace, load_config
 from archon_horizon.core.inbox import InboxDraft, InboxKind, InboxStatus
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
@@ -177,12 +177,15 @@ class WorkspaceService:
         self._session_cache_dirty = False
         self._session_cache_saved_at = 0.0
         self._load_session_cache()
-        # events.jsonl is append-only: keep the parsed events plus the byte
-        # offset consumed, and parse only the appended tail on each poll.
+        # events.jsonl is append-only: keep the jsonable events plus the byte
+        # offset consumed, and parse only the appended tail on each poll. An
+        # event record is immutable once written, so its jsonable form never
+        # changes — rebuilding it every poll was the hottest thing in ``state()``
+        # on a large workspace (~700k ``to_jsonable`` calls per poll).
         self._events_lock = threading.Lock()
         self._events_offset = 0
         self._events_sig: tuple[int, int] | None = None
-        self._events: list[Any] = []
+        self._events_json: list[dict[str, Any]] = []
         # Published blueprint DAGs change only on an explicit sync/publish;
         # cache the lightened copy by the cache files' signatures.
         self._dags_sig: tuple | None = None
@@ -242,23 +245,34 @@ class WorkspaceService:
 
     # ── read ────────────────────────────────────────────────────────
 
-    def _events_all(self) -> list[Any]:
-        """All events, parsed incrementally: ``events.jsonl`` is append-only, so
-        after the first full read each poll parses only the appended tail."""
+    def _events_all_jsonable(self) -> list[dict[str, Any]]:
+        """All events as plain dicts, parsed and converted incrementally.
+
+        ``events.jsonl`` is append-only, so each poll parses only the bytes
+        appended since the last one, and an event's jsonable form — immutable
+        once written — is converted exactly once. Callers must treat the dicts
+        as read-only: they are cached across polls and shared into the
+        ``state()`` payload rather than rebuilt for each one."""
+        self._read_events()
+        return self._events_json
+
+    def _read_events(self) -> None:
         path = self.workspace.state_path / "events.jsonl"
         with self._events_lock:
             try:
                 st = path.stat()
             except OSError:
-                self._events_offset, self._events_sig, self._events = 0, None, []
-                return []
+                self._events_offset, self._events_sig = 0, None
+                self._events_json = []
+                return
             sig = (st.st_mtime_ns, st.st_size)
             if sig == self._events_sig:
-                return self._events
+                return
             if st.st_size < self._events_offset:
                 # Truncated/rewritten (should not happen for an append-only log):
                 # fall back to a full re-read.
-                self._events_offset, self._events = 0, []
+                self._events_offset = 0
+                self._events_json = []
             with path.open("rb") as handle:
                 handle.seek(self._events_offset)
                 chunk = handle.read()
@@ -267,18 +281,18 @@ class WorkspaceService:
             cut = chunk.rfind(b"\n")
             if cut < 0:
                 self._events_sig = sig
-                return self._events
+                return
             for line in chunk[: cut + 1].decode("utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    self._events.append(serde.event_from_dict(json.loads(line)))
+                    event = serde.event_from_dict(json.loads(line))
                 except (ValueError, KeyError, TypeError):
                     continue
+                self._events_json.append(serde.to_jsonable(event))
             self._events_offset += cut + 1
             self._events_sig = sig
-            return self._events
 
     _STAMP_SKIP_DIRS = frozenset({"vcs", "locks", "cache", "search"})
 
@@ -351,7 +365,7 @@ class WorkspaceService:
         return self._dags_light
 
     def state(self, *, events_tail: int = 50) -> dict[str, Any]:
-        events = self._events_all()
+        events = self._events_all_jsonable()
         return {
             "workspace": self.workspace.name,
             "workspace_root": self.workspace.root.as_posix(),
@@ -396,7 +410,7 @@ class WorkspaceService:
             "projects": self._discover_projects(),
             "libraries": self._search_libraries(),
             "harnesses": self._harness_state(),
-            "events": [serde.to_jsonable(e) for e in events[-events_tail:]],
+            "events": events[-events_tail:],
         }
 
     def _discover_projects(self) -> list[str]:
@@ -489,7 +503,7 @@ class WorkspaceService:
                 "loc_code": sum(f["loc_code"] for f in files),
                 "sorries": sum(f["sorries"] for f in files),
                 "blueprint_nodes": len(nodes),
-                "blueprint_leanok": sum(1 for n in nodes if n.get("leanok")),
+                "blueprint_leanok": sum(1 for n in nodes if n.get("proved")),
             })
         totals = {
             "lean_files": sum(p["lean_files"] for p in projects),
@@ -515,13 +529,13 @@ class WorkspaceService:
             for name, cfg in self.cfg.harnesses.items()
         }
 
-    def _runs_state(self, events: list[Any] | None = None) -> list[dict[str, Any]]:
+    def _runs_state(self, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         records = {run.id: serde.to_jsonable(run) for run in self.stores.runs.list()}
         run_events: dict[str, list[dict[str, Any]]] = {}
-        for event in (events if events is not None else self._events_all()):
-            run_id = event.data.get("run_id")
+        for event in (events if events is not None else self._events_all_jsonable()):
+            run_id = event.get("data", {}).get("run_id")
             if isinstance(run_id, str) and run_id:
-                run_events.setdefault(run_id, []).append(serde.to_jsonable(event))
+                run_events.setdefault(run_id, []).append(event)
         states = [
             self._run_state(
                 self.stores.run_logs.get(run_id),
@@ -903,7 +917,7 @@ class WorkspaceService:
                 continue
             for node in dag.get("nodes", []):
                 nodes.append((proj, node))
-                lean = node.get("lean")
+                lean = node.get("lean_name")
                 if lean:
                     by_lean[lean] = (proj, node)
         return nodes, by_lean
@@ -916,10 +930,10 @@ class WorkspaceService:
         return {
             "project": proj,
             "id": node.get("id"),
-            "kind": node.get("kind"),
+            "kind": node.get("type"),
             "title": node.get("title"),
             "statement": node.get("statement"),
-            "leanok": node.get("leanok", False),
+            "leanok": bool(node.get("proved")),
         }
 
     def _lean_row(self, decl: Any, score: float, by_lean: dict[str, tuple[str, dict]]) -> dict[str, Any]:
@@ -1002,7 +1016,7 @@ class WorkspaceService:
                 docs = [f"{n.get('title') or ''} {n.get('statement') or ''}" for _, n in nodes]
                 for i, score in _BM25(docs).search(query).items():
                     proj, node = nodes[i]
-                    lean = node.get("lean")
+                    lean = node.get("lean_name")
                     lean_key = ("lean", lean)
                     cov = _coverage(docs[i])
                     if lean and lean_key in rows:
@@ -1180,7 +1194,7 @@ class WorkspaceService:
 
     def sync_blueprint_dags(self) -> dict[str, Any]:
         """Refresh the published rich blueprint DAG cache for the live dashboard."""
-        dags = workspace_dags_rich(self.workspace)
+        dags = workspace_dags(self.workspace)
         out_dir = self.workspace.state_path / "blueprints"
         out_dir.mkdir(parents=True, exist_ok=True)
         projects: list[dict[str, Any]] = []

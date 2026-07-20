@@ -44,6 +44,11 @@ run environment; do not pass `--author`. Setting a status appends an auditable
 history entry, and if the task has `roadmap_refs` the linked roadmap items are
 synced (done→done, blocked/failed→blocked, cancelled→rejected).
 
+Task commands also report advisory queue-health warnings. Review an oversized
+open queue for duplicated or roadmap-only objectives, and investigate a task
+that has remained `running` past the stale-status window. These warnings never
+change status for you; if the state is intentional, it may remain as-is.
+
 ## Comment as you work
 
 Leave a short comment whenever you hit a significant step or change the status, so

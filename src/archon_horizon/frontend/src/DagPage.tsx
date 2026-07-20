@@ -6,11 +6,11 @@ import ProjectPicker from './components/ProjectPicker';
 import { syncBlueprintDags, getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
 import { isStaticDashboard } from './staticMode';
 
-type Query = 'all' | 'frontier' | 'unproved' | 'sorry' | 'gaps' | 'zeroEffort' | 'leanok' | 'mathlib' | 'roots' | 'leaves' | 'isolated';
+type Query = 'all' | 'frontier' | 'unproved' | 'sorry' | 'gaps' | 'leanok' | 'mathlib' | 'roots' | 'leaves' | 'isolated';
 
 const QUERY_LABEL: Record<Query, string> = {
   all: 'all nodes', frontier: 'frontier (ready to prove)', unproved: 'unproved', sorry: 'has sorry',
-  gaps: 'gaps (∞ effort)', zeroEffort: 'needs \\leanok', leanok: 'lean ok', mathlib: 'in mathlib',
+  gaps: 'missing Lean link', leanok: 'lean ok', mathlib: 'in mathlib',
   roots: 'roots (no deps)', leaves: 'leaves (unused)', isolated: 'isolated',
 };
 
@@ -19,17 +19,8 @@ const mathlib = (n: any) => n.mathlib_ok ?? n.mathlibok ?? false;
 const isDone = (n: any) => proved(n) || mathlib(n);
 const leanName = (n: any) => n.lean_name ?? n.lean ?? null;
 const nodeType = (n: any) => n.type ?? n.kind ?? 'node';
-const hasRich = (n: any) => Object.prototype.hasOwnProperty.call(n, 'effort_local');
 const fileOf = (n: any) => n.lean_file ?? n.tex_file ?? '';
-const fmt = (v: number) => v.toLocaleString('en-US');
 const STATIC = isStaticDashboard();
-
-function metricVal(v: number | null | undefined, kind: 'char' | 'work') {
-  if (v === undefined) return <span className="m-val">—</span>;
-  if (v === null) return <span className="m-val m-inf">∞</span>;
-  if (kind === 'work' && v === 0) return <span className="m-val m-done">0 ✓</span>;
-  return <span className={`m-val${kind === 'work' ? ' m-work' : ''}`}>{v.toLocaleString('en-US')}</span>;
-}
 
 const DEP_PREVIEW = 6;
 function DepList({ items, empty, onGoTo }: { items: string[]; empty: string; onGoTo: (id: string) => void }) {
@@ -48,7 +39,7 @@ function DepList({ items, empty, onGoTo }: { items: string[]; empty: string; onG
 }
 
 function DualRange({ label, max, value, onChange, infiniteTop }: {
-  label: string; max: number; value: [number, number]; onChange: (v: [number, number]) => void; infiniteTop?: boolean;
+  label: string; max: number; value: [number, number]; onChange: (v: [number, number]) => void;
 }) {
   const [lo, hi] = value;
   const hiVal = hi === Infinity ? max : hi;
@@ -59,7 +50,7 @@ function DualRange({ label, max, value, onChange, infiniteTop }: {
       <span className="dv-range-lbl">{label}</span>
       <input className="dv-slider" type="range" min={0} max={max} value={lo} onChange={(e) => onChange([Math.min(Number(e.target.value), hiVal), hi])} />
       <input className="dv-slider" type="range" min={0} max={max} value={hiVal} onChange={(e) => { const v = Number(e.target.value); onChange([Math.min(lo, v), v >= max ? Infinity : v]); }} />
-      <span className="dv-range-val">{lo}–{hi === Infinity ? (infiniteTop ? '∞' : max) : hi}</span>
+      <span className="dv-range-val">{lo}–{hi === Infinity ? max : hi}</span>
     </div>
   );
 }
@@ -104,9 +95,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   const [chapterSel, setChapterSel] = useState('');
   const [fileSel, setFileSel] = useState('');
   const [depRange, setDepRange] = useState<[number, number]>([0, Infinity]);
-  const [effRange, setEffRange] = useState<[number, number]>([0, Infinity]);
   const [statsOpen, setStatsOpen] = useState(true);
-  const [showAux, setShowAux] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
 
@@ -118,7 +107,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   }, [projects.join('|'), requestedProject, project]);
   useEffect(() => {
     setSelected(focusNode || null); setQuery('all'); setTypeSel(''); setChapterSel(''); setFileSel('');
-    setDepRange([0, Infinity]); setEffRange([0, Infinity]);
+    setDepRange([0, Infinity]);
   }, [project, focusNode]);
 
   // Prefer the freshly-fetched full DAG; fall back to the light DAG from the
@@ -141,23 +130,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
     return m;
   }, [edges]);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
-  // `lean_aux` nodes are Lean declarations scanned from the project tree that no
-  // blueprint statement references via \lean{}; leandag emits them with no edges,
-  // so they render as isolated islands that swamp the actual blueprint DAG (e.g.
-  // thousands of them vs. ~hundred linked nodes). Hide them by default — matching
-  // leandag's own HTML exporter — behind a toggle, so the graph shows the
-  // blueprint↔Lean structure rather than a flat dump of every declaration.
-  const edgeIds = useMemo(() => {
-    const s = new Set<string>();
-    for (const e of edges) { s.add(e.source); s.add(e.target); }
-    return s;
-  }, [edges]);
-  const isIsolatedAux = (n: any) => nodeType(n) === 'lean_aux' && !edgeIds.has(n.id);
-  const auxCount = useMemo(() => nodes.filter(isIsolatedAux).length, [nodes, edgeIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  const graphNodes = useMemo(
-    () => (showAux ? nodes : nodes.filter((n) => !isIsolatedAux(n))),
-    [nodes, edgeIds, showAux], // eslint-disable-line react-hooks/exhaustive-deps
-  );
+  const graphNodes = nodes;
   const depCount = (n: any) => n.dep_count ?? (n.uses ?? depsMap.get(n.id) ?? []).length;
   const rdepCount = (n: any) => n.rdep_count ?? (usedByMap.get(n.id) ?? []).length;
   const doneIds = useMemo(() => new Set(nodes.filter(isDone).map((n) => n.id)), [nodes]);
@@ -166,23 +139,22 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   const chapters = useMemo(() => [...new Set(nodes.map((n) => n.chapter).filter(Boolean))].sort(), [nodes]);
   const files = useMemo(() => [...new Set(nodes.map(fileOf).filter(Boolean))].sort(), [nodes]);
   const maxDep = useMemo(() => nodes.reduce((m, n) => Math.max(m, depCount(n)), 0), [nodes]); // eslint-disable-line react-hooks/exhaustive-deps
-  const maxEff = useMemo(() => nodes.reduce((m, n) => (typeof n.effort_total === 'number' ? Math.max(m, n.effort_total) : m), 0), [nodes]);
 
   const node = useMemo(() => byId.get(selected ?? '') ?? null, [byId, selected]);
   useEffect(() => {
     if (focusNode && byId.has(focusNode)) setSelected(focusNode);
   }, [focusNode, byId]);
-  const directDeps = useMemo(() => (node?.uses ?? (selected ? depsMap.get(selected) ?? [] : [])), [node, depsMap, selected]);
+  const directDeps = useMemo(() => (selected ? depsMap.get(selected) ?? [] : []), [depsMap, selected]);
   const usedBy = useMemo(() => (selected ? usedByMap.get(selected) ?? [] : []), [usedByMap, selected]);
   const ancestors = useMemo(() => {
     if (!selected) return new Set<string>();
     const seen = new Set<string>();
-    const stack = [...(byId.get(selected)?.uses ?? depsMap.get(selected) ?? [])];
+    const stack = [...(depsMap.get(selected) ?? [])];
     while (stack.length) {
       const id = stack.pop()!;
       if (seen.has(id)) continue;
       seen.add(id);
-      stack.push(...(byId.get(id)?.uses ?? depsMap.get(id) ?? []));
+      stack.push(...(depsMap.get(id) ?? []));
     }
     return seen;
   }, [byId, depsMap, selected]);
@@ -190,15 +162,8 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
 
   // Project metadata — ported from Archon's DagView `stats`.
   const stats = useMemo(() => {
-    const bp = nodes.filter((n) => nodeType(n) !== 'lean_aux');
-    const ready = bp.filter((n) => !isDone(n) && (n.uses ?? depsMap.get(n.id) ?? []).every((d: string) => !byId.has(d) || doneIds.has(d))).length;
-    let done = 0, remLower = 0, infNodes = 0;
-    for (const n of nodes) {
-      if (typeof n.proof_size_lean === 'number') done += n.proof_size_lean;
-      if (isDone(n)) continue;
-      if (hasRich(n) && n.effort_local == null) infNodes++;
-      else if (typeof n.effort_local === 'number') remLower += n.effort_local;
-    }
+    const bp = nodes;
+    const ready = bp.filter((n) => !isDone(n) && (depsMap.get(n.id) ?? []).every((d: string) => !byId.has(d) || doneIds.has(d))).length;
     return {
       bpN: bp.length,
       completeN: bp.filter(isDone).length,
@@ -207,11 +172,9 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
       sorry: nodes.filter((n) => n.has_sorry).length,
       ready,
       gaps: bp.filter((n) => !leanName(n) && !mathlib(n)).length,
-      leanok: bp.filter((n) => !proved(n) && !mathlib(n) && n.effort_local === 0).length,
       leaves: nodes.filter((n) => rdepCount(n) === 0).length,
       roots: nodes.filter((n) => depCount(n) === 0).length,
       isolated: nodes.filter((n) => depCount(n) === 0 && rdepCount(n) === 0).length,
-      done, remLower, infNodes,
       pct: bp.length ? Math.round((100 * bp.filter(isDone).length) / bp.length) : 0,
     };
   }, [nodes, byId, depsMap, doneIds]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -220,7 +183,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
 
   const highlight = useMemo<Set<string> | null>(() => {
     const q = search.trim().toLowerCase();
-    const rangesOn = depRange[0] > 0 || depRange[1] !== Infinity || effRange[0] > 0 || effRange[1] !== Infinity;
+    const rangesOn = depRange[0] > 0 || depRange[1] !== Infinity;
     if (query === 'all' && !q && !typeSel && !chapterSel && !fileSel && !rangesOn) return null;
     const matchText = (n: any) => !q || `${n.id} ${n.title ?? ''} ${leanName(n) ?? ''}`.toLowerCase().includes(q);
     const matchQuery = (n: any) => {
@@ -229,9 +192,8 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
         case 'mathlib': return mathlib(n);
         case 'unproved': return !isDone(n);
         case 'sorry': return !!n.has_sorry;
-        case 'gaps': return hasRich(n) && (n.effort_local === null || n.effort_local === undefined);
-        case 'zeroEffort': return !proved(n) && !mathlib(n) && n.effort_local === 0;
-        case 'frontier': return !isDone(n) && (n.uses ?? depsMap.get(n.id) ?? []).every((d: string) => !byId.has(d) || doneIds.has(d));
+        case 'gaps': return !leanName(n) && !mathlib(n);
+        case 'frontier': return !isDone(n) && (depsMap.get(n.id) ?? []).every((d: string) => !byId.has(d) || doneIds.has(d));
         case 'roots': return depCount(n) === 0;
         case 'leaves': return rdepCount(n) === 0;
         case 'isolated': return depCount(n) === 0 && rdepCount(n) === 0;
@@ -241,7 +203,6 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
     const matchRanges = (n: any) => {
       const dc = depCount(n);
       if (dc < depRange[0] || dc > depRange[1]) return false;
-      if (typeof n.effort_total === 'number' && (n.effort_total < effRange[0] || n.effort_total > effRange[1])) return false;
       return true;
     };
     return new Set(nodes.filter((n) =>
@@ -250,7 +211,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
       && (!chapterSel || n.chapter === chapterSel)
       && (!fileSel || fileOf(n) === fileSel)
       && matchRanges(n)).map((n) => n.id));
-  }, [nodes, byId, depsMap, usedByMap, doneIds, query, search, typeSel, chapterSel, fileSel, depRange, effRange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [nodes, byId, depsMap, usedByMap, doneIds, query, search, typeSel, chapterSel, fileSel, depRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = highlight ? graphNodes.filter((n) => highlight.has(n.id)).length : graphNodes.length;
   const dupCount = (meta.duplicate_ids ?? []).length;
@@ -310,12 +271,12 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
         <div className="dv-root" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <div className="dv-toolbar">
             <span className="dv-brand">Dependency Graph</span>
-            <span className="dv-stat">{visible}/{graphNodes.length} nodes · {edges.length} edges{highlight ? ` · ${highlight.size} highlighted` : ''}{!showAux && auxCount ? ` · ${auxCount} unlinked Lean hidden` : ''}{meta.entry ? ` · ${String(meta.entry).split('/').pop()}` : ''}{dupCount ? ` · ⚠ ${dupCount} dup` : ''}</span>
+            <span className="dv-stat">{visible}/{graphNodes.length} nodes · {edges.length} edges{highlight ? ` · ${highlight.size} highlighted` : ''}{meta.entry ? ` · ${String(meta.entry).split('/').pop()}` : ''}{dupCount ? ` · ⚠ ${dupCount} dup` : ''}</span>
             <span className="dv-legend">
-              <span className="leg-dot" style={{ background: '#22c55e' }} /><span className="leg-txt">done</span>
-              <span className="leg-dot" style={{ background: '#3b82f6' }} /><span className="leg-txt">mathlib</span>
-              <span className="leg-bar" /><span className="leg-txt">more effort</span>
-              <span className="leg-dot" style={{ background: '#ef4444' }} /><span className="leg-txt">∞ no proof</span>
+              <span className="leg-box" style={{ background: '#66bb6a', borderColor: '#2e7d32' }} /><span className="leg-txt">closed</span>
+              <span className="leg-box" style={{ background: '#bbdefb', borderColor: '#1565c0' }} /><span className="leg-txt">ready</span>
+              <span className="leg-box" style={{ background: '#ffcc80', borderColor: '#2e7d32' }} /><span className="leg-txt">sorry</span>
+              <span className="leg-box" style={{ background: '#ede9fe', borderColor: '#7c3aed' }} /><span className="leg-txt">chapter</span>
             </span>
             <button className="dv-sync" type="button" onClick={syncBlueprint} disabled={STATIC || syncing} title={STATIC ? 'Blueprint sync needs the live dashboard.' : 'Refresh the published rich blueprint DAG cache.'}>
               {syncing ? 'Syncing...' : 'Sync blueprint'}
@@ -344,17 +305,11 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
               </select>
             )}
             <DualRange label="deps" max={maxDep} value={depRange} onChange={setDepRange} />
-            <DualRange label="effort" max={maxEff} value={effRange} onChange={setEffRange} infiniteTop />
-            {auxCount > 0 && (
-              <label className="dv-check" title="Lean declarations not referenced by any blueprint \lean{} — shown as isolated nodes.">
-                <input type="checkbox" checked={showAux} onChange={(e) => setShowAux(e.target.checked)} /> show {auxCount} unlinked Lean
-              </label>
-            )}
           </div>
 
           <div className="dv-main" style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0, gap: 0 }}>
             <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
-              <DagNetwork nodes={nodes} edges={edges} selected={selected} onSelectNode={setSelected} highlight={highlight} />
+              <DagNetwork nodes={graphNodes} edges={edges} selected={selected} onSelectNode={setSelected} highlight={highlight} />
               {statsOpen ? (
                 <div className="dv-stats">
                   <div className="dv-stats-head"><h4>Project</h4><button className="dv-stats-toggle" title="Minimize" onClick={() => setStatsOpen(false)}>–</button></div>
@@ -365,17 +320,11 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                   {qRow('With sorry', stats.sorry, 'sorry', stats.sorry ? 'inf' : '')}
                   {qRow('Ready to formalize', stats.ready, 'frontier')}
                   <div className="row"><span>Needs \lean{'{}'}</span><span className="v">{stats.gaps}</span></div>
-                  {qRow('Needs \\leanok', stats.leanok, 'zeroEffort')}
                   <div className="sep" />
                   <h4>Structure</h4>
                   {qRow('Sinks', stats.leaves, 'leaves')}
                   {qRow('Sources', stats.roots, 'roots')}
                   {qRow('Isolated', stats.isolated, 'isolated', stats.isolated ? 'inf' : '')}
-                  <div className="sep" />
-                  <h4>Effort (chars)</h4>
-                  <div className="row"><span>Done</span><span className="v done">{fmt(stats.done)}</span></div>
-                  <div className="row"><span>Remaining ≥</span><span className="v work">{fmt(stats.remLower)}</span></div>
-                  {qRow('∞ nodes', stats.infNodes, 'gaps', 'inf')}
                 </div>
               ) : (
                 <button className="dv-stats-show" onClick={() => setStatsOpen(true)}>▸ Stats · {stats.pct}% done</button>
@@ -387,7 +336,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                 <div className="dv-sidebar-content">
                   <div className="card dv-help-card">
                     <div className="card-title">Using the DAG</div>
-                    <p>Click a node to inspect its statement, proof sketch, Lean link, dependency cone, and downstream users.</p>
+                    <p>Select a chapter to expand it, then select a node to inspect its statement, Lean link, dependency cone, and downstream users.</p>
                     <p>Use the toolbar to search by label/title/Lean name, filter to ready or blocked work, and highlight effort or dependency ranges.</p>
                     <p>After selecting a node, the sidebar exposes jumps into the full Blueprint reader and the matching Lean source file when the graph has those links.</p>
                   </div>
@@ -417,17 +366,6 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                     <div className="deps-sub">indirect (transitive) dependencies</div>
                     <DepList items={indirect} empty="none beyond the direct ones" onGoTo={setSelected} />
                   </div>
-                  {hasRich(node) && (
-                    <div className="card">
-                      <div className="card-title">Complexity</div>
-                      <div className="metrics-grid">
-                        <span /><span className="col-head">local</span><span className="col-head">total</span>
-                        <span className="m-label">LaTeX ℓ</span>{metricVal(node.proof_size_tex, 'char')}{metricVal(node.proof_size_tex_total, 'char')}
-                        <span className="m-label">Lean ℓ</span>{metricVal(node.proof_size_lean, 'char')}{metricVal(node.proof_size_lean_total, 'char')}
-                        <span className="m-label">Effort</span>{metricVal(node.effort_local, 'work')}{metricVal(node.effort_total, 'work')}
-                      </div>
-                    </div>
-                  )}
                   {node.statement && (
                     <div className="card">
                       <div className="card-title">LaTeX statement</div>
@@ -448,7 +386,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                     <div className="card-title">Lean code</div>
                     {node.lean_source
                       ? <pre className="code-block">{node.lean_source}</pre>
-                      : <pre className="code-block" style={{ fontStyle: 'italic', opacity: 0.7 }}>{leanName(node) ? 'source not captured (rebuild: `horizon blueprint`)' : 'no Lean declaration linked'}</pre>}
+                      : <pre className="code-block" style={{ fontStyle: 'italic', opacity: 0.7 }}>{leanName(node) ? 'source not captured (run `horizon graph sync`)' : 'no Lean declaration linked'}</pre>}
                   </div>
                 </div>
               )}

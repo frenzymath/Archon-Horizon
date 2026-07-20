@@ -1,7 +1,7 @@
 """The hgraph adapter: sync a project and serialize the Horizon DAG shape.
 
-Skipped when hgraph is not installed (Horizon then falls back to leandag /
-the parser DAG — see blueprint/workspace.project_rich_dag).
+The graph engine is vendored into Horizon, so these run unconditionally: if the
+internal package cannot be imported that is a real failure, not a reason to skip.
 """
 
 from __future__ import annotations
@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("hgraph")
 
 from archon_horizon.blueprint.hgraph_graph import build_project_graph
 
 _BLUEPRINT = r"""
 \chapter{Basics}
-\begin{definition}\label{def:foo}
+\begin{definition}[The basic foo]\label{def:foo}
+  \dcref{ch1:1.1}\group{Basics}\level{coarse}
   \lean{Demo.foo}\leanok
   A foo is a natural number.
 \end{definition}
@@ -60,11 +60,15 @@ def test_adapter_emits_horizon_dag_shape(project: Path) -> None:
     assert foo["proved"] is True            # def foo has no sorry -> lean_ok
     assert foo["lean_name"] == "Demo.foo"
     assert "Nat := 1" in (foo["lean_source"] or "")
+    assert foo["group"] == "Basics"
+    assert foo["level"] == "coarse"
+    assert foo["sources"] == ["ch1:1.1"]
 
     bar = by_id["thm:bar"]
     assert bar["proved"] is False           # its Lean proof is a sorry
     assert bar["has_sorry"] is True
     assert bar["state"] in ("ready", "blocked", "formalized_open")
+    assert bar["level"] == "medium"  # inferred by hgraph's granularity heuristic
 
     # Horizon direction: dependency -> dependent.
     assert {"source": "def:foo", "target": "thm:bar"} in dag["edges"]
@@ -76,8 +80,23 @@ def test_adapter_emits_horizon_dag_shape(project: Path) -> None:
     assert {n["id"] for n in again["nodes"]} == set(by_id)
 
 
+def test_adapter_descendant_counts_match_graph(project: Path) -> None:
+    """The adapter counts descendants from one in-memory edge snapshot (per-node
+    graph.descendants() re-reads every edge file — O(V·E), minutes on a large
+    blueprint). The counts must stay identical to hgraph's own traversal."""
+    from archon_horizon.hgraph import Graph
+
+    dag = build_project_graph(project)
+    graph = Graph.open(project)
+    for node in dag["nodes"]:
+        assert node["descendant_count"] == len(graph.descendants(node["hgraph_id"]))
+    by_id = {n["id"]: n for n in dag["nodes"]}
+    assert by_id["def:foo"]["descendant_count"] == 1  # thm:bar transitively needs it
+    assert by_id["thm:bar"]["descendant_count"] == 0
+
+
 def test_adapter_counts_node_attachments(project: Path) -> None:
-    from hgraph import Graph
+    from archon_horizon.hgraph import Graph
 
     build_project_graph(project)  # create + sync the graph
     graph = Graph.open(project)

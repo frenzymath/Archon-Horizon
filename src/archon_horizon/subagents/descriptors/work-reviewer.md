@@ -18,7 +18,7 @@ The task's most recent artifacts, in the assigned project(s):
   out-of-tree git (`--git-dir`/`--work-tree`), not bare `git diff`.
 
 ## Read further whenever you have doubts
-You are **not** limited to the last iteration. If something looks off, follow it: earlier commits and reports, the actual Lean source and the blueprint chapter, the dependency DAG (`leandag`), the inbox. Investigate until you can stand behind your judgement — don't guess from the diff alone.
+You are **not** limited to the last iteration. If something looks off, follow it: earlier commits and reports, the actual Lean source and the blueprint chapter, the dependency DAG (`hgraph`), the inbox. Investigate until you can stand behind your judgement — don't guess from the diff alone.
 
 ## What to judge
 - **Throughput** — real progress vs. what the task expected. Helper-churn (helpers added every iter, never converging), only writing comments or blueprints, sorry-stall, repeated PARTIAL/INCOMPLETE, a route going in circles.

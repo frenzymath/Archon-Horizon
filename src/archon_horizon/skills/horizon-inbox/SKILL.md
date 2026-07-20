@@ -15,6 +15,10 @@ fields.
   to narrow without losing the overview: `--to horizon`, `--to human`,
   `--project P`, repeated `--kind K`, repeated `--label L`,
   `--status open`, `--query TEXT`, `--limit N`, and `--comments N`.
+- Every inbox command evaluates the full local working set, even when `list` is
+  filtered. Treat its advisory warnings as a prompt to review duplicates, stale
+  memories, and consumed notices. The CLI never archives automatically: a large
+  inbox may be intentional, but leaving it large should be a conscious choice.
 - Labels are the release gate. Local inbox items default to `agent-ready`, which
   means they are visible to agents at run boundaries. Keep that default for
   machine-addressed work, and usually keep it for human-addressed notices too:

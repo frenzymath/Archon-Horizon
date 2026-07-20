@@ -2,7 +2,7 @@
 
 These back the redesign's two reproducible checks (``dag-consistency`` and
 ``blueprint-lint``) as pure functions over the DAG JSON produced by
-:func:`archon_horizon.blueprint.dag.build_dag`. They are deliberately code, not
+the hgraph DAG builder. They are deliberately code, not
 descriptor subagents, so their findings never vary between runs. The
 descriptor/LLM subagents complement these; they do not replace them.
 """
@@ -22,7 +22,7 @@ COUNTABLE_KINDS: frozenset[str] = frozenset(
 
 def is_countable(node: dict[str, Any]) -> bool:
     """True when a node is a formalisation obligation (not prose like a remark)."""
-    return str(node.get("kind", "")).lower() in COUNTABLE_KINDS
+    return str(node.get("type", "")).lower() in COUNTABLE_KINDS
 
 
 def find_cycle(dag: dict[str, Any]) -> list[str] | None:
@@ -79,7 +79,7 @@ def dag_consistency_issues(dag: dict[str, Any]) -> list[str]:
 def blueprint_lint_issues(dag: dict[str, Any]) -> list[str]:
     """Statement-level *defects*: soundness problems worth flagging to agents.
 
-    A ``leanok`` node that depends on a not-``leanok`` node is a real
+    A ``proved`` node that depends on an unproved node is a real
     inconsistency (a formalised result resting on an unformalised one). Missing
     ``\\lean`` links are NOT defects — in an in-progress blueprint most nodes are
     legitimately not yet formalised, so they are reported as coverage (see
@@ -87,13 +87,19 @@ def blueprint_lint_issues(dag: dict[str, Any]) -> list[str]:
     hundreds of "no \\lean link" lines that mislead agents into thinking the
     blueprint is broken."""
     by_id = {n["id"]: n for n in dag.get("nodes", [])}
+    # Dependencies live in `edges`, not on the node: an edge is
+    # dependency -> dependent, so invert it to get "what this node uses".
+    uses: dict[str, list[str]] = {}
+    for edge in dag.get("edges", []):
+        uses.setdefault(edge["target"], []).append(edge["source"])
     issues: list[str] = []
     for node in dag.get("nodes", []):
-        if node.get("leanok"):
-            for used in node.get("uses", []):
-                dep = by_id.get(used)
-                if dep is not None and not dep.get("leanok"):
-                    issues.append(f"{node['id']}: leanok but depends on not-leanok {used}")
+        if not node.get("proved"):
+            continue
+        for used in uses.get(node["id"], ()):
+            dep = by_id.get(used)
+            if dep is not None and not dep.get("proved"):
+                issues.append(f"{node['id']}: proved but depends on unproved {used}")
     return issues
 
 
@@ -102,9 +108,18 @@ def blueprint_coverage(dag: dict[str, Any]) -> dict[str, int]:
 
     Counts only *countable* nodes (theorems/lemmas/defs, …); prose environments
     like remarks are excluded. ``unlinked`` counts nodes with no ``\\lean`` link
-    (work remaining, not a bug); ``leanok`` counts formalised nodes; ``total``
-    is the countable node count."""
+    (work remaining, not a bug); ``proved`` counts formalised nodes; ``sorry``
+    counts nodes whose Lean exists but is incomplete; ``total`` is the countable
+    node count."""
     nodes = [n for n in dag.get("nodes", []) if is_countable(n)]
-    unlinked = sum(1 for n in nodes if not n.get("lean"))
-    leanok = sum(1 for n in nodes if n.get("leanok"))
-    return {"total": len(nodes), "unlinked": unlinked, "leanok": leanok}
+    unlinked = sum(1 for n in nodes if not n.get("lean_name"))
+    proved = sum(1 for n in nodes if n.get("proved"))
+    sorries = sum(1 for n in nodes if n.get("has_sorry"))
+    return {
+        "total": len(nodes),
+        "unlinked": unlinked,
+        "proved": proved,
+        # Linked to Lean that exists but is incomplete — the "started, not
+        # finished" bucket, invisible in `unlinked`/`proved` alone.
+        "sorry": sorries,
+    }

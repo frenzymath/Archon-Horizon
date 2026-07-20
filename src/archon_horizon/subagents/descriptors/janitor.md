@@ -21,7 +21,8 @@ fixing it yourself.
 - **Inbox health** — open items by kind. Some are injected into the agents'
   context and must not overflow the budget: cap `memory` items to a count
   consistent with project size, and `complete` items that are clearly done
-  (use the `horizon-inbox` skill).
+  (use the `horizon-inbox` skill). Start with the CLI's advisory health warnings;
+  they provide the shared baseline, then apply judgment for the workspace's size.
 - **Divergence** — anything that has drifted from the expected workspace shape.
   Read parts of `Archon Horizon`'s own code/skills if you need to know what the
   expected shape is.

@@ -11,6 +11,12 @@ work. It points to focused skills; load those on demand rather than up front.
 
 ## Orient (pull state, don't assume it)
 
+**Start here:** your prompt says nothing about who ran before you. Usually
+somebody did — often minutes ago, often on this same task, and their report was
+written for you. Skill: `horizon-start` — one cheap pass that works out which
+situation you were launched into (fresh run, hand-off from the session that just
+finished, resume after a crash, or outside a run) and what to read for each.
+
 The workspace root is `$ARCHON_HORIZON_ROOT`. Live state is under `.archon-horizon/`
 and the manifest is `config.yaml`. Read what you need, when you need it — via the
 `horizon` CLI (invoke it as `"$HORIZON_BIN" …`):
@@ -22,14 +28,18 @@ and the manifest is `config.yaml`. Read what you need, when you need it — via 
   item's status/strategy current as you work. Roadmap commands print a **warning**
   when parent/child statuses disagree (all sub-items done but parent open, or a
   done parent with open children) — nothing is auto-corrected; you decide whether
-  to fix it or leave it (it may be intentional).
+  to fix it or leave it (it may be intentional). They also warn when too many
+  milestones claim simultaneous `active` focus.
 - **Tasks** — a specific piece of work, usually the one a human launched and is
-  watching. `"$HORIZON_BIN" task …`
+  watching. `"$HORIZON_BIN" task …`. Task commands warn when the open queue grows
+  beyond the advisory limit or a `running` status looks orphaned.
 - **Inbox** — how agents talk across sessions (and projects). Leave a note for the
-  next session; read what past ones left. `"$HORIZON_BIN" inbox …` (skill: `horizon-inbox`)
-- **Blueprint DAG** — declaration dependencies and what's proved. `"$HORIZON_BIN" leandag …` (skill: `leandag`).
+  next session; read what past ones left. `"$HORIZON_BIN" inbox …` (skill:
+  `horizon-inbox`). Inbox commands warn when the open working set—especially
+  `memory` and `info`—needs review.
+- **Blueprint graph** — declaration dependencies and what's proved. `"$HORIZON_BIN" graph -p <project> …` (skill: `hgraph`).
   Each node is also an **hgraph** file with attached comments/reviews —
-  `hgraph frontier` ranks what to prove next, and node-scoped failure memory
+  `"$HORIZON_BIN" graph -p <project> frontier` ranks what to prove next, and node-scoped failure memory
   goes on the node itself (skill: `hgraph`).
 - **Memory** — durable facts/dead-ends live in the inbox: read with
   `"$HORIZON_BIN" inbox list --kind memory --json`, write with
@@ -95,7 +105,7 @@ at each significant step. You own the task's terminal status (skill:
 ## Warnings are work
 
 Commands report problems for a reason — never scroll past them. `lake build`
-warnings, `hgraph sync` warnings, roadmap consistency warnings, deprecation
+warnings, `horizon graph sync` warnings, roadmap consistency warnings, deprecation
 notices from any tool: if your change caused it, **fix it now** (it is part of
 the task); if it's pre-existing or caused by the tool/command itself, don't
 silently ignore it — record it as a memory item, file an inbox `issue`, or
@@ -105,11 +115,45 @@ why.
 
 ## Do the work (Lean)
 
-- Search before proving — the lemma may already exist. Skill: `leansearch`
-  (`"$HORIZON_BIN" search` + the Lean LSP MCP search tools).
+**Do not `grep` for a lemma.** Grep matches names you already guessed; it cannot
+find the lemma whose name you don't know, and that is the one that costs you an
+afternoon. This workspace indexes every declaration in every project *and* in
+mathlib — query it:
+
+| You want | Use | Not |
+|---|---|---|
+| "does this lemma exist, anywhere?" | `"$HORIZON_BIN" search "<words or name>" --json` | `grep -r` |
+| "what's the lemma for this *statement*?" | LSP `lean_leansearch` (natural language) | guessing names |
+| "what matches this *type*?" | LSP `lean_loogle` (`Nat → ?a → ?a`) | `grep` |
+| "does something in scope close this goal?" | LSP `lean_local_search` / `lean_hover_info` | reading files |
+| "what should I prove next?" | `"$HORIZON_BIN" graph -p <project> frontier` (ranked) | scanning the blueprint |
+| "what does this node depend on / block?" | `"$HORIZON_BIN" graph -p <project> get label:<id>` | reading imports |
+| "is the proof right?" | `lake env lean <file>` (narrowest faithful check) | `lean_diagnostic_messages` alone |
+
+`"$HORIZON_BIN" search` covers **your projects and mathlib together**, which is
+its whole point: the premise you need is usually already in mathlib under a name
+you would never have grepped for. One query costs a second; re-proving an
+existing lemma costs a session. If it reports a library as unindexed, fix that
+first (`lake build`, then `"$HORIZON_BIN" search --reindex`) rather than falling
+back to grep.
+
+Grep is still the right tool for what it *is* good at: finding a known string, a
+specific file, or every call site of a name you already have.
+
+- Search before proving — the lemma may already exist. Skill: `leansearch`.
 - Use the **Lean LSP MCP** for tight proof feedback, then verify with the narrowest
   faithful `lake` / `lake env lean` check. Skill: `lean-check`.
+- Use the DAG to choose and scope work, not just to report it. Skill: `hgraph`.
 - When editing blueprint material, follow the house format. Skill: `blueprint-conventions`.
+
+## Read the other projects
+
+They are in this workspace for a reason: the same lemma, pattern, or dead end has
+often already been worked out next door. `"$HORIZON_BIN" search` spans **all**
+projects — an existing construction in another project is a lead, whether you
+import it, copy the approach, or read its blueprint. `references/` holds the
+original sources (skill: `references`). Staying inside your own project because
+the task named it is how the workspace re-derives the same thing three times.
 
 ## Record progress = commit (this is how progress is read)
 
@@ -127,7 +171,9 @@ staging explicit files over `add -A`. Beyond commits:
 
 ## Resuming after an interruption
 
-State lives on disk, so a fresh session (even on another account) continues cheaply:
+State lives on disk, so a fresh session (even on another account) continues
+cheaply. Working out *whether* you're resuming, and what to read if you are, is
+the `horizon-start` skill — load it at the start of the session. The essentials:
 
 - **Why did the last run stop?** `"$HORIZON_BIN" usage --json` includes a
   `paused` field (from `runs/<id>/paused.json`) with the reason (usage limit,
@@ -136,7 +182,8 @@ State lives on disk, so a fresh session (even on another account) continues chea
   `"$HORIZON_BIN" run --resume <id>`.
 - **What was in flight?** Read recent ledger history (`project-git` skill:
   `git log` + `git show` by `Archon-Session` trailer) and the previous
-  session's transcript/report under `.archon-horizon/runs/`.
+  session's transcript/report under `.archon-horizon/runs/`. A horizon session
+  directory with **no `report.md`** is one that was killed mid-flight.
 - **Is another run live on this workspace?** `"$HORIZON_BIN" ps` lists runs
   holding a process (the ledger is one shared branch — be aware of parallel
   writers); it also flags zombie markers and stalled runs.

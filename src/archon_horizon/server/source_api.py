@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _MAX_FILE_BYTES = 2 * 1024 * 1024
-_SKIP_DIRS = {".lake", "_lake", ".archon", ".archon-horizon", ".git", "node_modules", ".leandag", "lake-packages"}
+_SKIP_DIRS = {".lake", "_lake", ".archon", ".archon-horizon", ".git", "node_modules", "lake-packages"}
 
 _IDENT = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_!?'")
 

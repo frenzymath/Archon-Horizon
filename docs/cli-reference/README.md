@@ -122,7 +122,7 @@ Implemented in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py)
 ## 6. Blueprints & search
 
 - `horizon blueprint [--json]` — parse LaTeX blueprints and write JSON DAGs to `.archon-horizon/blueprints/`. ([`commands/blueprint.py`](../../src/archon_horizon/commands/blueprint.py))
-- `horizon leandag [-p PROJECT] [--node <id>] [--cone] [--union] [--intersect]` — inspect dependency cones, dependents, and multi-project unions/intersections. ([`commands/leandag.py`](../../src/archon_horizon/commands/leandag.py))
+- `horizon graph [-p PROJECT] <operation> [...]` — use the vendored semantic graph. Operations include `sync`, `stats`, `list`, `get`, `frontier`, `ancestors`, `descendants`, `view`, `add`, `modify`, and `delete`. ([`commands/graph.py`](../../src/archon_horizon/commands/graph.py))
 - `horizon search <query> [--name P] [--type SIG] [--lib L] [--limit N] [--reindex]` — offline BM25 / name / signature search over Mathlib and local `.lean` sources. ([`commands/search.py`](../../src/archon_horizon/commands/search.py))
 
 ---

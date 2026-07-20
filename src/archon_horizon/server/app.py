@@ -29,6 +29,21 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
+        # Reap abandoned connections. HTTP/1.1 means keep-alive, so a connection's
+        # thread parks in `readline()` waiting for the next request — and without a
+        # timeout it parks *forever* when the peer vanishes without a FIN or RST.
+        # That is exactly what a dropped SSH tunnel (or a suspended laptop) leaves
+        # behind: a half-open socket no TCP layer will ever tear down. Each drop
+        # stranded a browser's whole connection pool, one thread and one fd apiece,
+        # until the process could no longer spawn threads — still holding the port,
+        # no longer able to serve it, which forced a restart on a fresh port.
+        #
+        # Well above the dashboard's 5s poll (an idle keep-alive between polls must
+        # never be cut) and above a slow transfer of the largest payload, but short
+        # enough that a dead tunnel's threads are returned promptly. On timeout,
+        # `handle_one_request` closes the connection; a live browser just reconnects.
+        timeout = 60
+
         def log_message(self, *args: object) -> None:
             return
 
@@ -38,9 +53,12 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         # otherwise dump as a full traceback per connection — pure noise, not a
         # real failure. Swallow those benign resets across the whole request
         # lifecycle (the requestline read in handle(), the flush in finish()).
+        # A `TimeoutError` from the `timeout` above is the same kind of non-event —
+        # a peer that stopped talking — and carries no errno, so it is matched by
+        # type rather than by number.
         @staticmethod
         def _benign_conn_error(exc: BaseException) -> bool:
-            if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
                 return True
             return isinstance(exc, OSError) and exc.errno in (errno.EPIPE, errno.ECONNRESET)
 
