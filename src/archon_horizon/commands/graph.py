@@ -7,13 +7,28 @@ an independently installed ``hgraph`` executable.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
 
 from archon_horizon.hgraph.cli import main as graph_main
 
-from .shared import load_workspace
+from .shared import agent_author, agent_provenance, load_workspace
+
+
+def _with_agent_identity(forwarded: list[str]) -> list[str]:
+    """Default authored graph attachments from the same run env as inbox writes."""
+    if len(forwarded) < 2 or forwarded[0] != "add" or forwarded[1] not in {"comment", "review"}:
+        return forwarded
+    enriched = list(forwarded)
+    author = agent_author()
+    if author and "--author" not in enriched:
+        enriched.extend(["--author", author])
+    provenance = agent_provenance()
+    if provenance and not any(value.startswith("provenance=") for value in enriched):
+        enriched.extend(["--set", f"provenance={json.dumps(provenance, separators=(',', ':'))}"])
+    return enriched
 
 
 def _project_root(workspace, project: str | None, cwd: Path) -> Path:
@@ -62,7 +77,7 @@ def graph(
     MyProject frontier --type tex``, and ``horizon graph -p MyProject get
     label:my-theorem``.
     """
-    forwarded = list(ctx.args)
+    forwarded = _with_agent_identity(list(ctx.args))
     if not forwarded or "--help" in forwarded or "-h" in forwarded:
         # Help does not touch the graph, so it remains available even when a
         # multi-project workspace has not selected a project yet.

@@ -23,7 +23,9 @@ diffing recent Lean — don't guess.
 
 - **Keep it pure math with complete proofs.** Strip Lean tactics, typeclass /
   implementation notes, semi-Lean pseudocode, project history ("since iter N",
-  "our failed route"), and filler. Every `proof` must be a real, rigorous proof —
+  "our failed route"), and filler. Move useful declaration-specific formalization
+  notes to the corresponding hgraph node comment; never preserve or introduce a
+  `Formalization note` paragraph in `.tex`. Every `proof` must be a real, rigorous proof —
   not a sketch or TODO. Keep nodes small by *splitting* a hard step into its own
   `\uses`-linked lemma (down to sentence-sized lemmas), never by abbreviating.
 - **Stay close to the references and cite them structurally** — read the

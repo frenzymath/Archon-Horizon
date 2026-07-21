@@ -18,7 +18,7 @@ Communication between humans, orchestration agents, and individual member projec
 
 ## 1. Local Filesystem Inbox
 
-The local inbox stores persistent communication items directly inside `.archon-horizon/inboxes/`. Items are categorized by semantic kind and can be scoped to specific projects, files, or declarations. The filesystem backend is [`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py) (with a sharded variant in [`inboxes/sharded.py`](../../src/archon_horizon/inboxes/sharded.py)); the CLI lives in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py).
+The local inbox stores persistent communication items directly inside `.archon-horizon/inbox/local/`. Items are categorized by semantic kind and can be scoped to specific projects, files, declarations, or blueprint nodes. The filesystem backend is [`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py); the CLI lives in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py).
 
 ### Inbox Kinds
 
@@ -33,8 +33,8 @@ The local inbox stores persistent communication items directly inside `.archon-h
 ### Common Local Inbox Commands
 
 ```bash
-# Create a new inbox item
-horizon inbox create --kind hint --title "Use Mathlib lemma X" --body "Detailed explanation..."
+# Create a new inbox item (first paragraph is the title)
+horizon inbox add --kind hint --body $'Use Mathlib lemma X\n\nDetailed explanation...'
 
 # List active inbox items
 horizon inbox list
@@ -56,7 +56,22 @@ When coordinating automated proof searches across large mathbases, certain found
 horizon inbox protect --declaration Foo.bar --body "Do not modify the signature of Foo.bar during autoformalization."
 ```
 
-Protections are persistent inbox items rendered directly into the Horizon agent's prompt context as non-negotiable constraints. Enforcement of write-set boundaries is handled by [`core/freeze.py`](../../src/archon_horizon/core/freeze.py).
+Protections are persistent inbox items the Horizon agent pulls at session start.
+They can express semantic constraints, but are not mechanically enforced. For an
+exact file, declaration, blueprint node, project, or agent that must be blocked
+before dispatch, use the config-backed freeze commands:
+
+```bash
+horizon freeze add file 'Core/API.lean'
+horizon freeze add declaration 'Core.Api.signature'
+horizon freeze add blueprint-node 'thm:stable-api'
+horizon freeze list
+horizon freeze remove file 'Core/API.lean'
+```
+
+These commands maintain the top-level `freeze:` section in `config.yaml`;
+enforcement of declared task write sets is handled by
+[`core/freeze.py`](../../src/archon_horizon/core/freeze.py).
 
 ---
 

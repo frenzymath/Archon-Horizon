@@ -266,7 +266,7 @@ def comment_item(
     if not any(it.id == item_id for it in store.load().items):
         log.error(f"No roadmap item {item_id!r}.")
         raise typer.Exit(1)
-    store.add_comment(item_id, body, author or agent_author())
+    store.add_comment(item_id, body, author or agent_author(), with_provenance())
     items = store.load().items
     if as_json:
         warnings = _roadmap_warnings(items)

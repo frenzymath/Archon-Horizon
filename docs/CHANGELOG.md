@@ -15,6 +15,12 @@ rationale and measurements in
 
 ### Added
 
+- **Enforced freeze CLI** — `horizon freeze add/list/remove` maintains
+  config-backed agent/project/file/declaration/blueprint-node rules; semantic
+  `inbox protect` constraints remain clearly separate.
+- **Release version helper** — `scripts/version.py` updates and checks the Python
+  package, README badge, dashboard metadata, and demo workspace stamp together.
+
 - **`horizon usage`** — the agent-facing consumption gauge: this session's live
   token/cost burn (streamed by the harness into `<session>/usage.json`), run
   totals, budget headroom, recent rate-limit signals, and any pause marker.
@@ -42,6 +48,12 @@ rationale and measurements in
   the Blueprint table of contents; `/api/blueprints` split out of `/api/state`.
 
 ### Changed
+
+- Agent startup names the horizon skill by absolute path, agent-authored state
+  and hgraph comments retain run/session/task provenance, inbox triage defaults
+  to open items, and the session contract requires inbox/roadmap maintenance.
+- Formalization notes now belong on hgraph nodes rather than in mathematical
+  blueprint `.tex` sources.
 
 - **The automated prompt is now a task directive + "load the `horizon` skill".**
   All pushed role prose/policy/workspace state is gone; the skill is the

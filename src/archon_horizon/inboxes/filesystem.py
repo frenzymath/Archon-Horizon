@@ -179,7 +179,13 @@ class FilesystemInboxProvider(InboxProvider):
         self._replace(item_id, body=body)
         self._record(item_id, actor, "body", note="description edited")
 
-    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self,
+        item_id: str,
+        body: str,
+        author: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
         items = self._load()
         item = items[item_id]
         now = utc_now().isoformat()
@@ -191,6 +197,7 @@ class FilesystemInboxProvider(InboxProvider):
                 "item": item_id,
                 "author": author or "local",
                 "at": now,
+                **dict(metadata or {}),
                 "body": body,
             },
         )

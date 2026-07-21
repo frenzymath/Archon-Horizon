@@ -111,13 +111,15 @@ class FilesystemTaskStore(TaskStore):
             extra["history"] = history
         return dataclasses.replace(task, metadata={**task.metadata, **extra}) if extra else task
 
-    def add_comment(self, task_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self, task_id: str, body: str, author: str | None = None, metadata: dict | None = None
+    ) -> None:
         directory = self._comments_dir(task_id)
         comment_id = next_comment_id(directory)
         write_comment(
             directory / f"{comment_id}.md",
             {"id": comment_id, "item": task_id, "author": (author or "").strip() or "local",
-             "at": utc_now().isoformat(), "body": body},
+             "at": utc_now().isoformat(), **dict(metadata or {}), "body": body},
         )
 
     def append_history(self, task_id: str, entry: dict) -> None:
@@ -190,13 +192,15 @@ class FilesystemRoadmapStore(RoadmapStore):
                 shutil.rmtree(self._comments_dir(path.stem), ignore_errors=True)
                 self._history_path(path.stem).unlink(missing_ok=True)
 
-    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self, item_id: str, body: str, author: str | None = None, metadata: dict | None = None
+    ) -> None:
         directory = self._comments_dir(item_id)
         comment_id = next_comment_id(directory)
         write_comment(
             directory / f"{comment_id}.md",
             {"id": comment_id, "item": item_id, "author": (author or "").strip() or "local",
-             "at": utc_now().isoformat(), "body": body},
+             "at": utc_now().isoformat(), **dict(metadata or {}), "body": body},
         )
 
     def append_history(self, item_id: str, entry: dict) -> None:

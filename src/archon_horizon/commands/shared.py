@@ -74,6 +74,11 @@ def agent_provenance() -> dict | None:
         "session": os.environ.get("ARCHON_HORIZON_SESSION", "").strip(),
         "role": os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower(),
         "subagent": os.environ.get("ARCHON_HORIZON_SUBAGENT", "").strip(),
+        "round": os.environ.get("ARCHON_HORIZON_ROUND", "").strip(),
+        "rounds": os.environ.get("ARCHON_HORIZON_ROUNDS", "").strip(),
+        "task": os.environ.get("ARCHON_HORIZON_TASK", "").strip(),
+        "task_title": os.environ.get("ARCHON_HORIZON_TASK_TITLE", "").strip(),
+        "projects": os.environ.get("ARCHON_HORIZON_PROJECTS", "").strip(),
     }
     prov = {k: v for k, v in fields.items() if v}
     return prov or None

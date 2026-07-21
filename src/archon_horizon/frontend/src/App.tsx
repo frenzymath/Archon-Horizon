@@ -20,8 +20,8 @@ const ARCHON_REJECTED = 'rejected';
 const INBOX_KIND_OPTIONS = ['hint', 'issue', 'protection', 'info', 'memory'];
 const INBOX_PROVIDER_OPTIONS = ['local', 'github'];
 const INBOX_STATUS_OPTIONS = ['open', 'closed', 'archived'];
-// Archived items are soft-deleted: hidden until the user selects the filter.
-const INBOX_STATUS_DEFAULT = ['open', 'closed'];
+// Resolved and archived items remain available, but triage starts with live work.
+const INBOX_STATUS_DEFAULT = ['open'];
 const INBOX_GATE_OPTIONS = ['accept', 'pending', 'reject', 'clear'];
 const TASK_STATUS_OPTIONS = ['queued', 'running', 'blocked', 'done', 'failed', 'cancelled'];
 const TASK_PRIORITY_OPTIONS = ['urgent', 'high', 'normal', 'low'];
@@ -1685,6 +1685,7 @@ function EditableComment({
       <div className="comment-header">
         <strong>{author}</strong>
         {comment._description && <span className="comment-tag">description</span>}
+        <ProvenanceChip provenance={comment.provenance} />
         <time>{formatDate(comment.createdAt ?? comment.created_at ?? comment.at)}</time>
         {comment.edited_at && <span>edited {formatDate(comment.edited_at)}</span>}
         {comment.url && <a href={comment.url} target="_blank" rel="noreferrer">Open</a>}
@@ -1890,11 +1891,13 @@ function CommentComposer({
 function ProvenanceChip({ provenance }: { provenance: any }) {
   if (!provenance || typeof provenance !== 'object') return null;
   const parts: string[] = [];
+  if (provenance.role) parts.push(String(provenance.role));
   if (provenance.run) parts.push(`run ${provenance.run}`);
   if (provenance.session) parts.push(String(provenance.session));
   if (provenance.subagent) parts.push(String(provenance.subagent));
+  if (provenance.task) parts.push(`task ${provenance.task}`);
   if (!parts.length) return null;
-  return <span className="provenance-chip" title="Authoring run · session · subagent">{parts.join(' · ')}</span>;
+  return <span className="provenance-chip" title="Authoring role · run · session · task">{parts.join(' · ')}</span>;
 }
 
 function Transcripts({ state }: { state?: any }) {

@@ -45,7 +45,9 @@ comments/reviews/metadata.
 - **Comment = failure memory / progress note on that node.** When an approach
   fails or you learn something node-specific, record it where the next session
   will look first:
-  `"$HORIZON_BIN" graph -p <project> add comment label:thm:foo --author agent --content "tried simp+ring, fails because …"`
+  `"$HORIZON_BIN" graph -p <project> add comment label:thm:foo --content "tried simp+ring, fails because …"`
+  Agent authorship plus run/session/task provenance are filled from the run
+  environment; do not copy the note into the blueprint.
 - **Review = a Maths / Lean verdict** (independent axes, `good|bad`):
   `"$HORIZON_BIN" graph -p <project> add review label:thm:foo --maths good --lean bad --lean-comment "statement ok; proof has a sorry at the succ case"`
 - **Metadata**: `"$HORIZON_BIN" graph -p <project> modify node label:thm:foo --set status=verified`

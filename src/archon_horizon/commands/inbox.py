@@ -252,7 +252,7 @@ def comment(
     """Add a progress comment to an inbox item (track work, not ask the human)."""
     author_val, _ = _resolve_authorship(author)
     inbox = _inbox(ctx)
-    inbox.add_comment(id, body, author=author_val)
+    inbox.add_comment(id, body, author=author_val, metadata=with_provenance())
     items = inbox.list_items()
     if as_json:
         emit_json(_with_inbox_warnings({"id": id, "commented": True}, items))
@@ -268,6 +268,9 @@ def protect(
     project: str | None = typer.Option(None, "--project", help="Restrict to a project."),
     file: str | None = typer.Option(None, "--file", help="Restrict to a file."),
     declaration: str | None = typer.Option(None, "--declaration", help="Restrict to a declaration."),
+    blueprint_node: str | None = typer.Option(
+        None, "--blueprint-node", help="Restrict to a blueprint node label or id."
+    ),
     as_json: bool = _JSON,
 ) -> None:
     """Add a standing protection the Horizon agent must respect (the soft freeze).
@@ -279,6 +282,7 @@ def protect(
         projects=(project,) if project else (),
         files=(file,) if file else (),
         declarations=(declaration,) if declaration else (),
+        blueprint_nodes=(blueprint_node,) if blueprint_node else (),
     )
     inbox = _inbox(ctx)
     created = inbox.create_item(

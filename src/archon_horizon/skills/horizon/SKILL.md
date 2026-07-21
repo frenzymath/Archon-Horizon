@@ -17,8 +17,11 @@ written for you. Skill: `horizon-start` — one cheap pass that works out which
 situation you were launched into (fresh run, hand-off from the session that just
 finished, resume after a crash, or outside a run) and what to read for each.
 
-The workspace root is `$ARCHON_HORIZON_ROOT`. Live state is under `.archon-horizon/`
-and the manifest is `config.yaml`. Read what you need, when you need it — via the
+The workspace root is `$ARCHON_HORIZON_ROOT`; your shell may start in a member
+project rather than at that root. The absolute path to this skill is
+`$ARCHON_HORIZON_SKILL`. Live state is under
+`$ARCHON_HORIZON_ROOT/.archon-horizon/` and the manifest is
+`$ARCHON_HORIZON_ROOT/config.yaml`. Read what you need, when you need it — via the
 `horizon` CLI (invoke it as `"$HORIZON_BIN" …`):
 
 - **Roadmap** — YOUR strategy sketch across *all* projects, kept as a nested
@@ -55,6 +58,7 @@ The harness exports these to every session — read them instead of guessing:
 | Variable | Meaning |
 |---|---|
 | `ARCHON_HORIZON_ROOT` | workspace root (use for `--root`-free CLI calls) |
+| `ARCHON_HORIZON_SKILL` | absolute path to this `SKILL.md` (never resolve it relative to the shell cwd) |
 | `ARCHON_HORIZON_RUN` | run id (e.g. `0163`) |
 | `ARCHON_HORIZON_SESSION` | this session's name (e.g. `0002-horizon-T-1`) |
 | `ARCHON_HORIZON_SESSION_DIR` | this session's directory (transcript, usage.json, report) |
@@ -164,6 +168,10 @@ specific file, or every call site of a name you already have.
   faithful `lake` / `lake env lean` check. Skill: `lean-check`.
 - Use the DAG to choose and scope work, not just to report it. Skill: `hgraph`.
 - When editing blueprint material, follow the house format. Skill: `blueprint-conventions`.
+  The blueprint is timeless mathematics, never a formalization journal. Put Lean
+  implementation notes, failed tactics, and declaration-specific progress on the
+  corresponding hgraph node with `graph add comment`; do not insert
+  "Formalization note" paragraphs into blueprint `.tex` files.
 
 ## Read the other projects
 
@@ -187,6 +195,14 @@ staging explicit files over `add -A`. Beyond commits:
 - Update the **roadmap** with coarse status/strategy (not a re-narration of the diff).
 - Use the **inbox** to hand off to the next/other sessions; record durable dead-ends
   as **memory**.
+
+Before your final report, do one boundary-maintenance pass. Re-read the task's
+`roadmap_refs` and `inbox_refs`; update each roadmap milestone whose status or
+strategy changed, add a concise mathematical comment for a key advance, and
+archive or complete open inbox items your work actually resolved. Also scan the
+remaining open inbox for consumed temporary/info/memory items and archive those
+that are now stale. Never archive a standing protection merely to make the list
+shorter. This pass is part of completing the work, not optional janitor follow-up.
 
 ## Resuming after an interruption
 

@@ -26,6 +26,14 @@ from archon_horizon.vcs.git import GitError, WorkspaceGit, git_available, neutra
 
 from .loader import CONFIG_FILENAME
 
+_FREEZE_KEYS = {
+    "agent": "agents",
+    "project": "projects",
+    "file": "files",
+    "declaration": "declarations",
+    "blueprint-node": "blueprint_nodes",
+}
+
 
 def _load_raw(root: Path) -> dict[str, Any]:
     return yaml.safe_load((root / CONFIG_FILENAME).read_text("utf-8")) or {}
@@ -40,6 +48,60 @@ def _save_raw(root: Path, data: dict[str, Any]) -> None:
 def _emit(event_log: EventLog | None, type: str, **data: Any) -> None:
     if event_log is not None:
         event_log.append(Event(type=type, id=uuid.uuid4().hex, actor="workspace-op", data=data))
+
+
+def _freeze_key(kind: str) -> tuple[str, str]:
+    normalized = kind.strip().lower().replace("_", "-")
+    try:
+        return normalized, _FREEZE_KEYS[normalized]
+    except KeyError as exc:
+        choices = ", ".join(_FREEZE_KEYS)
+        raise ValueError(f"unknown freeze kind {kind!r}; choose one of: {choices}") from exc
+
+
+def list_freezes(root: Path) -> dict[str, tuple[str, ...]]:
+    """Return the enforced, workspace-level freeze rules from ``config.yaml``."""
+    freeze = _load_raw(root).get("freeze", {}) or {}
+    return {kind: tuple(str(value) for value in freeze.get(key, ()) or ()) for kind, key in _FREEZE_KEYS.items()}
+
+
+def add_freeze(
+    root: Path, kind: str, pattern: str, *, event_log: EventLog | None = None
+) -> bool:
+    """Add an enforced freeze rule. Returns ``False`` when it already exists."""
+    normalized, key = _freeze_key(kind)
+    pattern = pattern.strip()
+    if not pattern:
+        raise ValueError("freeze pattern cannot be empty")
+    data = _load_raw(root)
+    freeze = data.setdefault("freeze", {})
+    values = freeze.setdefault(key, [])
+    if pattern in values:
+        return False
+    values.append(pattern)
+    _save_raw(root, data)
+    _emit(event_log, "workspace.freeze.added", kind=normalized, pattern=pattern)
+    return True
+
+
+def remove_freeze(
+    root: Path, kind: str, pattern: str, *, event_log: EventLog | None = None
+) -> bool:
+    """Remove an enforced freeze rule. Returns ``False`` when it was absent."""
+    normalized, key = _freeze_key(kind)
+    data = _load_raw(root)
+    freeze = data.get("freeze", {}) or {}
+    values = freeze.get(key, []) or []
+    if pattern not in values:
+        return False
+    values.remove(pattern)
+    if not values:
+        freeze.pop(key, None)
+    if not freeze:
+        data.pop("freeze", None)
+    _save_raw(root, data)
+    _emit(event_log, "workspace.freeze.removed", kind=normalized, pattern=pattern)
+    return True
 
 
 def add_project(

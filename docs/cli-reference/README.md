@@ -98,7 +98,9 @@ Implemented in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py)
 - `horizon inbox list [--status open|closed] [--kind K] [--label L] [--project P] [--to R] [--query TEXT] [--limit N] [--comments N]` — show inbox items, with optional filters for triage and capped comment output.
 - `horizon inbox add --kind <k> --body <text> [--project P] [--to ROLE] [--author A] [--persistent|--temporary] [--pending]` — add a hint/issue.
 - `horizon inbox comment <id> --body <text> [--author A]` — post a comment.
-- `horizon inbox protect [--file F] [--declaration D] [--project P] --body <why>` — add a standing soft-freeze protection.
+- `horizon inbox protect [--file F] [--declaration D] [--blueprint-node N] [--project P] --body <why>` — add a semantic standing protection.
+- `horizon freeze add <agent|project|file|declaration|blueprint-node> <pattern>` — add an enforced config-backed freeze.
+- `horizon freeze list` / `horizon freeze remove <kind> <pattern>` — inspect or remove enforced freezes.
 - `horizon inbox edit <id> [--body B] [--kind K]` · `edit-comment <id> --index N --body B`.
 - `horizon inbox label <id> <labels>` · `complete <id>` · `reject <id>` · `delete <id>`.
 

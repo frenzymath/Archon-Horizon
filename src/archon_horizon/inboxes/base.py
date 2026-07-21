@@ -36,7 +36,13 @@ class InboxProvider(ABC):
     def update_body(self, item_id: str, body: str, actor: str | None = None) -> None:
         raise NotImplementedError(f"{self.name} does not support body edits")
 
-    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self,
+        item_id: str,
+        body: str,
+        author: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
         raise NotImplementedError(f"{self.name} does not support comments")
 
     def update_comment(self, item_id: str, index: int, body: str, author: str | None = None) -> None:

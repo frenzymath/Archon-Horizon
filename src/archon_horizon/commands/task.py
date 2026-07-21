@@ -265,7 +265,7 @@ def comment_task(
     except Exception:
         log.error(f"No task {task_id!r}.")
         raise typer.Exit(1)
-    store.add_comment(task_id, body, author or agent_author())
+    store.add_comment(task_id, body, author or agent_author(), with_provenance())
     tasks = store.list()
     if as_json:
         emit_json(_with_task_warnings({"id": task_id, "commented": True}, tasks))

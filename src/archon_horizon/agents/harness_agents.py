@@ -60,6 +60,9 @@ def _agent_env(role: str, context: HorizonContext) -> dict[str, str]:
     by the ledger's prepare-commit-msg hook)."""
     env = {"ARCHON_HORIZON_AGENT_ROLE": role}
     env["ARCHON_HORIZON_ROOT"] = str(context.workspace.root.resolve())
+    env["ARCHON_HORIZON_SKILL"] = str(
+        (context.workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
+    )
     run_id = getattr(context.run, "id", "") or ""
     if run_id:
         env["ARCHON_HORIZON_RUN"] = run_id
@@ -203,5 +206,4 @@ class HarnessHorizonAgent(HorizonAgent):
             artifact_refs=result.artifact_refs,
             metadata=_result_metadata(result),
         )
-
 

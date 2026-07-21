@@ -17,8 +17,9 @@ fields.
   `--status open`, `--query TEXT`, `--limit N`, and `--comments N`.
 - Every inbox command evaluates the full local working set, even when `list` is
   filtered. Treat its advisory warnings as a prompt to review duplicates, stale
-  memories, and consumed notices. The CLI never archives automatically: a large
-  inbox may be intentional, but leaving it large should be a conscious choice.
+  memories, and consumed notices. The CLI never archives automatically because
+  only the working agent can decide what is resolved; that agent must make an
+  explicit cleanup pass before its final report.
 - Labels are the release gate. Local inbox items default to `agent-ready`, which
   means they are visible to agents at run boundaries. Keep that default for
   machine-addressed work, and usually keep it for human-addressed notices too:
@@ -108,10 +109,12 @@ obvious and then run `horizon inbox archive <id>`.
 - `horizon inbox add --kind memory --to horizon --body "Short memory title\n\nDurable fact, convention, or dead end."` — record a durable
   note / dead end. Memory lives in the inbox, so it is rendered in the "Memory"
   section and a human can prune it like any other item.
-- `horizon inbox protect --body "..." [--project P] [--file F] [--declaration D]`
-  — add a standing constraint the Horizon agent must respect (the soft freeze),
+- `horizon inbox protect --body "..." [--project P] [--file F] [--declaration D] [--blueprint-node N]`
+  — add a semantic standing constraint the Horizon agent must respect (a soft freeze),
   e.g. "do not change the signature of `Foo.bar`". These render as a
-  "Protected" section; honour them, including semantic ones.
+  "Protected" section; honour them, including semantic ones. For a target that
+  must be mechanically blocked before dispatch, the user uses the config-backed
+  `horizon freeze add <file|declaration|blueprint-node> <target>` command instead.
 
 Reading convention: an item tagged `[persistent]` is a standing rule — respect
 it every round and keep it open while relevant. `[temporary]` (or untagged) is

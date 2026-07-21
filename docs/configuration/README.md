@@ -180,7 +180,14 @@ freeze:
   blueprint_nodes: ["thm:main_result"]
 ```
 
-Ad-hoc, per-run protections can also be added with `horizon inbox protect` — see the [Inboxes guide](../inboxes-and-communication/README.md#2-standing-protections-soft-freeze).
+Use `horizon freeze add <kind> <pattern>`, `horizon freeze list`, and
+`horizon freeze remove <kind> <pattern>` to maintain these rules without editing
+YAML. Supported kinds are `agent`, `project`, `file`, `declaration`, and
+`blueprint-node`.
+
+Semantic protections that cannot be expressed as an exact target/glob can be
+added with `horizon inbox protect`; those guide the agent but are not the
+pre-dispatch enforcement mechanism. See the [Inboxes guide](../inboxes-and-communication/README.md#2-standing-protections-soft-freeze).
 
 ---
 

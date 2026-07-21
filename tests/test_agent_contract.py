@@ -67,6 +67,8 @@ def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
     subagents = (_SKILLS_DIR / "subagents" / "SKILL.md").read_text("utf-8")
     assert "model" in subagents and "lighter capable" in subagents  # dispatcher-owned model economy
     assert "ground" in skill and "before marking" in skill          # fresh-context convergence gate
+    assert "boundary-maintenance" in skill and "archive or complete" in skill
+    assert "Formalization note" in skill and "graph add comment" in skill
 
 
 class _RecordingHarness:
@@ -229,3 +231,18 @@ def test_agent_env_carries_full_session_identity(tmp_path: Path) -> None:
     assert env["ARCHON_HORIZON_ROUNDS"] == "3"
     assert env["ARCHON_HORIZON_TASK"] == "T-9"
     assert env["ARCHON_HORIZON_TASK_TITLE"] == "Prove the crux"
+    assert env["ARCHON_HORIZON_SKILL"] == str(
+        (tmp_path / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
+    )
+
+
+def test_horizon_prompt_uses_absolute_skill_path(tmp_path: Path) -> None:
+    ctx = HorizonContext(
+        workspace=_workspace(tmp_path),
+        run=RunRecord(id="S-1", rounds_requested=1),
+        task=HorizonTask(id="T-1", project="ag-main", objective="x"),
+    )
+
+    prompt = horizon_task_prompt(ctx)
+
+    assert str((tmp_path / ".claude/skills/horizon/SKILL.md").resolve()) in prompt

@@ -19,6 +19,7 @@ from archon_horizon import __version__
 from archon_horizon.commands import blueprint as blueprint_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
+from archon_horizon.commands import freeze as freeze_cmd
 from archon_horizon.commands import inbox as inbox_cmd
 from archon_horizon.commands import init as init_cmd
 from archon_horizon.commands import graph as graph_cmd
@@ -130,6 +131,7 @@ app.add_typer(inbox_cmd.app, name="inbox")
 app.add_typer(roadmap_cmd.app, name="roadmap")
 app.add_typer(task_cmd.app, name="task")
 app.add_typer(project_cmd.app, name="project")
+app.add_typer(freeze_cmd.app, name="freeze")
 app.add_typer(skills_cmd.app, name="skills")
 app.command("blueprint")(blueprint_cmd.blueprint)
 app.command(

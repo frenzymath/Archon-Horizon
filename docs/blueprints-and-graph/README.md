@@ -39,8 +39,13 @@ horizon graph -p MyProject frontier --type tex
 horizon graph -p MyProject get label:thm:main-result
 horizon graph -p MyProject ancestors label:thm:main-result --names
 horizon graph -p MyProject add comment label:thm:main-result \
-  --author agent --content "The induction stalls at the successor case."
+  --content "The induction stalls at the successor case."
 ```
+
+Blueprint `.tex` files contain timeless mathematics only. Lean implementation
+details, failed proof routes, and formalization caveats belong in these node
+comments, where synchronization preserves them. Agent comments automatically
+record their Horizon role and run/session/task provenance.
 
 Run `horizon graph --help` for the command list and, for example,
 `horizon graph frontier --help` for one operation's flags. When a workspace has

@@ -40,7 +40,10 @@ its following `proof` environment form one node's content.
   semi-Lean pseudocode. No project history ("since iter N", "our failed route")
   and no conversational filler. Not every Lean helper needs its own node —
   auxiliary or implementation-only declarations can stay unnoded; add a node when
-  the result is mathematically meaningful in its own right.
+  the result is mathematically meaningful in its own right. In particular, never
+  add a `Formalization note` paragraph to blueprint `.tex`: attach implementation
+  details, failed approaches, and mechanization caveats to the statement's hgraph
+  node with `horizon graph ... add comment` instead.
 - **Complete proofs, not sketches.** A node's `proof` is a real, rigorous
   mathematical proof a reader could check — not a hand-wave or a TODO. The way to
   keep it short is to *split*, not to abbreviate: if a proof is long or a node

@@ -128,12 +128,39 @@ def test_add_stamps_run_session_provenance(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
     monkeypatch.setenv("ARCHON_HORIZON_RUN", "0003")
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", "0002-horizon")
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-7")
+    monkeypatch.setenv("ARCHON_HORIZON_PROJECTS", "p,q")
 
     assert main(["--root", str(ws), "inbox", "add", "--body", "title\n\ndescription"]) == 0
 
     item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
     prov = item.metadata["provenance"]
-    assert prov == {"run": "0003", "session": "0002-horizon", "role": "horizon"}
+    assert prov == {
+        "run": "0003",
+        "session": "0002-horizon",
+        "role": "horizon",
+        "task": "T-7",
+        "projects": "p,q",
+    }
+
+
+def test_agent_comment_stamps_authorship_and_provenance(tmp_path: Path, monkeypatch) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "config.yaml").write_text(_CONFIG, "utf-8")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0003")
+    monkeypatch.setenv("ARCHON_HORIZON_SESSION", "0002-horizon")
+    assert main(["--root", str(ws), "inbox", "add", "--body", "title\n\ndescription"]) == 0
+
+    assert main(["--root", str(ws), "inbox", "comment", "I-0001", "--body", "progress"]) == 0
+
+    item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
+    comment = item.metadata["comments"][0]
+    assert comment["author"] == "horizon"
+    assert comment["provenance"] == {
+        "run": "0003", "session": "0002-horizon", "role": "horizon"
+    }
 
 
 def test_add_without_run_env_has_no_provenance(tmp_path: Path) -> None:

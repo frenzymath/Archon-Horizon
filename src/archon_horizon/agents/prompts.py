@@ -41,12 +41,15 @@ def _task_block(context: HorizonContext) -> str:
 
 def horizon_task_prompt(context: HorizonContext) -> str:
     """Prompt for one automated Horizon session: directive + skill pointer."""
+    skill_path = (
+        context.workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md"
+    ).resolve()
     return (
         f"You are in an **Archon Horizon** workspace at `{context.workspace.root}`.\n\n"
         "Load the **`horizon`** skill FIRST — it explains where the state lives, the\n"
         "tools, and this workspace's conventions (one-shot discipline, git commits,\n"
-        "the final report). If your engine has no skill mechanism, read\n"
-        "`.claude/skills/horizon/SKILL.md` directly.\n\n"
+        "the final report). If your engine has no skill mechanism, read the absolute\n"
+        f"path `{skill_path}` (also exported as `$ARCHON_HORIZON_SKILL`) directly.\n\n"
         "# Task\n"
         f"{_task_block(context)}\n\n"
         "This is a headless, one-shot session: work the task's REAL objective as far\n"
