@@ -20,9 +20,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-# The dependency-graph engine (leandag) is vendored under
-# ``archon_horizon.leandag`` (see its __init__), so it ships in-repo with no
-# external git install. The built-in blueprint parser remains a defensive fallback.
 dependencies = [
     "PyYAML>=6",
     "typer>=0.12",
@@ -63,7 +60,7 @@ version = { attr = "archon_horizon.__version__" }
 "archon_horizon" = [
     "skills/**/*.md",
     "subagents/**/*.md",
-    "agents/prompt_templates/*.md",
+    "hgraph/*.md",
     "frontend/dist/**/*",
 ]
 

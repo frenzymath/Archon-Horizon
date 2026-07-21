@@ -6,11 +6,20 @@ import os
 
 import typer
 
-from archon_horizon.core.inbox import InboxDraft, InboxFilter, InboxKind, InboxScope, InboxStatus
+from archon_horizon.core.collection_health import inbox_health_warnings
+from archon_horizon.core.inbox import (
+    InboxDraft,
+    InboxFilter,
+    InboxKind,
+    InboxScope,
+    InboxStatus,
+    matches_filter,
+)
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
 from archon_horizon.log import log
 from archon_horizon.store import serde
 
+from .shared import agent_author as _agent_author
 from .shared import emit_json, load_workspace, local_inbox, with_provenance
 
 app = typer.Typer(help="Manage the local inbox.", no_args_is_help=True)
@@ -18,16 +27,9 @@ app = typer.Typer(help="Manage the local inbox.", no_args_is_help=True)
 _JSON = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout.")
 
 
-def _agent_author(default: str | None = None) -> str | None:
-    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    if role in {"ground", "horizon"}:
-        return role
-    return default
-
-
 def _clean_agent(detail: str | None, role: str) -> str | None:
     """Tidy a sub-identity: drop a redundant leading ``<role>-`` / ``<role> ``
-    prefix (so ``ground-diff-auditor`` under author ``ground`` reads ``diff-auditor``)."""
+    prefix (so ``horizon-work-reviewer`` under author ``horizon`` reads ``work-reviewer``)."""
     if not detail:
         return None
     text = detail.strip()
@@ -42,7 +44,7 @@ def _clean_agent(detail: str | None, role: str) -> str | None:
 def _resolve_authorship(author: str | None, agent: str | None = None) -> tuple[str, str | None]:
     """Canonical author plus an optional finer-grained sub-identity.
 
-    Inbox authors are a small conventional set (human / ground / horizon / …) so
+    Inbox authors are a small conventional set (human / horizon / …) so
     the UI can group and colour by them. Agents run with
     ``ARCHON_HORIZON_AGENT_ROLE`` set to their role, and that role is authoritative
     — it wins over any ``--author`` the model typed. A more specific identity (a
@@ -52,7 +54,7 @@ def _resolve_authorship(author: str | None, agent: str | None = None) -> tuple[s
     the environment) keeps whatever ``--author`` they pass."""
     detail = (agent or "").strip() or None
     role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    role = role if role in {"ground", "horizon"} else ""
+    role = role if role == "horizon" else ""
     if role:
         # A subagent that typed its own name into --author: demote it to detail.
         if detail is None and author and author.strip().lower() != role:
@@ -65,6 +67,19 @@ def _resolve_authorship(author: str | None, agent: str | None = None) -> tuple[s
 def _inbox(ctx: typer.Context):
     _, workspace = load_workspace(ctx.obj["root"])
     return local_inbox(workspace)
+
+
+def _warn_inbox(items) -> list[str]:
+    warnings = inbox_health_warnings(items)
+    for warning in warnings:
+        log.warn(warning)
+    return warnings
+
+
+def _with_inbox_warnings(payload: dict, items) -> dict:
+    """Keep legacy JSON shapes when healthy; attach actionable warnings only."""
+    warnings = inbox_health_warnings(items)
+    return {**payload, **({"warnings": warnings} if warnings else {})}
 
 
 def _ensure_title_and_description(body: str) -> None:
@@ -136,14 +151,22 @@ def list_items(
         audience=to if to is not None else None,
         query=query,
     )
-    items = sorted(_inbox(ctx).list_items(filters), key=lambda item: item.updated_at, reverse=True)
+    inbox = _inbox(ctx)
+    all_items = inbox.list_items()
+    warnings = inbox_health_warnings(all_items)
+    items = sorted(
+        (item for item in all_items if matches_filter(item, filters)),
+        key=lambda item: item.updated_at,
+        reverse=True,
+    )
     if limit is not None:
         items = items[:limit]
     if as_json:
-        emit_json({"items": [_item_dict_capped(i, comments) for i in items]})
+        emit_json({"items": [_item_dict_capped(i, comments) for i in items], "warnings": warnings})
         return
     if not items:
         log.info("(empty)")
+        _warn_inbox(all_items)
         return
     rows = []
     for item in items:
@@ -162,6 +185,7 @@ def list_items(
             summary = f"{summary}\n  comments: " + " | ".join(comment_bits)
         rows.append((item.id, item.status.value, summary))
     log.results_table(rows, title="Local Inbox")
+    _warn_inbox(all_items)
 
 
 @app.command()
@@ -171,9 +195,9 @@ def add(
     kind: InboxKind = typer.Option(InboxKind.HINT, "--kind", help="Item kind."),
     project: str | None = typer.Option(None, "--project", help="Scope the item to a project (what it is ABOUT)."),
     to: str | None = typer.Option(
-        None, "--to", help="Recipient the item is FOR: horizon | ground | human | project:<name>."
+        None, "--to", help="Recipient the item is FOR: horizon | human | project:<name>."
     ),
-    author: str | None = typer.Option(None, "--author", help="Who is writing it (human / horizon / ground)."),
+    author: str | None = typer.Option(None, "--author", help="Who is writing it (human / horizon)."),
     agent: str | None = typer.Option(
         None, "--agent",
         help="Finer-grained author identity (e.g. a subagent descriptor name like "
@@ -205,14 +229,16 @@ def add(
     metadata = with_provenance()
     if agent_val:
         metadata["agent"] = agent_val
-    created = _inbox(ctx).create_item(
+    inbox = _inbox(ctx)
+    created = inbox.create_item(
         InboxDraft(kind=kind, body=body, labels=labels, scope=scope, audience=(to or ""),
                    author=author_val, metadata=metadata)
     )
     if as_json:
-        emit_json(_item_dict(created))
+        emit_json(_with_inbox_warnings(_item_dict(created), inbox.list_items()))
         return
     log.success(f"created {created.id}")
+    _warn_inbox(inbox.list_items())
 
 
 @app.command(hidden=True)
@@ -225,11 +251,14 @@ def comment(
 ) -> None:
     """Add a progress comment to an inbox item (track work, not ask the human)."""
     author_val, _ = _resolve_authorship(author)
-    _inbox(ctx).add_comment(id, body, author=author_val)
+    inbox = _inbox(ctx)
+    inbox.add_comment(id, body, author=author_val)
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "commented": True})
+        emit_json(_with_inbox_warnings({"id": id, "commented": True}, items))
         return
     log.success(f"commented on {id}")
+    _warn_inbox(items)
 
 
 @app.command()
@@ -251,7 +280,8 @@ def protect(
         files=(file,) if file else (),
         declarations=(declaration,) if declaration else (),
     )
-    created = _inbox(ctx).create_item(
+    inbox = _inbox(ctx)
+    created = inbox.create_item(
         InboxDraft(
             kind=InboxKind.PROTECTION,
             body=f"[persistent] {body}",
@@ -263,9 +293,10 @@ def protect(
         )
     )
     if as_json:
-        emit_json(_item_dict(created))
+        emit_json(_with_inbox_warnings(_item_dict(created), inbox.list_items()))
         return
     log.success(f"protected {created.id}")
+    _warn_inbox(inbox.list_items())
 
 
 @app.command()
@@ -284,10 +315,12 @@ def edit(
         inbox.update_body(id, body, _agent_author())
     if kind is not None:
         inbox.update_kind(id, kind, _agent_author())
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "edited": True})
+        emit_json(_with_inbox_warnings({"id": id, "edited": True}, items))
         return
     log.success(f"edited {id}")
+    _warn_inbox(items)
 
 
 @app.command("edit-comment", hidden=True)
@@ -300,11 +333,14 @@ def edit_comment(
     as_json: bool = _JSON,
 ) -> None:
     """Edit a local inbox comment."""
-    _inbox(ctx).update_comment(id, index, body, author=author)
+    inbox = _inbox(ctx)
+    inbox.update_comment(id, index, body, author=author)
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "index": index, "edited": True})
+        emit_json(_with_inbox_warnings({"id": id, "index": index, "edited": True}, items))
         return
     log.success(f"edited comment {index} on {id}")
+    _warn_inbox(items)
 
 
 @app.command(hidden=True)
@@ -315,49 +351,64 @@ def label(
     as_json: bool = _JSON,
 ) -> None:
     """Replace labels on an inbox item."""
-    _inbox(ctx).update_labels(id, labels, _agent_author())
+    inbox = _inbox(ctx)
+    inbox.update_labels(id, labels, _agent_author())
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "labels": list(labels)})
+        emit_json(_with_inbox_warnings({"id": id, "labels": list(labels)}, items))
         return
     log.success(f"relabeled {id}")
+    _warn_inbox(items)
 
 
 @app.command()
 def complete(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
     """Mark an inbox item completed."""
-    _inbox(ctx).update_status(id, InboxStatus.CLOSED, _agent_author())
+    inbox = _inbox(ctx)
+    inbox.update_status(id, InboxStatus.CLOSED, _agent_author())
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "status": InboxStatus.CLOSED.value})
+        emit_json(_with_inbox_warnings({"id": id, "status": InboxStatus.CLOSED.value}, items))
         return
     log.success(f"completed {id}")
+    _warn_inbox(items)
 
 
 @app.command()
 def archive(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
     """Archive an inbox item: a soft-delete that keeps the record but hides it
     from the dashboard by default (the human can opt to show archived items)."""
-    _inbox(ctx).update_status(id, InboxStatus.ARCHIVED, _agent_author())
+    inbox = _inbox(ctx)
+    inbox.update_status(id, InboxStatus.ARCHIVED, _agent_author())
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "status": InboxStatus.ARCHIVED.value})
+        emit_json(_with_inbox_warnings({"id": id, "status": InboxStatus.ARCHIVED.value}, items))
         return
     log.success(f"archived {id}")
+    _warn_inbox(items)
 
 
 @app.command(hidden=True)
 def reject(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
     """Mark an inbox item rejected."""
-    _inbox(ctx).update_labels(id, [REJECTED], _agent_author())
+    inbox = _inbox(ctx)
+    inbox.update_labels(id, [REJECTED], _agent_author())
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "rejected": True})
+        emit_json(_with_inbox_warnings({"id": id, "rejected": True}, items))
         return
     log.success(f"rejected {id}")
+    _warn_inbox(items)
 
 
 @app.command()
 def delete(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
     """Delete an inbox item."""
-    _inbox(ctx).delete_item(id)
+    inbox = _inbox(ctx)
+    inbox.delete_item(id)
+    items = inbox.list_items()
     if as_json:
-        emit_json({"id": id, "deleted": True})
+        emit_json(_with_inbox_warnings({"id": id, "deleted": True}, items))
         return
     log.success(f"deleted {id}")
+    _warn_inbox(items)

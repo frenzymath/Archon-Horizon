@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from archon_horizon.agents.harness_agents import HarnessHorizonAgent, HarnessGroundAgent
+from archon_horizon.agents.harness_agents import HarnessHorizonAgent
 from archon_horizon.core.freeze import FreezeLevel, FreezeRule, FreezeSet
 from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
 from archon_horizon.core.sessions import Focus, RunRecord
@@ -20,13 +20,11 @@ from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import HarnessRequest, HarnessResult
 from archon_horizon.harnesses.null import NullHarness
-from archon_horizon.orchestration.locks import InMemoryLockManager
 from archon_horizon.orchestration.orchestrator import Orchestrator
 from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
 from archon_horizon.store.filesystem import (
     FilesystemEventLog,
-    FilesystemMemoryStore,
     FilesystemRoadmapStore,
     FilesystemTaskStore,
 )
@@ -68,7 +66,6 @@ def _build(
     *,
     freeze: FreezeSet | None = None,
     horizon_ok: bool = True,
-    ground_ok: bool = True,
     horizon_report: str | None = None,
     horizon_sets_status: TaskStatus | None = TaskStatus.DONE,
 ) -> tuple[Orchestrator, FilesystemTaskStore]:
@@ -79,13 +76,6 @@ def _build(
         name="ws",
         root=root,
         projects={"ag-main": Project(name="ag-main", path=Path("projects/ag-main"))},
-    )
-
-    # Ground just reports; Horizon succeeds. Work is derived from the roadmap.
-    ground_harness = (
-        NullHarness("Set strategy; R-1 is active.")
-        if ground_ok
-        else NullHarness(lambda req: HarnessResult(ok=False, text="", metadata={"returncode": 1}))
     )
 
     task_store = FilesystemTaskStore(state / "tasks")
@@ -124,14 +114,11 @@ def _build(
     )
     orch = Orchestrator(
         workspace=workspace,
-        ground=HarnessGroundAgent(ground_harness),
         horizon=horizon,
         scheduler=FreezeAwareScheduler(freeze=freeze, max_parallel=2),
         sync=MultiProviderSyncCoordinator([]),
-        locks=InMemoryLockManager(),
         event_log=FilesystemEventLog(state / "events.jsonl"),
         roadmap_store=roadmap_store,
-        memory_store=FilesystemMemoryStore(state / "memory.md"),
         task_store=task_store,
         freeze=freeze or FreezeSet(),
     )
@@ -148,26 +135,6 @@ def test_round_creates_and_runs_a_task(tmp_path: Path) -> None:
     # The derived task id mirrors the active roadmap item id.
     assert reports[0].tasks_run == ("R-1",)
     assert task_store.get("R-1").status is TaskStatus.DONE
-
-
-def test_ground_crash_is_surfaced_not_swallowed(tmp_path: Path) -> None:
-    # A Ground engine that exits non-zero (e.g. a hung MCP tool taking the process
-    # down) used to be recorded as a healthy round with a stub report. It must now
-    # surface a `ground.failed` event and mark the session failed.
-    orch, _ = _build(tmp_path, ground_ok=False)
-
-    orch.run(RunRecord(id="S-0009", rounds_requested=1))
-
-    events = orch.event_log.read_all()
-    assert any(e.type == "ground.failed" for e in events)
-    failed = next(e for e in events if e.type == "ground.failed")
-    assert failed.data.get("returncode") == 1
-
-
-def test_healthy_ground_emits_no_failure(tmp_path: Path) -> None:
-    orch, _ = _build(tmp_path)
-    orch.run(RunRecord(id="S-0010", rounds_requested=1))
-    assert not any(e.type == "ground.failed" for e in orch.event_log.read_all())
 
 
 def test_focus_runs_in_focus_work_and_excludes_others(tmp_path: Path) -> None:
@@ -203,6 +170,20 @@ def test_focused_crashed_session_retries_each_round(tmp_path: Path) -> None:
     history = task_store.get("R-1").metadata.get("history") or []
     reopens = [h for h in history if h.get("field") == "status" and h.get("to") == "queued" and h.get("actor") == "system"]
     assert reopens, "the machine's return-to-queued of a retried task should be recorded in history"
+
+
+def test_run_is_horizon_only_no_ground_sessions(tmp_path: Path) -> None:
+    # The orchestrator is horizon-only: N rounds each run one Horizon session and
+    # there is never a Ground session on disk (cleanup is the Horizon agent's own
+    # call via a subagent). The task never declares terminal, so it runs each round.
+    orch, _ = _build(tmp_path, horizon_sets_status=None)
+
+    reports = orch.run(RunRecord(id="SUP-1", rounds_requested=3))
+
+    # Every round ran exactly one Horizon task and nothing else — no Ground events.
+    assert len(reports) == 3
+    assert all(r.tasks_run == ("R-1",) for r in reports)
+    assert not any(e.type == "ground.failed" for e in orch.event_log.read_all())
 
 
 def test_focused_run_stops_early_when_task_is_done(tmp_path: Path) -> None:
@@ -452,6 +433,23 @@ def test_run_infers_a_task_from_a_roadmap_id(tmp_path: Path) -> None:
     assert reports[0].tasks_run == ("M-1",)
 
 
+def test_materialized_roadmap_task_does_not_copy_the_items_comments(tmp_path: Path) -> None:
+    # Dedup: materializing a task from a roadmap milestone links by reference and
+    # must NOT copy the item's metadata blob — that blob carries the roadmap item's
+    # own comment thread, and copying it duplicated the comments into the task.
+    orch, _ = _build(tmp_path)
+    orch.roadmap_store.save(Roadmap(items=(
+        RoadmapItem(id="M-9", title="Big theorem", projects=("ag-main",), status=RoadmapStatus.ACTIVE),
+    )))
+    orch.roadmap_store.add_comment("M-9", "strategy note that belongs on the roadmap", "ground")
+
+    task = orch.ensure_roadmap_task("M-9")
+
+    assert task is not None
+    assert task.roadmap_refs == ("M-9",)          # linked by reference…
+    assert "comments" not in (task.metadata or {})  # …but no inherited comment thread
+
+
 def test_harness_request_carries_cwd(tmp_path: Path) -> None:
     seen: dict[str, HarnessRequest] = {}
 
@@ -466,69 +464,20 @@ def test_harness_request_carries_cwd(tmp_path: Path) -> None:
     )
     agent = HarnessHorizonAgent(NullHarness(record))
     from archon_horizon.agents.base import HorizonContext
-    from archon_horizon.core.roadmap import Roadmap
 
     ctx = HorizonContext(
         workspace=workspace,
         run=RunRecord(id="S", rounds_requested=1),
         task=HorizonTask(id="T-1", project="p", objective="x", write_set=WriteSet()),
-        roadmap=Roadmap(),
     )
     agent.run_task(ctx)
     assert seen["req"].cwd == tmp_path / "projects" / "p"
 
 
-def test_extract_and_persist_ground_recommendation(tmp_path: Path) -> None:
-    from archon_horizon.orchestration.orchestrator import Orchestrator
-    from archon_horizon.runlog import RunLogTree
-
-    report = """# Summary
-We analyzed the codebase.
-
-# Recommendation
-## 1. Implement feature X
-Do X first.
-### Sub-detail
-Some sub detail.
-
-# Appendix
-Other info.
-"""
-    extracted = Orchestrator._extract_recommendation(report)
-    assert extracted == "# Recommendation\n## 1. Implement feature X\nDo X first.\n### Sub-detail\nSome sub detail."
-
-    run_logs = RunLogTree(tmp_path / "runs")
-    runlog = run_logs.allocate()
-    session = runlog.new_session("ground")
-    session.write_meta({"role": "ground"})
-    Orchestrator._write_recommendation(session, report)
-
-    latest = Orchestrator._latest_ground_recommendation(runlog)
-    assert latest == extracted
-
-
-def test_ground_recommendation_file_is_not_overwritten(tmp_path: Path) -> None:
-    from archon_horizon.orchestration.orchestrator import Orchestrator
-    from archon_horizon.runlog import RunLogTree
-
-    runlog = RunLogTree(tmp_path / "runs").allocate()
-    session = runlog.new_session("ground")
-    explicit = "# Recommendation\n\nDetailed plan the agent wrote during the session."
-    (session.path / "recommendation.md").write_text(explicit + "\n", "utf-8")
-
-    ref = Orchestrator._write_recommendation(
-        session,
-        "# Summary\nGround report.\n\n# Next\n- Short final-report fallback.",
-    )
-
-    assert ref == (session.path / "recommendation.md").as_posix()
-    assert (session.path / "recommendation.md").read_text("utf-8") == explicit + "\n"
-
-
 def test_auth_error_early_stop(tmp_path: Path) -> None:
-    orchestrator, _ = _build(tmp_path, ground_ok=False)
-    # Replace ground harness with one returning auth_error
-    orchestrator.ground = HarnessGroundAgent(
+    orchestrator, _ = _build(tmp_path)
+    # A Horizon session that hits an auth error must stop the whole run.
+    orchestrator.horizon = HarnessHorizonAgent(
         NullHarness(lambda req: HarnessResult(ok=False, text="Not logged in · Please run /login", metadata={"returncode": 1, "failure_reason": "auth_error"}))
     )
 

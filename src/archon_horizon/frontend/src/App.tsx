@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getRunChanges, getWorkingChanges, getSessionFileDiff, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChange, type SessionChangeFile, type RunChanges, type FileDiff } from './api';
+import { editInbox, editRoadmap, editTask, getState, getBlueprints, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChangeFile, type CommitChange, type FileDiff } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
@@ -33,6 +33,7 @@ type HorizonState = {
   config_dir?: string;
   projects?: string[];
   roadmap?: { items?: any[] };
+  roadmap_warnings?: string[];
   tasks?: any[];
   runs?: any[];
   local_inbox?: any[];
@@ -51,7 +52,7 @@ type PageProps = {
 };
 
 // Keep one crashing view from blanking the whole dashboard, and surface the
-// error message (e.g. a vis-network DataSet throw) instead of a white screen.
+// error message (e.g. a graph renderer exception) instead of a white screen.
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
@@ -90,9 +91,14 @@ export function App() {
   const [isError, setIsError] = useState(false);
 
   const reload = () => {
-    getState()
-      .then((next) => {
-        setState(next);
+    // Blueprints ride a separate endpoint (they change only on publish/sync;
+    // its ETag makes the poll a 304), merged back so consumers still read
+    // `state.blueprints`. A blueprint fetch failure never blocks the state.
+    Promise.all([getState(), getBlueprints().catch(() => ({}))])
+      .then(([next, blueprints]) => {
+        setState(
+          next && next.blueprints === undefined ? { ...next, blueprints } : next,
+        );
         setIsError(false);
       })
       .catch(() => setIsError(true));
@@ -1030,6 +1036,30 @@ function orderedRoadmapTree(items: any[]): Array<{ item: any; depth: number }> {
   return out;
 }
 
+// Prune the ordered tree rows to what an expand/collapse state shows: a
+// collapsed item keeps its own row but hides every following row that is
+// deeper (its subtree). Also annotates each row with whether it has children
+// in THIS row list (post-filtering) and how many rows its subtree holds, so
+// the toggle can label what it hides.
+function visibleRoadmapRows(
+  rows: Array<{ item: any; depth: number }>,
+  collapsed: Set<string>,
+): Array<{ item: any; depth: number; hasChildren: boolean; subtreeSize: number }> {
+  const out: Array<{ item: any; depth: number; hasChildren: boolean; subtreeSize: number }> = [];
+  let skipDepth: number | null = null;
+  rows.forEach((row, i) => {
+    if (skipDepth !== null) {
+      if (row.depth > skipDepth) return;
+      skipDepth = null;
+    }
+    let subtreeSize = 0;
+    while (i + 1 + subtreeSize < rows.length && rows[i + 1 + subtreeSize].depth > row.depth) subtreeSize++;
+    out.push({ ...row, hasChildren: subtreeSize > 0, subtreeSize });
+    if (collapsed.has(row.item.id)) skipDepth = row.depth;
+  });
+  return out;
+}
+
 function RoadmapPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const items = state.roadmap?.items ?? [];
@@ -1073,6 +1103,24 @@ function RoadmapPage({ state, reload }: PageProps) {
   // Tree order (parents above sub-items) computed once over the visible items.
   const orderedFiltered = orderedRoadmapTree(filteredItems);
 
+  // Expand/collapse of sub-item trees. Ids of items that have children in the
+  // filtered set — the targets of "Collapse all".
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const parentIds = useMemo(() => {
+    const byId = new Set(filteredItems.map((i: any) => i.id));
+    const ids = new Set<string>();
+    for (const it of filteredItems) {
+      const parent = roadmapParent(it);
+      if (parent && parent !== it.id && byId.has(parent)) ids.add(parent);
+    }
+    return ids;
+  }, [filteredItems]);
+  const toggleCollapsed = (id: string) => setCollapsedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
   return (
     <div className="page">
       <Panel title="Roadmap" subtitle={`${filteredItems.length} item${filteredItems.length === 1 ? '' : 's'}`}>
@@ -1091,16 +1139,47 @@ function RoadmapPage({ state, reload }: PageProps) {
           <div className="search-facet-group"><span className="search-facet-label">Status</span>
             <ChipMultiSelect options={ROADMAP_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Roadmap status filter" />
           </div>
+          {parentIds.size > 0 && (
+            <div className="search-facet-group"><span className="search-facet-label">Tree</span>
+              <button className="text-action" onClick={() => setCollapsedIds(new Set(parentIds))}>Collapse all</button>
+              <button className="text-action" onClick={() => setCollapsedIds(new Set())}>Expand all</button>
+            </div>
+          )}
         </div>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
+        {(state.roadmap_warnings ?? []).map((w: string) => (
+          // Parent/child status inconsistencies — informational only; the CLI/agent
+          // decides whether to correct them (they may be intentional).
+          <div key={w} className="notice error" style={{ opacity: 0.85 }}>⚠ {w}</div>
+        ))}
         <div className="roadmap-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {filteredProjects.map((proj) => (
             <div key={proj as string} className="roadmap-project-group">
               <h3>{proj}</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {orderedFiltered.filter(({ item }) => itemProjects(item).includes(proj)).map(({ item, depth }) => (
-                  <div key={item.id} style={{ marginLeft: `${Math.min(depth, 6) * 1.5}rem` }}>
-                    <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                {visibleRoadmapRows(
+                  orderedFiltered.filter(({ item }) => itemProjects(item).includes(proj)),
+                  collapsedIds,
+                ).map(({ item, depth, hasChildren, subtreeSize }) => (
+                  <div key={item.id} style={{ marginLeft: `${Math.min(depth, 6) * 1.5}rem`, display: 'flex', alignItems: 'flex-start', gap: '0.35rem' }}>
+                    {hasChildren ? (
+                      <button
+                        className="tree-toggle button-reset"
+                        onClick={() => toggleCollapsed(item.id)}
+                        aria-expanded={!collapsedIds.has(item.id)}
+                        title={collapsedIds.has(item.id)
+                          ? `Show ${subtreeSize} sub-item${subtreeSize === 1 ? '' : 's'}`
+                          : `Hide ${subtreeSize} sub-item${subtreeSize === 1 ? '' : 's'}`}
+                      >
+                        {collapsedIds.has(item.id) ? '▸' : '▾'}
+                        {collapsedIds.has(item.id) && <span className="tree-toggle-count">{subtreeSize}</span>}
+                      </button>
+                    ) : (
+                      <span className="tree-toggle-spacer" aria-hidden="true" />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1826,8 +1905,6 @@ function Transcripts({ state }: { state?: any }) {
   const [report, setReport] = useState<string>('');
   const [recommendation, setRecommendation] = useState<string>('');
   const [selected, setSelected] = useState<string>('');
-  const [changes, setChanges] = useState<RunChanges | null>(null);
-  const [workingChange, setWorkingChange] = useState<SessionChange | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const selectedSession = useMemo(() => findSessionByRef(runs, selected), [runs, selected]);
   const selectedRun = useMemo(() => findRunBySessionRef(runs, selected), [runs, selected]);
@@ -1843,40 +1920,6 @@ function Transcripts({ state }: { state?: any }) {
     return () => clearInterval(id);
   }, []);
 
-  // Load the deterministic per-session change view for the selected run (diff +
-  // sorry delta computed server-side from the ledger). Refetched when the run
-  // changes; the payload is small and static-mode reads it from a precomputed file.
-  const selectedRunId = selectedRun?.id;
-  useEffect(() => {
-    if (!selectedRunId) { setChanges(null); return; }
-    let cancelled = false;
-    getRunChanges(selectedRunId)
-      .then((c) => { if (!cancelled) setChanges(c); })
-      .catch(() => { if (!cancelled) setChanges(null); });
-    return () => { cancelled = true; };
-  }, [selectedRunId]);
-  const committedChange = useMemo(
-    () => changes?.sessions.find((s) => s.session === selectedSession?.session),
-    [changes, selectedSession],
-  );
-  // A running session hasn't committed yet: show the live working-tree diff
-  // (current uncommitted state vs the run's last committed session) instead,
-  // polled while it stays running.
-  const sessionRunning = selectedSession?.status === 'running';
-  useEffect(() => {
-    if (!selectedRunId || !sessionRunning) { setWorkingChange(null); return; }
-    let cancelled = false;
-    const load = () => {
-      getWorkingChanges(selectedRunId, selectedSession?.session)
-        .then((c) => { if (!cancelled) setWorkingChange({ ...c, session: selectedSession?.session }); })
-        .catch(() => { if (!cancelled) setWorkingChange(null); });
-    };
-    load();
-    const id = setInterval(load, 4000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [selectedRunId, sessionRunning, selectedSession?.session]);
-  const sessionChange = sessionRunning ? (workingChange ?? undefined) : committedChange;
-
   // Deep-link / selection: keep `selected` in sync with the URL.
   useEffect(() => {
     setSelected(searchParams.get('ref') ?? '');
@@ -1884,28 +1927,34 @@ function Transcripts({ state }: { state?: any }) {
 
   // Live-tail the open transcript + its report: fetch on select, then poll so
   // new events and the final report appear without a manual page refresh.
+  //
+  // Only a *live* session needs the tail. A `session_end` in the stream means the
+  // transcript is closed and can never gain another event, so we stop polling it
+  // — re-fetching a finished multi-MB transcript every 3s rebuilt every event
+  // object, which defeated the row memoization and re-ran the markdown/KaTeX
+  // conversion in every expanded panel. `report.md` is written just *after* the
+  // stream closes, so keep polling a couple of cycles past `session_end` to catch
+  // it before going quiet for good.
   useEffect(() => {
     if (!selected) { setEvents(null); setReport(''); setRecommendation(''); return; }
     let cancelled = false;
-    const load = () => {
-      getTranscript(selected).then((e) => { if (!cancelled) setEvents(e); }).catch(() => { if (!cancelled) setEvents([]); });
-      getReport(selected)
-        .then((r) => {
-          if (!cancelled) {
-            setReport(r?.markdown ?? '');
-            setRecommendation(r?.recommendation ?? '');
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setReport('');
-            setRecommendation('');
-          }
-        });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let graceLeft = 2;
+    const load = async () => {
+      const [tx, rep] = await Promise.all([
+        getTranscript(selected).then((e) => e, () => null),
+        getReport(selected).then((r) => r, () => null),
+      ]);
+      if (cancelled) return;
+      setEvents(tx ?? []);
+      setReport(rep?.markdown ?? '');
+      setRecommendation(rep?.recommendation ?? '');
+      const ended = Array.isArray(tx) && tx.some((event: any) => event?.kind === 'session_end');
+      if (ended && graceLeft-- <= 0) return;
+      timer = setTimeout(load, 3000);
     };
     load();
-    const id = setInterval(load, 3000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); };
   }, [selected]);
 
   return (
@@ -1930,8 +1979,7 @@ function Transcripts({ state }: { state?: any }) {
         run={selectedRun}
         selected={selected}
         session={selectedSession}
-        change={sessionChange}
-        changesRunId={selectedRunId}
+        runId={selectedRun?.id}
         nextSessionStart={selectedNextStart}
         activeTickSession={activeTickSession}
       />
@@ -1957,6 +2005,50 @@ function subagentLabel(event: any): string {
 type LogGroup =
   | { sub: false; item: { event: any; idx: number } }
   | { sub: true; id: string; label: string; items: { event: any; idx: number }[] };
+
+/** How many log entries a list renders before it asks. Also the size of one
+ * "show more" step. Sessions run to ~900 events at the tail, and a single tool
+ * result can be hundreds of KB, so rendering a whole session on open costs far
+ * more than anyone reads — the newest events are the ones you came for. */
+const EVENT_PAGE = 120;
+
+/** One subagent's events as a collapsible sublog.
+ *
+ * The parent list counts a whole group as one entry, so a subagent that ran
+ * hundreds of events would paint all of them in a single frame no matter how the
+ * outer cap is set. Cap the inner list the same way. (Collapsing wouldn't help:
+ * `<details>` mounts its children whether or not it's open.) */
+function SubagentSublog({ group }: { group: Extract<LogGroup, { sub: true }> }) {
+  const [limit, setLimit] = useState(EVENT_PAGE);
+  const model = group.items.find(({ event }) => event?.data?.model)?.event?.data?.model;
+  const hidden = Math.max(0, group.items.length - limit);
+  return (
+    <details className="log-panel subagent-sublog" open>
+      <summary>
+        <span className="role-badge role-subagent">S</span>
+        <span className="subagent-name">{group.label}</span>
+        {model ? <span className="subagent-model" title="Model used by this subagent">{model}</span> : null}
+        <UsageChips usage={subagentGroupUsage(group.items)} />
+        <span className="subagent-count">{group.items.length} events</span>
+      </summary>
+      <div className="log-lines sublog-lines">
+        {group.items.slice(0, limit).map(({ event, idx }) => (
+          <TranscriptEvent key={idx} event={event} forceOpen={null} />
+        ))}
+        {hidden > 0 && <ShowMoreButton hidden={hidden} onMore={() => setLimit((l) => l + EVENT_PAGE)} />}
+      </div>
+    </details>
+  );
+}
+
+function ShowMoreButton({ hidden, onMore }: { hidden: number; onMore: () => void }) {
+  return (
+    <button type="button" className="log-expand-more" onClick={onMore}>
+      Show {Math.min(hidden, EVENT_PAGE)} more
+      <span className="log-expand-rest">{hidden} older {hidden === 1 ? 'entry' : 'entries'} hidden</span>
+    </button>
+  );
+}
 
 function sumUsage(usages: any[]) {
   let hasCost = false;
@@ -2101,8 +2193,8 @@ function GitUnifiedDiff({ text }: { text: string }) {
 
 // One file row: click the name to lazily load and expand its diff. Only the
 // base file name is shown (paths are often very long); hover reveals the path.
-function FileChangeRow({ runId, session, file, showComments, initial, worktree }: {
-  runId: string; session: string; file: SessionChangeFile; showComments: boolean; initial?: boolean; worktree?: boolean;
+function FileChangeRow({ runId, session, file, showComments, sha }: {
+  runId: string; session: string; file: SessionChangeFile; showComments: boolean; sha: string;
 }) {
   const [open, setOpen] = useState(false);
   const [diff, setDiff] = useState<FileDiff | null>(null);
@@ -2113,7 +2205,8 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree }
     const next = !open;
     setOpen(next);
     if (next && diff === null) {
-      getSessionFileDiff(runId, session, file.path, worktree).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
+      // Commit-granular: exactly what this one commit changed in the file.
+      getSessionFileDiff(runId, session, file.path, sha).then(setDiff).catch(() => setDiff({ path: file.path, available: false, diff: '' }));
     }
   };
   return (
@@ -2123,8 +2216,7 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree }
           <button className="change-file-btn" onClick={toggle} title={file.path}>
             <span className="change-caret">{open ? '▾' : '▸'}</span>
             <span className="change-fname">{name}</span>
-            {/* Suppress "new" on the run's initial snapshot, where every file is trivially new. */}
-            {!initial && file.added && <span className="file-tag added">new</span>}
+            {file.added && <span className="file-tag added">new</span>}
             {file.deleted && <span className="file-tag deleted">del</span>}
             <DeclarationDelta delta={file.decl_delta} compact />
           </button>
@@ -2154,168 +2246,135 @@ function FileChangeRow({ runId, session, file, showComments, initial, worktree }
 // Deterministic per-session change view: agent sessions show only files from
 // agent-authored semantic commits; system/integration commits remain visible as
 // ledger metadata. Lean and blueprint files get their own tabs.
-const EMPTY_CHANGE_ROLLUP = {
-  files: 0,
-  add: 0,
-  del: 0,
-  loc_after: 0,
-  loc_code_after: 0,
-  loc_delta: 0,
-  loc_code_delta: 0,
-  sorry_after: 0,
-  sorry_delta: 0,
-};
-
-function changeRollup(change: SessionChange, key: 'lean' | 'blueprint') {
-  const roll = (change as any)[key] ?? {};
-  const merged = { ...EMPTY_CHANGE_ROLLUP, ...roll };
-  if (key === 'lean') {
-    return {
-      ...merged,
-      files: roll.files ?? change.lean_files_changed ?? merged.files,
-      loc_delta: roll.loc_delta ?? change.loc_add ?? merged.loc_delta,
-      loc_code_delta: roll.loc_code_delta ?? change.loc_add ?? merged.loc_code_delta,
-      sorry_delta: roll.sorry_delta ?? change.sorry_delta ?? merged.sorry_delta,
-    };
-  }
-  return merged;
-}
-
-// One-line caveat about how faithfully the diff attributes files to this session.
-function attributionNote(change: SessionChange): string {
-  if (change.worktree) {
-    const excluded = change.excluded_count ? ` Pre-existing dirty files excluded: ${change.excluded_count}.` : '';
-    return `Live working-tree view: current uncommitted changes vs this run's baseline or last committed session.${excluded}`;
-  }
-  if (change.change_source === 'agent-commits') return 'Shows only files from this session\'s agent-authored semantic commits. Deterministic integration commits are listed separately and do not add files here.';
-  if (change.change_source === 'no-agent-commits') return 'No agent-authored semantic commits were recorded for this session; deterministic integration commits are listed separately.';
-  if (change.change_source === 'deterministic-commits') return 'System view: deterministic ledger commits for this session.';
-  return 'Fallback view from the integration ledger; commit provenance was incomplete for this older session.';
-}
-
-function attributionWarning(change: SessionChange): string {
-  const detail = attributionNote(change);
-  return `Change attribution is approximate and may be inaccurate with parallel runs or workspaces that used older commit conventions. ${detail}`;
-}
-
-function SessionChanges({ change, runId }: {
-  change: SessionChange; runId: string;
-}) {
-  const [tab, setTab] = useState<'lean' | 'blueprint'>('lean');
-  const [showComments, setShowComments] = useState(true);
-  const leanRoll = changeRollup(change, 'lean');
-  const blueprintRoll = changeRollup(change, 'blueprint');
-  const filesAll = change.files ?? [];
-  const otherCount = change.other_count ?? 0;
-  const excludedCount = change.excluded_count ?? 0;
-  const initial = Boolean(change.initial);
-  const worktree = Boolean(change.worktree);
-  const hasBlueprint = blueprintRoll.files > 0;
-  const active = (!hasBlueprint || tab === 'lean') ? 'lean' : 'blueprint';
-  const roll = active === 'lean' ? leanRoll : blueprintRoll;
-  const files = filesAll.filter((f) => f.category === active);
-
+// One commit rendered as a distinct card: message (the progress statement) + its
+// own per-file diff. Expands to that single commit's files (diff scoped by sha).
+function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: string; session: string }) {
+  const [open, setOpen] = useState(false);
+  const files = (commit.files ?? []).filter((f) => f.category === 'lean' || f.category === 'blueprint');
+  const isAgent = commit.kind === 'agent';
   return (
-    <details className="log-panel change-panel" open>
-      <summary>
-        {worktree ? 'Changes (live)' : 'Changes'}
-        <span className="change-scorecard-col">
-          <span className="change-scorecard">
-            {change.available ? (
-              <>
-                {active === 'lean' && (
-                  <span className="change-stat" title="Open sorries after this session (change)">
-                    <AfterDelta after={roll.sorry_after} delta={roll.sorry_delta} goodWhenNegative /> sorry
-                  </span>
-                )}
-                <span className="change-stat" title={showComments ? 'total lines after (change)' : 'code lines after (change)'}>
-                  <AfterDelta after={showComments ? roll.loc_after : roll.loc_code_after} delta={showComments ? roll.loc_delta : roll.loc_code_delta} /> {showComments ? 'loc' : 'code'}
-                </span>
-                <span className="change-stat muted" title="raw line churn (git)"><span className="delta good">+{roll.add}</span>/<span className="delta bad">−{roll.del}</span></span>
-                <span className="change-stat">{roll.files} file{roll.files === 1 ? '' : 's'}</span>
-              </>
-            ) : (change as any).reason === 'no-changes' ? (
-              <span className="change-stat muted">No file changes in this session.</span>
-            ) : (
-              <span className="change-stat muted">{filesAll.length} file{filesAll.length === 1 ? '' : 's'} changed · diff unavailable (no VCS history)</span>
-            )}
-          </span>
-          {change.available && <DeclarationDelta delta={roll.decl_delta} />}
+    <div className={`commit-card ${isAgent ? 'agent' : 'system'}`}>
+      <button className="commit-card-head" onClick={() => setOpen(!open)} title={commit.sha}>
+        <span className="change-caret">{open ? '▾' : '▸'}</span>
+        <span className={`commit-kind ${commit.kind || 'other'}`}>{isAgent ? (commit.role || 'agent') : (commit.kind || 'commit')}</span>
+        <span className="commit-copy">
+          <span className="commit-subject">{commit.subject}</span>
+          {commit.created_at && (
+            <time className="commit-time" dateTime={commit.created_at} title={commit.created_at}>
+              {formatDateTime(commit.created_at)}
+            </time>
+          )}
         </span>
+        {commit.sorry_delta !== 0 && (
+          <span className="commit-stat"><AfterDelta after={commit.lean?.sorry_after ?? 0} delta={commit.sorry_delta} goodWhenNegative /> sorry</span>
+        )}
+        <span className="commit-sha">{commit.short_sha}</span>
+      </button>
+      {open && (
+        files.length === 0 ? (
+          <p className="empty commit-empty">No Lean/blueprint files in this commit{commit.other_count ? ` (+${commit.other_count} shared-state file${commit.other_count === 1 ? '' : 's'})` : ''}.</p>
+        ) : (
+          <table className="change-table">
+            <tbody>
+              {files.map((f) => (
+                <FileChangeRow key={f.path} runId={runId} session={session} file={f} showComments sha={commit.sha} />
+              ))}
+            </tbody>
+          </table>
+        )
+      )}
+    </div>
+  );
+}
+
+// The commit-granular "progress" panel for a session: each commit is a card whose
+// message + diff IS the progress record. Fetched lazily from /api/session/commits.
+function SessionCommitsPanel({ runId, session }: { runId: string; session: string }) {
+  const [commits, setCommits] = useState<CommitChange[] | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const [error, setError] = useState<string>('');
+  useEffect(() => {
+    let live = true;
+    let frame: number | undefined;
+    let offset = 0;
+    setCommits(null);
+    setTotal(null);
+    setError('');
+
+    const loadNext = async () => {
+      try {
+        const page = await getSessionCommits(runId, session, offset, 1);
+        if (!live) return;
+        setTotal(page.total ?? null);
+        setCommits((current) => [...(current ?? []), ...(page.commits ?? [])]);
+        if (page.has_more && page.next_offset != null) {
+          offset = page.next_offset;
+          frame = requestAnimationFrame(() => { void loadNext(); });
+        }
+      } catch {
+        if (live) setError('Unable to load the remaining commits.');
+      }
+    };
+    void loadNext();
+    return () => {
+      live = false;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [runId, session]);
+  if (commits === null) {
+    return (
+      <details className="log-panel commits-panel" open>
+        <summary>Commits</summary>
+        <p className="empty commit-loading">Loading commit history…</p>
+      </details>
+    );
+  }
+  if (commits.length === 0) return null;
+  return (
+    <details className="log-panel commits-panel" open>
+      <summary>
+        Commits <span className="commits-count">{total == null ? commits.length : `${commits.length}/${total}`}</span>
       </summary>
-
-      <div className="change-controls">
-        {hasBlueprint && (
-          <div className="change-tabs">
-            <button className={active === 'lean' ? 'on' : ''} onClick={() => setTab('lean')}>Lean ({leanRoll.files})</button>
-            <button className={active === 'blueprint' ? 'on' : ''} onClick={() => setTab('blueprint')}>Blueprint ({blueprintRoll.files})</button>
-          </div>
-        )}
-        <label className="change-toggle" title="Count comment/blank lines in the LOC figures (raw churn always includes them)">
-          <input type="checkbox" checked={showComments} onChange={(e) => setShowComments(e.target.checked)} /> count comments in LOC
-        </label>
-        {otherCount > 0 && (
-          <span className="change-other muted" title="Shared workspace state committed alongside the code (events log, roadmap, config…); excluded from the code stats">
-            +{otherCount} shared-state file{otherCount === 1 ? '' : 's'}
-          </span>
-        )}
-        {excludedCount > 0 && (
-          <span className="change-other muted" title="Files that were already dirty when this session started; excluded from this live attribution">
-            {excludedCount} pre-existing dirty file{excludedCount === 1 ? '' : 's'} excluded
-          </span>
-        )}
+      <div className="commit-cards">
+        {commits.map((c) => <CommitCard key={c.sha} commit={c} runId={runId} session={session} />)}
       </div>
-
-      <p className="change-attr-note warning" title={attributionWarning(change)}>
-        <strong>Warning:</strong> {attributionWarning(change)}
-      </p>
-      {change.commits && change.commits.length > 0 && (
-        <div className="change-commits">
-          {change.commits.map((c) => (
-            <div key={c.sha} className="change-commit" title={c.sha}>
-              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
-              <span className="change-commit-msg">{c.subject}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {change.system_commits && change.system_commits.length > 0 && (
-        <div className="change-commits system">
-          {change.system_commits.map((c) => (
-            <div key={c.sha} className="change-commit" title={c.sha}>
-              <span className="change-commit-sha">{c.sha.slice(0, 8)}</span>
-              <span className="change-commit-msg">{c.kind ? `${c.kind}: ` : ''}{c.subject}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {initial && (
-        <p className="change-initial-note">Initial snapshot — no prior commit to compare against, so these are the current contents.</p>
-      )}
-
-      {files.length === 0 ? (
-        <p className="empty change-empty">{change.available
-          ? `No ${active} files changed in this session.`
-          : 'No diff to show.'}</p>
-      ) : (
-        <table className="change-table">
-          <tbody>
-            {files.map((f) => (
-              <FileChangeRow
-                key={f.path}
-                runId={runId}
-                session={change.session}
-                file={f}
-                showComments={showComments}
-                initial={initial}
-                worktree={worktree}
-              />
-            ))}
-          </tbody>
-        </table>
-      )}
+      {error && <p className="empty commit-loading">{error}</p>}
     </details>
   );
+}
+
+function lifecycleIdentity(event: any): string {
+  const data = event?.data ?? {};
+  if (data.subagent_key) return `key:${String(data.subagent_key)}`;
+  if (data.name) return `name:${String(data.name)}`;
+  return '';
+}
+
+/** Pair lifecycle end rows with their dispatch row without changing the stored
+ * append-only transcript. Native engines do not always report a duration, but
+ * both give us timestamps and a stable tool/task identity. */
+function annotateSubagentDurations(events: any[] | null): any[] | null {
+  if (!events) return events;
+  const starts = new Map<string, any>();
+  const startsByName = new Map<string, any>();
+  return events.map((event) => {
+    if (event?.kind === 'subagent_start') {
+      const identity = lifecycleIdentity(event);
+      if (identity) starts.set(identity, event);
+      if (event.data?.name) startsByName.set(String(event.data.name), event);
+      return event;
+    }
+    if (event?.kind !== 'subagent_end' || event.data?.duration_seconds != null) return event;
+    const identity = lifecycleIdentity(event);
+    const start = (identity ? starts.get(identity) : null)
+      ?? (event.data?.name ? startsByName.get(String(event.data.name)) : null);
+    const duration = durationSeconds(start?.at, event.at);
+    if (duration === null) return event;
+    return {
+      ...event,
+      data: { ...event.data, started_at: start.at, duration_seconds: duration },
+    };
+  });
 }
 
 function TranscriptViewer({
@@ -2326,8 +2385,7 @@ function TranscriptViewer({
   run,
   selected,
   session,
-  change,
-  changesRunId,
+  runId,
   nextSessionStart,
   activeTickSession,
 }: {
@@ -2338,12 +2396,12 @@ function TranscriptViewer({
   run?: any;
   selected: string;
   session?: any;
-  change?: SessionChange;
-  changesRunId?: string;
+  runId?: string;
   nextSessionStart?: string;
   activeTickSession?: string;
 }) {
-  const start = events?.find((event: any) => event.kind === 'session_start');
+  const displayEvents = useMemo(() => annotateSubagentDurations(events), [events]);
+  const start = displayEvents?.find((event: any) => event.kind === 'session_start');
   const prompt = start?.data?.prompt ? stripAnsi(String(start.data.prompt)).trim() : '';
   const harness = start?.data?.harness ?? session?.meta?.data?.harness ?? '';
   const harnessConfig = harness ? harnesses?.[harness] : undefined;
@@ -2353,25 +2411,34 @@ function TranscriptViewer({
   // keying by the reversed position would reassign every row's open/collapsed
   // state to a different event whenever a new event is prepended, which both
   // reopens rows the user had closed and breaks native scroll anchoring.
-  const ordered = events
-    ? events
+  const ordered = displayEvents
+    ? displayEvents
         .map((event: any, idx: number) => ({ event, idx }))
         .filter(({ event }: any) => event.kind !== 'session_start' && event.kind !== 'session_meta')
         .reverse()
-    : events;
+    : displayEvents;
   const role = session ? sessionRole(session) : '';
   const groups = role === 'subagent' ? null : groupSubagents(ordered);
   // Progressive rendering: paint the newest events immediately and stream the
   // rest in over the next frames, so a long session doesn't block on rendering
   // every event before anything shows. Reset the ramp when the session changes.
+  //
+  // The ramp only covers the capped slice. Past `EVENT_PAGE` the older tail is
+  // rendered on request rather than automatically: the git panel, the report and
+  // the newest events answer most of what you open a session for, and paying to
+  // render the whole history before you've asked for it is what made this slow.
   const renderList: any[] = groups ?? ordered ?? [];
-  const shownCount = useProgressiveCount(renderList.length, { resetKey: selected, initial: 40, step: 100 });
-  const remaining = renderList.length - shownCount;
+  const [limit, setLimit] = useState(EVENT_PAGE);
+  useEffect(() => { setLimit(EVENT_PAGE); }, [selected]);
+  const capped = Math.min(renderList.length, limit);
+  const shownCount = useProgressiveCount(capped, { resetKey: selected, initial: 40, step: 100 });
+  const rendering = capped - shownCount;
+  const hidden = renderList.length - capped;
   const title = session?.meta?.name ?? session?.session ?? 'Log';
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
   // the session meta is written at the end of the run).
-  const observedModel = events?.find((event: any) => event?.data?.model)?.data?.model;
+  const observedModel = displayEvents?.find((event: any) => event?.data?.model)?.data?.model;
   // Only what this run actually recorded: session meta, or the model the engine
   // stamped onto its own event stream. Never the live harnessConfig — config.yaml
   // drifts over time, so backfilling a past run from it would mislabel it. When
@@ -2410,7 +2477,9 @@ function TranscriptViewer({
           {selected && <p className="transcript-ref">{selected}</p>}
         </div>
       </div>
-      {change && <SessionChanges change={change} runId={changesRunId ?? ''} />}
+      {runId && session?.session && !session?.synthetic && (
+        <SessionCommitsPanel runId={runId} session={session.session} />
+      )}
       {recommendation && recommendation.trim() && (
         <details className="log-panel report-panel" open>
           <summary>Recommendation</summary>
@@ -2433,31 +2502,18 @@ function TranscriptViewer({
       <div className="log-lines">
         {groups ? groups.slice(0, shownCount).map((group, i) =>
           group.sub ? (
-            <details key={`sub-${group.id}-${i}`} className="log-panel subagent-sublog" open>
-              <summary>
-                <span className="role-badge role-subagent">S</span>
-                <span className="subagent-name">{group.label}</span>
-                {(() => {
-                  const m = group.items.find(({ event }) => event?.data?.model)?.event?.data?.model;
-                  return m ? <span className="subagent-model" title="Model used by this subagent">{m}</span> : null;
-                })()}
-                <UsageChips usage={subagentGroupUsage(group.items)} />
-                <span className="subagent-count">{group.items.length} events</span>
-              </summary>
-              <div className="log-lines sublog-lines">
-                {group.items.map(({ event, idx }) => (
-                  <TranscriptEvent key={idx} event={event} forceOpen={null} />
-                ))}
-              </div>
-            </details>
+            <SubagentSublog key={`sub-${group.id}-${i}`} group={group} />
           ) : (
             <TranscriptEvent key={group.item.idx} event={group.item.event} forceOpen={null} />
           ),
         ) : ordered?.slice(0, shownCount).map(({ event, idx }: any) => (
           <TranscriptEvent key={idx} event={event} forceOpen={null} />
         ))}
-        {remaining > 0 && (
-          <p className="empty transcript-empty transcript-loading-more">Rendering {remaining} more event{remaining === 1 ? '' : 's'}…</p>
+        {rendering > 0 && (
+          <p className="empty transcript-empty transcript-loading-more">Rendering {rendering} more event{rendering === 1 ? '' : 's'}…</p>
+        )}
+        {hidden > 0 && rendering === 0 && (
+          <ShowMoreButton hidden={hidden} onMore={() => setLimit((l) => l + EVENT_PAGE)} />
         )}
       </div>
       {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} nextSessionStart={nextSessionStart} tick={sessionKey(session) === activeTickSession} />}
@@ -2586,6 +2642,7 @@ function SessionParameters({
 const EVENT_COLORS: Record<string, string> = {
   thinking: '#7c3aed', text: '#2563eb', tool_call: '#d97706',
   tool_result: '#059669', error: '#dc2626', session_start: '#64748b', session_end: '#64748b',
+  subagent_start: '#7c3aed', subagent_end: '#15803d',
 };
 // Render text/thinking as markdown (after stripping terminal ANSI); everything
 // else stays monospace. The input prompt is rendered by TranscriptViewer.
@@ -2634,7 +2691,7 @@ function commandTag(event: any): string | null {
     const cmd = String(event.data?.input?.command ?? event.data?.command ?? '');
     if (/horizon-subagent\.py/.test(cmd)) return 'subagent';
     if (/\bhorizon\s+inbox\b/.test(cmd)) return 'inbox';
-    if (/\bhorizon\s+leandag\b/.test(cmd)) return 'dag';
+    if (/\bhorizon\s+graph\b/.test(cmd)) return 'dag';
     if (/\bhorizon\s+blueprint\b/.test(cmd)) return 'blueprint';
     if (/\bhorizon\s+search\b/.test(cmd)) return 'search';
     if (/\blake\b|\blean\b/.test(cmd)) return 'lean';
@@ -2989,7 +3046,34 @@ function ToolResultView({ event, text }: { event: any; text: string }) {
   );
 }
 
+function SubagentLifecycleView({ event }: { event: any }) {
+  const data = event.data ?? {};
+  const started = event.kind === 'subagent_start';
+  const name = String(data.name || 'subagent');
+  const status = String(data.status || (started ? 'running' : 'closed'));
+  const duration = data.duration_seconds != null ? formatSeconds(Number(data.duration_seconds)) : '';
+  return (
+    <div className={`subagent-lifecycle-card ${started ? 'started' : 'ended'}`}>
+      <span className="subagent-lifecycle-glyph" aria-hidden="true">{started ? '↗' : status === 'completed' ? '✓' : '■'}</span>
+      <div className="subagent-lifecycle-main">
+        <strong>{name}</strong>
+        <span>{started ? 'agent dispatched' : `agent ${status}`}</span>
+        {data.summary && String(data.summary) !== event.text ? <small>{String(data.summary)}</small> : null}
+      </div>
+      <div className="subagent-lifecycle-meta">
+        {data.nickname ? <span>{String(data.nickname)}</span> : null}
+        {data.subagent_type ? <span>{String(data.subagent_type)}</span> : null}
+        {data.model ? <span>{shortModel(String(data.model))}</span> : null}
+        {duration ? <span>{duration}</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function EventBodyView({ event, text }: { event: any; text: string }) {
+  if (event.kind === 'subagent_start' || event.kind === 'subagent_end') {
+    return <SubagentLifecycleView event={event} />;
+  }
   if (event.kind === 'usage') return <UsageBlock usage={event.usage ?? event.data} />;
   if (event.kind === 'tool_call' && event.data?.actor && text) {
     return (
@@ -3019,7 +3103,15 @@ const TranscriptEvent = React.memo(function TranscriptEvent({ event, forceOpen }
   useEffect(() => { if (forceOpen !== null) setOpen(forceOpen); }, [forceOpen]);
   const color = EVENT_COLORS[event.kind] ?? 'var(--text-muted)';
   const fullLabel = event.tool ? event.tool : event.kind;
-  const label = event.tool ? shortTool(event.tool) : event.kind === 'session_start' ? 'input' : event.kind;
+  const label = event.tool
+    ? shortTool(event.tool)
+    : event.kind === 'session_start'
+      ? 'input'
+      : event.kind === 'subagent_start'
+        ? 'agent start'
+        : event.kind === 'subagent_end'
+          ? 'agent end'
+          : event.kind;
   const tag = commandTag(event);
   const preview = text.slice(0, 120).replace(/\s+/g, ' ');
   // Click anywhere in the row to expand/collapse a long event — but don't fight

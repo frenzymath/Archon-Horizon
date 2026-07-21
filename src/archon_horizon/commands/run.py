@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import dataclasses
+import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,13 +18,14 @@ from archon_horizon.core.sessions import Focus, RunRecord
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.log import log
+from archon_horizon.transcript.sink import latest_report_text
 
 from .dashboard import LOCAL_DASHBOARD_HOST, resolve_dashboard_host
 from .shared import emit_json, inbox_providers, load_workspace
 
-# The single-agent run targets. ``horizon run ground`` / ``horizon run horizon``
-# drive exactly one session of that role instead of the usual G/H alternation.
-ROLE_TARGETS = ("ground", "horizon")
+# The single-agent run target: ``horizon run horizon`` drives exactly one
+# Horizon session over the current focus.
+ROLE_TARGETS = ("horizon",)
 
 
 class RunCommand:
@@ -37,6 +39,8 @@ class RunCommand:
         dry_run: bool = False,
         resume: str | None = None,
         backend: str = "default",
+        bare: bool = False,
+        supervisor: bool = False,
         run_id: str | None = None,
         round_index: int | None = None,
         as_json: bool = False,
@@ -51,6 +55,8 @@ class RunCommand:
         self.dry_run = dry_run
         self.resume = resume
         self.backend = (backend or "default").strip().lower()
+        self.bare = bare
+        self.supervisor = supervisor
         self.run_id = (run_id or "").strip() or None
         self.round_index = round_index
         self.as_json = as_json
@@ -61,6 +67,9 @@ class RunCommand:
     def run(self) -> None:
         if not self.targets and self.task:
             self.targets = (self.task,)
+        # `--bare` is a lightweight *interactive* seed, so it implies that backend.
+        if self.bare:
+            self.backend = "interactive"
 
         with self._dashboard_server():
             # `--backend interactive` hands the terminal straight to the engine so a
@@ -89,22 +98,52 @@ class RunCommand:
                 run = self._resume_run(orch)
                 reports = orch.run(run, resume=True, rounds_override=self.rounds)
                 self._emit_reports(reports)
+                self._exit_if_paused(orch)
                 return
 
-            if not self.targets:
-                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `ground`, `horizon`, task names, project names, or files.")
+            if not self.targets and not self.supervisor:
+                log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `horizon`, task names, project names, or files (or `--supervisor` for all queued work).")
                 raise typer.Exit(1)
 
-            # `horizon run ground` / `horizon run horizon`: one session of that role.
-            if len(self.targets) == 1 and self.targets[0] in ROLE_TARGETS:
-                reports = self._run_single_role(orch, self.targets[0])
-                self._emit_reports(reports)
-                return
-
-            focus = self._resolve_focus(orch, tuple(self.targets))
-            run = RunRecord(id="", focus=focus, rounds_requested=self.rounds or cfg.rounds)
-            reports = orch.run(run, dry_run=self.dry_run)
+            reports = orch.run(self._build_run(orch, cfg.rounds), dry_run=self.dry_run)
             self._emit_reports(reports)
+            self._exit_if_paused(orch)
+
+    @staticmethod
+    def _exit_if_paused(orch) -> None:
+        """Distinct exit code (3) when the run paused on a limit/budget, so an
+        external relaunch loop can tell 'paused, resumable' from success/failure.
+        The pause details live in ``runs/<id>/paused.json``."""
+        paused = getattr(orch, "last_paused", None)
+        if not paused:
+            return
+        hint = paused.get("retry_after_s")
+        wait = f" (engine advertised retry after {hint}s)" if hint else ""
+        log.warn(
+            f"Run paused: {paused.get('reason')}{wait}. State is on disk — resume with "
+            f"`{paused.get('resume')}`."
+        )
+        raise typer.Exit(3)
+
+    def _build_run(self, orch, default_rounds: int) -> RunRecord:
+        """Every launch shape reduces to a focus plus a RunRecord:
+
+        - ``horizon run horizon [targets…]`` drives ONE session over the focus
+          (with ``--run``/``--round`` to append it into an existing run);
+        - ``--supervisor`` drives N rounds over the focus (empty focus = all
+          queued work);
+        - plain targets drive N rounds pinned to the resolved focus.
+        """
+        role_session = bool(self.targets) and self.targets[0] in ROLE_TARGETS
+        focus_targets = tuple(self.targets[1:] if role_session else self.targets)
+        focus = self._resolve_focus(orch, focus_targets) if focus_targets else Focus()
+        rounds = self.rounds or (1 if role_session else default_rounds)
+        return RunRecord(
+            id=self.run_id or "",
+            focus=focus,
+            rounds_requested=rounds,
+            start_round=self.round_index or 0,
+        )
 
     @contextmanager
     def _dashboard_server(self) -> Iterator[None]:
@@ -145,39 +184,15 @@ class RunCommand:
             server.shutdown()
             thread.join(timeout=5)
 
-    def _run_single_role(self, orch, role: str):
-        """Drive exactly one session of ``role``.
-
-        Ground: run the opening plan only (``rounds=0`` runs the opener, then the
-        loop body never executes). Horizon: skip the opening and closing Ground
-        (``start_with``/``end_with`` = ``horizon``) and run a single round, so the
-        run is one bare Horizon step over the current focus.
-
-        ``--run <id>`` appends the session to an existing (or new) run directory
-        instead of allocating a fresh run, and ``--round <n>`` numbers it — so a
-        human hand-driving ground → horizon → horizon → … into one run keeps the
-        logs, session metadata, and commit trailers consistent with the automatic
-        alternation (and the dashboard groups them under that one run)."""
-        run_id = self.run_id or ""
-        start_round = self.round_index or 0
-        if role == "ground":
-            orch.start_with, orch.end_with = "ground", "ground"
-            run = RunRecord(id=run_id, focus=Focus(), rounds_requested=0, start_round=start_round)
-        else:  # horizon
-            orch.start_with, orch.end_with = "horizon", "horizon"
-            focus = Focus() if not self.targets[1:] else self._resolve_focus(orch, self.targets[1:])
-            run = RunRecord(id=run_id, focus=focus, rounds_requested=1, start_round=start_round)
-        return orch.run(run, dry_run=self.dry_run)
-
     def _config_interactive_role(self) -> str | None:
         """The role to launch interactively when its harness declares
         ``backend: interactive``, else ``None``.
 
-        Interactive is a single human-driven session, so we pick the ONE role the
-        target would drive: ``horizon run ground`` → Ground; anything that dispatches
-        Horizon (a task, a project, ``.``/``*``, or ``horizon run horizon``) → Horizon
-        if the Horizon harness opts in. A ``--resume`` counts too: it continues the
-        interrupted run's role interactively (resuming the engine conversation)."""
+        Interactive is a single human-driven session. Every target shape drives a
+        Horizon session (a task, a project, ``.``/``*``, or ``horizon run
+        horizon``), so the Horizon harness's opt-in governs. A ``--resume`` counts
+        too: it continues the interrupted run interactively (resuming the engine
+        conversation)."""
         try:
             cfg, _ = load_workspace(self.root)
         except Exception:
@@ -189,11 +204,8 @@ class RunCommand:
                 harness.options.get("backend") or ""
             ).strip().lower() == "interactive"
 
-        # An explicit `horizon run ground` is the only way to drive Ground alone.
-        if self.targets == ("ground",):
-            return "ground" if declares_interactive(cfg.ground_harness) else None
-        # Every other target shape ends up running a Horizon step, so the Horizon
-        # harness's opt-in governs — seeded with whatever focus was requested.
+        # Every target shape runs a Horizon session, so the Horizon harness's opt-in
+        # governs — seeded with whatever focus was requested.
         return "horizon" if declares_interactive(cfg.horizon_harness) else None
 
     def _recover_interactive_resume(self, role: str) -> tuple[str | None, tuple[str, ...]]:
@@ -245,10 +257,17 @@ class RunCommand:
         stays ``--resume``-able via the recorded engine session id."""
         from archon_horizon.config.loader import build_stores
         from archon_horizon.core.clock import utc_now
+        from archon_horizon.core.events import Event
+        from archon_horizon.harnesses.command import _horizon_bin
+        from archon_horizon.vcs.git import WorkspaceGit, install_ledger_git_wrapper
+        from archon_horizon.vcs.integration import (
+            integrate_workspace_baseline,
+            integrate_workspace_session,
+        )
 
         from .interactive import (
+            horizon_seed_prompt,
             interactive_launch_for_role,
-            interactive_role_prompt,
             run_interactive,
             run_interactive_captured,
         )
@@ -256,19 +275,12 @@ class RunCommand:
         # `focus` = the non-role targets (task ids / projects / files) the human
         # asked for; the interactive session is seeded to start there.
         focus = tuple(t for t in self.targets if t not in ROLE_TARGETS)
+        cfg, workspace = load_workspace(self.root)
+        self._install_native_subagents(cfg, workspace)
         # Prefer the role picked by config routing (`_config_interactive_role`); the
         # plain `--backend interactive` CLI path falls back to the target shape.
-        role = getattr(self, "_interactive_role", None)
-        if role is None:
-            if self.targets and self.targets[0] in ROLE_TARGETS:
-                role = self.targets[0]
-            elif focus:
-                role = "horizon"  # a task/project/file focus is Horizon work
-            else:
-                role = "ground"
-                log.info("`--backend interactive` with no target defaults to the "
-                         "ground role; pass `horizon run horizon` or a task/project "
-                         "to drive Horizon instead.")
+        # Only one role exists now (horizon); interactive always drives it.
+        role = getattr(self, "_interactive_role", None) or "horizon"
 
         # `--resume` interactively continues the interrupted run's engine
         # conversation: recover its last matching session's engine id (for a true
@@ -282,8 +294,12 @@ class RunCommand:
                 log.info("No resumable engine session found for that run; starting a "
                          "fresh interactive session seeded with its focus instead.")
 
-        prompt = interactive_role_prompt(
-            self.root.resolve(), role, focus=focus, resuming=self.resume is not None
+        # Every interactive session gets the lightweight seed: the only
+        # instruction is to load the `horizon` skill, then wait for the user —
+        # no composed role brief. (`--bare` is now the default and only shape.)
+        # The UI still records the session identically (captured path below).
+        prompt = horizon_seed_prompt(
+            self.root.resolve(), focus=focus, resuming=self.resume is not None
         )
         try:
             launch = interactive_launch_for_role(
@@ -302,10 +318,31 @@ class RunCommand:
             run_interactive(launch, self.root)
             return
 
-        cfg, workspace = load_workspace(self.root)
         stores = build_stores(workspace)
         runlog = stores.run_logs.allocate()
-        run = RunRecord(id=runlog.id, focus=Focus(), rounds_requested=1)
+        task = None
+        for target in ((self.task,) if self.task else focus):
+            if not target:
+                continue
+            try:
+                task = stores.tasks.get(target)
+                break
+            except Exception:
+                continue
+        task_id = task.id if task is not None else self.task
+        if task is not None:
+            projects = tuple(task.projects) or ((task.project,) if task.project else ())
+        else:
+            projects = tuple(name for name in focus if name in workspace.projects)
+        run = RunRecord(
+            id=runlog.id,
+            focus=Focus(
+                projects=projects,
+                task=task_id,
+                tasks=(task_id,) if task_id else (),
+            ),
+            rounds_requested=1,
+        )
         try:
             stores.runs.put(run)
         except Exception:
@@ -316,33 +353,124 @@ class RunCommand:
             "interactive": True,
             "engine": launch.engine,
             "engine_session_id": launch.session_id,
+            "task_id": task_id,
+            "projects": list(projects),
             "started_at": utc_now().isoformat(),
         }
         session.write_meta({**base_meta, "status": "running"})
         log.info(f"Recording this interactive session under run {runlog.id} — visible in the dashboard/Log.")
 
+        baseline = integrate_workspace_baseline(
+            workspace,
+            run_id=runlog.id,
+            projects=projects,
+        )
+        ledger = WorkspaceGit(workspace.root)
+        session_base_sha = baseline.sha or ledger.current_sha()
+        base_meta["workspace_base_sha"] = session_base_sha
+        session.write_meta({**base_meta, "status": "running"})
+        stores.events.append(Event(
+            type="workspace.run_baseline",
+            id=hashlib.sha256(f"baseline:{runlog.id}".encode()).hexdigest(),
+            actor="orchestrator",
+            data={
+                "run_id": runlog.id,
+                "sha": baseline.sha,
+                "changed": baseline.changed,
+                "files": list(baseline.files),
+                "projects": list(projects),
+            },
+        ))
+
+        session_env = {
+            **launch.env,
+            "ARCHON_HORIZON_ROOT": str(workspace.root.resolve()),
+            "ARCHON_HORIZON_RUN": runlog.id,
+            "ARCHON_HORIZON_SESSION": session.name,
+            "ARCHON_HORIZON_SESSION_DIR": str(session.path.resolve()),
+            "ARCHON_HORIZON_AGENT_ROLE": role,
+            "ARCHON_HORIZON_ROUND": "0",
+            "ARCHON_HORIZON_ROUNDS": "1",
+            "HORIZON_LEDGER_GIT_DIR": str(WorkspaceGit(workspace.root).git_dir),
+            "HORIZON_LEDGER_WORK_TREE": str(workspace.root.resolve()),
+        }
+        if task_id:
+            session_env["ARCHON_HORIZON_TASK"] = task_id
+        if task is not None and task.title:
+            session_env["ARCHON_HORIZON_TASK_TITLE"] = task.title
+        if projects:
+            session_env["ARCHON_HORIZON_PROJECTS"] = ",".join(projects)
+        wrapper = install_ledger_git_wrapper(workspace.state_path)
+        if wrapper is not None:
+            session_env["HORIZON_GIT"] = str(wrapper.resolve())
+        horizon_bin = _horizon_bin()
+        if horizon_bin:
+            session_env.setdefault("HORIZON_BIN", horizon_bin)
+            session_env["PATH"] = (
+                str(Path(horizon_bin).parent) + os.pathsep + session_env.get("PATH", "")
+            )
+        launch = dataclasses.replace(launch, env=session_env)
+
         returncode = run_interactive_captured(
             launch, self.root, transcript_path=session.transcript_path, role=role, seed_prompt=prompt,
         )
 
+        agent_head = ledger.current_sha()
+        candidate_shas = ledger.commit_shas_between(session_base_sha, agent_head)
+        candidate_rows = ledger.commits_detailed_by_refs(candidate_shas)
+        commit_shas = [
+            row["sha"] for row in candidate_rows
+            if not row.get("session") or row.get("session") == session.name
+        ]
+        report_text = latest_report_text(session.transcript_path)
+        if not report_text:
+            report_text = (
+                f"# Interactive {role} session\n\n"
+                f"A human-driven interactive session (engine: `{launch.engine}`). Its conversation was "
+                f"mirrored into this run's transcript as it happened. Exit code {returncode}.\n"
+            )
+        (session.path / "report.md").write_text(report_text.rstrip() + "\n", "utf-8")
+        integration = integrate_workspace_session(
+            workspace,
+            run_id=runlog.id,
+            session=session.name,
+            role=role,
+            round_index=0,
+            task_id=task_id,
+            projects=projects,
+        )
+        stores.events.append(Event(
+            type="workspace.session.integrated",
+            id=hashlib.sha256(f"integration:{runlog.id}:{session.name}".encode()).hexdigest(),
+            actor="orchestrator",
+            data={
+                "run_id": runlog.id,
+                "session": session.name,
+                "role": role,
+                "task_id": task_id,
+                "projects": list(integration.projects),
+                "workspace_commit": integration.workspace_commit,
+                "workspace_commit_error": integration.workspace_commit_error,
+                "files": list(integration.workspace_files),
+            },
+        ))
         session.write_meta({
             **base_meta,
             "status": "ok" if returncode == 0 else "failed",
             "ended_at": utc_now().isoformat(),
             "returncode": returncode,
+            "workspace_agent_sha": agent_head,
+            "commit_shas": commit_shas,
+            "workspace_commit": integration.workspace_commit,
         })
-        (session.path / "report.md").write_text(
-            f"# Interactive {role} session\n\n"
-            f"A human-driven interactive session (engine: `{launch.engine}`). Its conversation was "
-            f"mirrored into this run's transcript as it happened. Exit code {returncode}.\n",
-            "utf-8",
-        )
+        if integration.workspace_commit_error:
+            log.warn(f"Could not integrate interactive session: {integration.workspace_commit_error}")
 
     def _install_native_subagents(self, cfg, workspace) -> None:
         """Compile descriptors into each engine's workspace-local native agents.
 
-        Done at run start so a change to the descriptors or a harness's tier map
-        takes effect on the next run, with no separate install step.
+        Done at run start so descriptor changes take effect on the next run,
+        with no separate install step.
         """
         try:
             from archon_horizon.subagents.compile import install_subagents
@@ -516,7 +644,7 @@ class RunCommand:
 
 def run(
     ctx: typer.Context,
-    targets: list[str] = typer.Argument(None, help="Run target: '.', '*', 'ground', 'horizon', a task id, a roadmap item id, project names, or files (resolved task > roadmap > project)."),
+    targets: list[str] = typer.Argument(None, help="Run target: '.', '*', 'horizon', a task id, a roadmap item id, project names, or files (resolved task > roadmap > project)."),
     task: str | None = typer.Option(None, "--task", help="Pin one task name."),
     rounds: int | None = typer.Option(None, "--rounds", help="Override configured round count."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan only; do not run Horizon."),
@@ -526,11 +654,19 @@ def run(
     ),
     backend: str = typer.Option(
         "default", "--backend",
-        help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine for a single role so you can type prompts (claude/codex sessions are still parsed into the Log) — use with `ground` or `horizon`.",
+        help="'default' streams a headless transcript (orchestrated). 'interactive' hands the terminal to the engine so you can type prompts (claude/codex sessions are still parsed into the Log).",
+    ),
+    bare: bool = typer.Option(
+        False, "--bare",
+        help="Shorthand for `--backend interactive`: an interactive session seeded only with 'load the `horizon` skill, then wait for you'. (All interactive sessions use this seed now.) The session is still recorded in the Log/dashboard.",
+    ),
+    supervisor: bool = typer.Option(
+        False, "--supervisor",
+        help="Lightweight automated loop: run `--rounds` Horizon-only sessions (no Ground role — the Horizon agent spawns a cleanup subagent itself when it wants). Stops cleanly on a usage-limit (state is on disk; just re-run to resume).",
     ),
     run_id: str | None = typer.Option(
         None, "--run",
-        help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving ground/horizon into one run keeps the logs and dashboard grouped. Use with `ground` or `horizon`.",
+        help="Append a single-role session to this run id (created if new) instead of allocating a fresh run — so hand-driving sessions into one run keeps the logs and dashboard grouped. Use with `horizon`.",
     ),
     round_index: int | None = typer.Option(
         None, "--round",
@@ -551,9 +687,8 @@ def run(
     Targets resolve in order **task id > roadmap item id > project/file**: a task
     id runs that human-created task; a roadmap item id infers and runs a task for
     that mathematical milestone; a project name / file / `.` runs an ad-hoc task.
-    `*` runs all queued tasks. A single role — `ground` (one planning session) or
-    `horizon` (one prover session) — runs just that role. Add `--backend
-    interactive` to drive a role in a live terminal.
+    `*` runs all queued tasks. `horizon` runs one prover session over the focus.
+    Add `--backend interactive` to drive the session in a live terminal.
     """
     try:
         dashboard_host = resolve_dashboard_host(host, public)
@@ -567,6 +702,8 @@ def run(
         dry_run=dry_run,
         resume=resume,
         backend=backend,
+        bare=bare,
+        supervisor=supervisor,
         run_id=run_id,
         round_index=round_index,
         as_json=as_json,

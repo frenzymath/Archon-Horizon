@@ -59,6 +59,9 @@ async function parseJsonResponse<T>(res: Response, label: string): Promise<T> {
 }
 
 export const getState = () => getJson<any>('/api/state');
+// Light per-project DAGs, split out of /api/state: they change only on
+// publish/sync, so the ETag cache turns this poll into a 304 almost always.
+export const getBlueprints = () => getJson<Record<string, any>>('/api/blueprints');
 export const getTranscripts = () => getJson<any[]>('/api/transcripts');
 export const getTranscript = (ref: string) => getJson<any[]>(transcriptPath(ref));
 export const getReport = (ref: string) => getJson<{ markdown: string; recommendation?: string }>(reportPath(ref));
@@ -155,54 +158,47 @@ export interface ChangeRollup {
   decl_after?: Record<string, number>;
   decl_delta?: Record<string, number>;
 }
-export interface SessionChange {
-  session: string;
+// One commit's own change (message + per-file table vs its git parent) — the
+// commit-granular "progress" view in the Logs page.
+export interface CommitChange {
+  sha: string;
+  short_sha: string;
+  subject: string;
+  created_at?: string;
   role?: string;
-  projects?: string[];
-  available: boolean;
-  reason?: string;
-  initial?: boolean;
-  worktree?: boolean;
-  base_source?: 'previous-session' | 'git-parent' | 'working-tree' | 'session-commits' | 'explicit-base' | 'none';
-  change_source?: 'agent-commits' | 'no-agent-commits' | 'deterministic-commits' | 'integration-fallback';
-  scope_files?: string[];
-  commits?: { sha: string; subject: string }[];
-  system_commits?: { sha: string; subject: string; kind?: string }[];
-  sha?: string | null;
+  kind: string; // 'agent' | 'integration' | …
   files: SessionChangeFile[];
   lean: ChangeRollup;
   blueprint: ChangeRollup;
-  other_count: number;
-  excluded_count?: number;
-  // Back-compat Lean roll-ups (used by the run trend).
-  loc_add: number;
-  loc_del: number;
   sorry_delta: number;
-  lean_files_changed: number;
+  other_count: number;
 }
-export interface RunChanges {
+export interface SessionCommits {
   run: string;
-  sessions: SessionChange[];
-  trend: {
-    session: string;
-    role?: string;
-    sorry_delta: number;
-    cumulative_sorry_delta: number;
-    loc_code_delta: number;
-  }[];
-  file_trends: Record<string, { session: string; sorry_after: number; loc_code_after: number }[]>;
+  session: string;
+  commits: CommitChange[];
+  total?: number;
+  offset?: number;
+  next_offset?: number | null;
+  has_more?: boolean;
 }
 export interface FileDiff { path: string; available: boolean; diff: string; truncated?: boolean }
 // Raw interpolation (no encode): run ids/sessions/paths are bare and the path
 // must match the Python endpoint registry exactly for static-mode hashing.
-export const getRunChanges = (runId: string) =>
-  getJson<RunChanges>(`/api/run/changes?run=${runId}`);
-// Live-only (no working tree in a static export): current uncommitted changes
-// of a running session vs the run's last committed session.
-export const getWorkingChanges = (runId: string, session?: string) =>
-  getJson<SessionChange>(`/api/run/working-changes?run=${runId}${session ? `&session=${session}` : ''}`);
-export const getSessionFileDiff = (runId: string, session: string, path: string, worktree = false) =>
-  getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}${worktree ? '&worktree=1' : ''}`);
+export const getSessionFileDiff = (runId: string, session: string, path: string, sha: string) =>
+  getJson<FileDiff>(`/api/session/file-diff?run=${runId}&session=${session}&path=${path}&sha=${sha}`);
+// Per-commit change view for one session (message + per-file table per commit).
+export const getSessionCommits = (
+  runId: string,
+  session: string,
+  offset?: number,
+  limit?: number,
+) => {
+  let url = `/api/session/commits?run=${runId}&session=${session}`;
+  if (offset !== undefined) url += `&offset=${offset}`;
+  if (limit !== undefined) url += `&limit=${limit}`;
+  return getJson<SessionCommits>(url);
+};
 
 export interface SearchResult {
   name: string | null;

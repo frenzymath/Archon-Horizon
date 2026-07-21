@@ -6,7 +6,7 @@ from pathlib import Path
 
 from archon_horizon.skills.registry import available_skills, install_skills
 
-EXPECTED = {"horizon-inbox", "lean-check", "leandag", "blueprint-conventions"}
+EXPECTED = {"horizon", "horizon-inbox", "lean-check", "hgraph", "blueprint-conventions", "project-git"}
 
 
 def test_available_skills_have_names_and_descriptions() -> None:

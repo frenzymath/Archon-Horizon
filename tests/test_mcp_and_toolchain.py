@@ -33,6 +33,31 @@ def test_merge_preserves_existing_servers() -> None:
     assert "lean-lsp" in merged["mcpServers"]
 
 
+def test_merge_refreshes_managed_leansearch_after_interpreter_move() -> None:
+    old = {
+        "mcpServers": {
+            "leansearch": {
+                "command": "/old/venv/bin/python",
+                "args": ["-m", "archon_horizon.search.mcp_server"],
+            }
+        }
+    }
+    new = {
+        "leansearch": {
+            "command": "/new/venv/bin/python",
+            "args": ["-m", "archon_horizon.search.mcp_server"],
+        }
+    }
+    assert merge_mcp_config(old, new)["mcpServers"]["leansearch"] == new["leansearch"]
+
+
+def test_merge_preserves_custom_server_named_leansearch() -> None:
+    custom = {"command": "custom-search", "args": ["--stdio"]}
+    existing = {"mcpServers": {"leansearch": custom}}
+    merged = merge_mcp_config(existing, default_mcp_servers())
+    assert merged["mcpServers"]["leansearch"] == custom
+
+
 def test_codex_mcp_toml_block_shape() -> None:
     block = codex_mcp_toml_block("leansearch", {"command": "python", "args": ["-m", "x.y"]})
     assert block == '[mcp_servers.leansearch]\ncommand = "python"\nargs = ["-m", "x.y"]\n'
@@ -55,6 +80,53 @@ def test_write_codex_mcp_config_is_project_local_and_non_destructive(tmp_path: P
     assert "lean-lsp" in data["mcp_servers"]              # ours present
     # Idempotent: a second pass adds nothing.
     assert write_codex_mcp_config(codex_dir) == []
+
+
+def test_write_codex_mcp_config_refreshes_managed_leansearch(tmp_path: Path) -> None:
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    path = codex_dir / "config.toml"
+    path.write_text(
+        '# keep this comment\n\n[mcp_servers.leansearch]\n'
+        'command = "/old/venv/bin/python"\n'
+        'args = ["-m", "archon_horizon.search.mcp_server"]\n\n'
+        '[unrelated]\nvalue = 1\n',
+        "utf-8",
+    )
+    servers = {
+        "leansearch": {
+            "command": "/new/venv/bin/python",
+            "args": ["-m", "archon_horizon.search.mcp_server"],
+        }
+    }
+
+    assert write_codex_mcp_config(codex_dir, servers) == ["leansearch"]
+    text = path.read_text("utf-8")
+    assert 'command = "/new/venv/bin/python"' in text
+    assert "# keep this comment" in text
+    assert "[unrelated]\nvalue = 1" in text
+    assert write_codex_mcp_config(codex_dir, servers) == []
+
+
+def test_write_codex_mcp_config_preserves_custom_leansearch(tmp_path: Path) -> None:
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+    path = codex_dir / "config.toml"
+    original = (
+        "[mcp_servers.leansearch]\n"
+        'command = "custom-search"\n'
+        'args = ["--stdio"]\n'
+    )
+    path.write_text(original, "utf-8")
+
+    servers = {
+        "leansearch": {
+            "command": "/new/venv/bin/python",
+            "args": ["-m", "archon_horizon.search.mcp_server"],
+        }
+    }
+    assert write_codex_mcp_config(codex_dir, servers) == []
+    assert path.read_text("utf-8") == original
 
 
 def test_install_mcp_for_harnesses_writes_codex_project_config(tmp_path: Path) -> None:
@@ -82,6 +154,33 @@ def test_write_mcp_config_roundtrip(tmp_path: Path) -> None:
     assert "mine" in after["mcpServers"] and "lean-lsp" in after["mcpServers"]
 
 
+def test_write_mcp_config_refreshes_managed_leansearch(tmp_path: Path) -> None:
+    path = tmp_path / ".mcp.json"
+    path.write_text(
+        json.dumps({
+            "mcpServers": {
+                "leansearch": {
+                    "command": "/old/venv/bin/python",
+                    "args": ["-m", "archon_horizon.search.mcp_server"],
+                },
+                "mine": {"command": "custom-search"},
+            }
+        }),
+        "utf-8",
+    )
+    servers = {
+        "leansearch": {
+            "command": "/new/venv/bin/python",
+            "args": ["-m", "archon_horizon.search.mcp_server"],
+        }
+    }
+
+    write_mcp_config(path, servers)
+    refreshed = json.loads(path.read_text("utf-8"))["mcpServers"]
+    assert refreshed["leansearch"]["command"] == "/new/venv/bin/python"
+    assert refreshed["mine"] == {"command": "custom-search"}
+
+
 def test_lean_toolchain_report_and_missing() -> None:
     present = {"elan": "/u/elan", "lean": "/u/lean", "lake": "/u/lake"}
     report = lean_toolchain_report(lambda t: present.get(t))
@@ -97,7 +196,7 @@ def test_init_writes_mcp_and_skills(tmp_path: Path) -> None:
     assert main(["--root", str(ws), "init", "--no-interactive"]) == 0
     assert (ws / ".mcp.json").exists()
     assert json.loads((ws / ".mcp.json").read_text("utf-8"))["mcpServers"]["lean-lsp"]
-    assert (ws / ".claude" / "skills" / "leandag" / "SKILL.md").exists()
+    assert (ws / ".claude" / "skills" / "hgraph" / "SKILL.md").exists()
 
 
 _BP_CONFIG = """
@@ -132,4 +231,3 @@ def test_run_refreshes_blueprint_dag(tmp_path: Path) -> None:
     dag = root / ".archon-horizon" / "blueprints" / "ag-main.json"
     assert dag.exists()
     assert json.loads(dag.read_text("utf-8"))["nodes"][0]["id"] == "x"
-

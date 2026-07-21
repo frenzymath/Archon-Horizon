@@ -10,10 +10,17 @@ other engines an agent can read the same files directly.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 SKILLS_ROOT = Path(__file__).parent
+
+# Skills that Horizon used to ship and has since dropped. ``install_skills`` only
+# ever *writes* bundled skills, so without this a retired skill lives on in every
+# existing workspace and keeps teaching a removed workflow. Pruning is by explicit
+# name — never "anything not bundled" — so a workspace's own custom skills survive.
+_RETIRED_SKILLS = ("horizon-commit", "leandag")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +57,28 @@ def available_skills() -> list[Skill]:
     return skills
 
 
+def stale_skills(root: Path) -> list[str]:
+    """Bundled skills whose installed copy is missing or out of date.
+
+    Skills are written to a workspace only by ``init`` / ``horizon skills
+    install``, so a workspace freezes its guidance at install time while the
+    package moves on — agents then follow text that no longer matches the tools.
+    This reports the drift; it never writes, because the `horizon` skill is
+    advertised as per-workspace editable, so a difference here may be a
+    deliberate local edit rather than staleness. The caller decides.
+    """
+    out: list[str] = []
+    for directory in _skill_dirs():
+        dest = root / ".claude" / "skills" / directory.name / "SKILL.md"
+        try:
+            if dest.read_text("utf-8") == (directory / "SKILL.md").read_text("utf-8"):
+                continue
+        except OSError:
+            pass  # missing (or unreadable) counts as stale
+        out.append(directory.name)
+    return out
+
+
 def install_skills(root: Path, *, overwrite=None) -> list[str]:
     """Copy bundled skills into ``<root>/.claude/skills/<name>/SKILL.md``.
 
@@ -58,7 +87,15 @@ def install_skills(root: Path, *, overwrite=None) -> list[str]:
     bundled version — so reinit can offer keep-vs-overwrite without prompting for
     unchanged files. When ``None`` (default) an existing, differing skill is
     overwritten. Returns the names actually written.
+
+    Retired skills (``_RETIRED_SKILLS``) are deleted from the workspace so an
+    upgrade doesn't leave a removed workflow documented alongside the current one.
     """
+    for name in _RETIRED_SKILLS:
+        stale = root / ".claude" / "skills" / name
+        if stale.is_dir():
+            shutil.rmtree(stale)
+
     installed: list[str] = []
     for directory in _skill_dirs():
         dest_dir = root / ".claude" / "skills" / directory.name

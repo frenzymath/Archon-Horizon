@@ -11,14 +11,19 @@ argv from a role's harness config and hand the terminal straight to the engine
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+
+from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,8 +171,8 @@ def build_interactive_launch(
 
 
 def _harness_for_role(cfg, role: str):
-    """Resolve the harness config backing ``ground`` or ``horizon``."""
-    name = cfg.ground_harness if role == "ground" else cfg.horizon_harness
+    """Resolve the harness config for an interactive session (horizon-only)."""
+    name = cfg.horizon_harness
     if not name:
         raise ValueError(f"config.yaml does not define a {role.capitalize()} harness")
     try:
@@ -237,6 +242,9 @@ class _InteractiveTailer(threading.Thread):
         # For codex we can't pin the session id, so snapshot the rollout files that
         # exist BEFORE launch and treat the first new one as this session's file.
         self._codex_seen: set[str] = set()
+        self._codex_parent_id: str | None = None
+        self._codex_children: dict[str, dict[str, object]] = {}
+        self._codex_child_scan_at = 0.0
         if launch.engine == "codex":
             try:
                 self._codex_seen = {p.as_posix() for p in _codex_sessions_dir(launch.env).glob("**/rollout-*.jsonl")}
@@ -270,19 +278,164 @@ class _InteractiveTailer(threading.Thread):
                 self._offset = handle.tell()
         except OSError:
             return
-        if not chunk:
+        if chunk:
+            buffer = self._leftover + chunk
+            lines = buffer.split(b"\n")
+            self._leftover = lines.pop()  # trailing (possibly incomplete) fragment
+            for raw in lines:
+                if not raw.strip():
+                    continue
+                decoded = raw.decode("utf-8", "replace")
+                try:
+                    if self._launch.engine == "codex" and self._codex_parent_id is None:
+                        obj = json.loads(decoded)
+                        payload = obj.get("payload", {}) if isinstance(obj, dict) else {}
+                        if obj.get("type") == "session_meta" and isinstance(payload, dict):
+                            native_id = payload.get("id")
+                            if isinstance(native_id, str) and native_id:
+                                self._codex_parent_id = native_id
+                    for event in self._parser(decoded):
+                        self._sink.emit(event)
+                except Exception:
+                    continue  # a single malformed line must never kill the tailer
+        if self._launch.engine == "codex":
+            self._drain_codex_child_lifecycles()
+
+    def _drain_codex_child_lifecycles(self) -> None:
+        """Surface direct Codex child ``task_complete`` events in the parent log.
+
+        Interactive Codex writes every spawned thread to its own rollout.  We do
+        not mirror those large transcripts here; we only follow their metadata
+        and terminal marker so the dashboard gets a compact dispatch/closure
+        timeline while the parent TUI remains open.
+        """
+        if not self._codex_parent_id:
             return
-        buffer = self._leftover + chunk
-        lines = buffer.split(b"\n")
-        self._leftover = lines.pop()  # trailing (possibly incomplete) fragment
-        for raw in lines:
-            if not raw.strip():
-                continue
+        # Discover at a lower frequency than the parent-file drain: recursive
+        # session discovery is cheap occasionally, but wasteful four times/sec.
+        now = time.monotonic()
+        if now >= self._codex_child_scan_at:
+            self._codex_child_scan_at = now + 2.0
             try:
-                for event in self._parser(raw.decode("utf-8", "replace")):
+                for path in _codex_sessions_dir(self._launch.env).glob("**/rollout-*.jsonl"):
+                    key = path.as_posix()
+                    if path != self._file and key not in self._codex_seen:
+                        self._codex_children.setdefault(key, {
+                            "offset": 0, "leftover": b"", "accepted": None, "last_complete": None,
+                        })
+            except OSError:
+                pass
+        candidates = [Path(key) for key, state in self._codex_children.items() if state.get("accepted") is not False]
+        for path in candidates:
+            key = path.as_posix()
+            state = self._codex_children[key]
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(int(state["offset"]))
+                    chunk = handle.read()
+                    state["offset"] = handle.tell()
+            except (OSError, ValueError):
+                continue
+            if not chunk:
+                continue
+            buffer = state.get("leftover", b"") + chunk
+            if not isinstance(buffer, bytes):
+                buffer = chunk
+            lines = buffer.split(b"\n")
+            state["leftover"] = lines.pop()
+            for raw in lines:
+                if not raw.strip():
+                    continue
+                try:
+                    obj = json.loads(raw.decode("utf-8", "replace"))
+                except (ValueError, TypeError):
+                    continue
+                payload = obj.get("payload", {}) if isinstance(obj, dict) else {}
+                if not isinstance(payload, dict):
+                    continue
+                if obj.get("type") == "session_meta":
+                    source = payload.get("source", {})
+                    subagent = source.get("subagent", {}) if isinstance(source, dict) else {}
+                    spawn = subagent.get("thread_spawn", {}) if isinstance(subagent, dict) else {}
+                    if not isinstance(spawn, dict):
+                        state["accepted"] = False
+                        continue
+                    state["accepted"] = spawn.get("parent_thread_id") == self._codex_parent_id
+                    if state["accepted"]:
+                        agent_path = spawn.get("agent_path")
+                        if isinstance(agent_path, str) and agent_path:
+                            state["agent_path"] = agent_path
+                            state["name"] = agent_path.rstrip("/").rsplit("/", 1)[-1]
+                        nickname = spawn.get("agent_nickname")
+                        if isinstance(nickname, str) and nickname:
+                            state["nickname"] = nickname
+                        state["depth"] = spawn.get("depth")
+                        state["started_at"] = obj.get("timestamp")
+                    continue
+                if state.get("accepted") is not True:
+                    continue
+                if obj.get("type") == "turn_context":
+                    model = payload.get("model")
+                    effort = payload.get("effort")
+                    if isinstance(model, str) and model:
+                        state["model"] = model
+                    if isinstance(effort, str) and effort:
+                        state["effort"] = effort
+                if obj.get("type") == "event_msg" and payload.get("type") == "task_complete":
+                    completed_at = obj.get("timestamp")
+                    completed_epoch = payload.get("completed_at")
+                    try:
+                        if (
+                            isinstance(completed_at, str)
+                            and isinstance(completed_epoch, (int, float))
+                            and abs(
+                                datetime.fromisoformat(completed_at.replace("Z", "+00:00")).timestamp()
+                                - float(completed_epoch)
+                            ) > 5
+                        ):
+                            continue  # forked parent-history completion, not this child turn
+                    except ValueError:
+                        pass
+                    if completed_at == state.get("last_complete"):
+                        continue
+                    state["last_complete"] = completed_at
+                    attrs = {
+                        "nickname": state.get("nickname"),
+                        "model": state.get("model"),
+                        "effort": state.get("effort"),
+                        "depth": state.get("depth"),
+                        "started_at": state.get("started_at"),
+                    }
+                    duration_ms = payload.get("duration_ms")
+                    if isinstance(duration_ms, (int, float)):
+                        attrs["duration_seconds"] = max(0, float(duration_ms) / 1000)
+                    try:
+                        if "duration_seconds" not in attrs and isinstance(state.get("started_at"), str) and isinstance(completed_at, str):
+                            started = datetime.fromisoformat(str(state["started_at"]).replace("Z", "+00:00"))
+                            ended = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                            attrs["duration_seconds"] = max(0, (ended - started).total_seconds())
+                    except ValueError:
+                        pass
+                    event = TranscriptEvent(
+                        TranscriptKind.SUBAGENT_END,
+                        text=f"{state.get('name') or 'Subagent'} completed",
+                        data={
+                            "lifecycle": "subagent",
+                            "status": "completed",
+                            "engine": "codex",
+                            "name": state.get("name") or "subagent",
+                            "subagent_key": state.get("agent_path") or key,
+                            **{k: v for k, v in attrs.items() if v is not None and v != ""},
+                        },
+                    )
+                    if isinstance(completed_at, str):
+                        try:
+                            event = dataclasses.replace(
+                                event, at=datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                            )
+                        except ValueError:
+                            pass
                     self._sink.emit(event)
-            except Exception:
-                continue  # a single malformed line must never kill the tailer
 
     def run(self) -> None:
         if self._parser is None:
@@ -338,6 +491,15 @@ def run_interactive_captured(
     sink.emit(TranscriptEvent(
         TranscriptKind.SESSION_END, data={"ok": returncode == 0, "interactive": True}
     ))
+    # Fold any inline subagent events into child sessions now (the same
+    # write-path step a headless harness run does), so the dashboard never has
+    # to derive them on read.
+    try:
+        from archon_horizon.transcript.subagents import materialize_subagent_sessions
+
+        materialize_subagent_sessions(transcript_path.parent)
+    except Exception:
+        pass
     return returncode
 
 
@@ -348,85 +510,64 @@ def run_interactive_captured(
 # a short role brief that points the engine at the workspace, the docs, and the
 # on-disk state, then let the human steer from there.
 
-_ORIENTATION = """\
-You are running inside an **Archon Horizon** workspace at `{root}`.
-
-Archon Horizon orchestrates AI agents that formalize mathematics in Lean 4 across
-multiple projects. To understand the system, read (in the *package install*, not
-necessarily this workspace):
-
-- `README.md` — the detailed, self-contained reference for the whole tool.
-- `docs/` — deeper guides per topic (architecture, workspaces, orchestration,
-  inboxes, blueprints/leandag, dashboard/search, CLI reference).
-
-This workspace's live state lives under `.archon-horizon/` — `runs/` (session
-transcripts and reports), `tasks/`, `inbox/`, `blueprints/`, `roadmap`,
-`memory.md` — and its manifest is `config.yaml`. Read those to see the current
-status and what recent runs did. Prefer the `horizon` CLI for changes."""
-
-_ROLE_BRIEF = {
-    "ground": """\
-Act as the **Ground agent**: the human-aligned strategist. You maintain the
-blueprints, dependency DAGs, roadmap, tasks, memory, and inboxes — and supervise
-the Long Horizon prover. You do not run long Lean proof searches yourself.""",
-    "horizon": """\
-Act as the **Long Horizon agent**: the autonomous prover. You turn blueprint
-nodes into checked Lean — read the blueprint node first, build with `lake`,
-diagnose compiler errors, and repair proofs. Report what you proved and what
-remains.""",
-}
-
 _DISCUSS_BRIEF = """\
-You are the **discuss** agent: a human-facing companion, essentially the Ground
-agent but here purely to talk with the human and do what they ask. Your job:
+You are the **discuss** companion for this Archon Horizon workspace — here to
+talk with the human and do what they ask, nothing more.
 
-- Explain the current status of this workspace and what recent runs did (read the
-  run transcripts/reports under `.archon-horizon/runs/`).
-- Answer questions about Archon Horizon itself — read `README.md`/`docs/` and,
-  when a detail isn't documented, the package source.
-- Help manage the workspace: add or adjust projects, tasks, inbox items, roadmap
-  entries, blueprints — using the `horizon` CLI.
+Load the **`horizon`** skill first (`.claude/skills/horizon/SKILL.md`): it
+explains the workspace layout, the `horizon` CLI, and where live state lives
+(`.archon-horizon/` — runs, tasks, inbox, roadmap, blueprints). For questions
+about Archon Horizon itself, read the installed package's README/docs/source.
 
 Rules of engagement:
-- Only *modify* anything when the human explicitly asks you to. Otherwise
-  explain, propose, and wait.
+- Only *modify* anything when the human explicitly asks. Otherwise explain,
+  propose, and wait.
 - Be concrete: cite exact files, task ids, and commands.
-- Start by briefly greeting the human and offering a short status summary, then
-  ask what they'd like to do."""
-
-
-def interactive_role_prompt(
-    root: Path, role: str, focus: tuple[str, ...] = (), *, resuming: bool = False
-) -> str:
-    """Seed prompt for an interactive `horizon run` session.
-
-    ``focus`` is the task ids / projects / files the human targeted (e.g.
-    ``horizon run T16``); when present it is appended so the session starts on that
-    work instead of the generic role brief. ``resuming`` frames it as continuing an
-    earlier session (the engine conversation may already be in context)."""
-    brief = _ROLE_BRIEF.get(role, _ROLE_BRIEF["ground"])
-    items = ", ".join(f"`{f}`" for f in focus)
-    focus_hint = ""
-    if resuming:
-        target = f" on {items}" if items else ""
-        focus_hint = (
-            f"\n\nYou are RESUMING an earlier interactive session{target}. If that "
-            "conversation is already in context, pick up where you left off — re-read "
-            "the file(s) you were editing and any build output to refresh. Otherwise, "
-            "orient from the workspace state above. Either way, briefly say where "
-            "things stand and what you propose next, then wait for the human (they are "
-            "driving)."
-        )
-    elif focus:
-        focus_hint = (
-            f"\n\nThe human launched this session focused on: {items}. Start there — "
-            "read its blueprint node(s)/task details and the relevant Lean, orient "
-            "yourself, then briefly say what you see and propose the first step before "
-            "diving in (they are driving, so check in rather than running autonomously)."
-        )
-    return f"{_ORIENTATION.format(root=root)}\n\n{brief}{focus_hint}\n"
+- Start by briefly greeting the human with a short status summary (recent runs,
+  open tasks/inbox), then ask what they'd like to do."""
 
 
 def discuss_prompt(root: Path) -> str:
     """Seed prompt for the `horizon discuss` companion agent."""
-    return f"{_ORIENTATION.format(root=root)}\n\n{_DISCUSS_BRIEF}\n"
+    return f"You are in an **Archon Horizon** workspace at `{root}`.\n\n{_DISCUSS_BRIEF}\n"
+
+
+def horizon_seed_prompt(
+    root: Path, focus: tuple[str, ...] = (), *, resuming: bool = False
+) -> str:
+    """The interactive seed: the only instruction is to load the `horizon` skill
+    and wait for the user — no composed role brief, no pushed policy. The skill
+    (editable at ``.claude/skills/horizon/SKILL.md``) carries the orientation and
+    conventions; everything else the agent pulls on demand.
+
+    ``focus`` (task ids / projects / files the human targeted) is passed through
+    so the agent can start there after loading the skill; ``resuming`` frames the
+    session as continuing an earlier engine conversation."""
+    lines = [
+        f"You are in an **Archon Horizon** workspace at `{root}`.",
+        "",
+        "Load the **`horizon`** skill — it explains where the state lives, the tools, "
+        "and the conventions for this workspace. Do that first.",
+    ]
+    items = ", ".join(f"`{f}`" for f in focus)
+    if resuming:
+        target = f" on {items}" if items else ""
+        lines += [
+            "",
+            f"You are RESUMING an earlier interactive session{target}. If that "
+            "conversation is already in context, pick up where you left off; "
+            "otherwise orient from the workspace state (recent ledger history and "
+            "the previous session's report, as the skill describes). Briefly say "
+            "where things stand and what you propose next.",
+        ]
+    elif focus:
+        lines += [
+            "",
+            f"The user launched this session focused on: {items}. After loading the "
+            "skill, orient on that and propose a first step.",
+        ]
+    lines += [
+        "",
+        "Then briefly greet the user and wait for their instructions — they are driving.",
+    ]
+    return "\n".join(lines) + "\n"

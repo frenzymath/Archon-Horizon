@@ -7,83 +7,34 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from archon_horizon.core.inbox import InboxItem
-from archon_horizon.core.roadmap import Roadmap
-from archon_horizon.core.sessions import Focus, RunRecord
+from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonResult, HorizonTask
 from archon_horizon.core.types import Metadata
 from archon_horizon.core.workspace import Workspace
 
 
 @dataclass(frozen=True, slots=True)
-class GroundContext:
-    workspace: Workspace
-    run: RunRecord
-    focus: Focus
-    roadmap: Roadmap
-    accepted_inbox: tuple[InboxItem, ...] = ()
-    memory: str = ""
-    blueprint_summary: str = ""
-    write_domain: tuple[str, ...] = ()
-    previous_report_refs: tuple[str, ...] = ()
-    artifact_refs: tuple[str, ...] = ()
-    log_dir: Path | None = None
-    # When resuming, the native engine session id of the interrupted Ground run.
-    resume_session_id: str | None = None
-    # True for the opening Ground of a run: it plans BEFORE any Horizon has run,
-    # so there is no prior diff to review — the prompt adapts accordingly.
-    is_opening: bool = False
-    metadata: Metadata = field(default_factory=dict)
+class HorizonContext:
+    """What one automated session needs to launch: identity and plumbing only.
 
-
-@dataclass(frozen=True, slots=True)
-class GroundUpdate:
-    """The Ground agent's machine-relevant output.
-
-    The agent now mutates roadmap/memory/blueprints on disk and the inbox via the
-    CLI *during* its run, so there is no structured payload to apply — only the
-    human report. The orchestrator reconstructs what changed by reading state
-    back from disk after the session.
+    Workspace state (roadmap, inbox, memory, DAG) is NOT carried here — the
+    agent pulls it on demand through the ``horizon`` CLI, as the `horizon`
+    skill describes.
     """
 
-    report: str = ""
-    artifact_refs: tuple[str, ...] = ()
-    metadata: Metadata = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class HorizonContext:
     workspace: Workspace
     run: RunRecord
     task: HorizonTask
-    roadmap: Roadmap
-    accepted_inbox: tuple[InboxItem, ...] = ()
-    memory: str = ""
-    write_domain: tuple[str, ...] = ()
-    previous_report_refs: tuple[str, ...] = ()
-    artifact_refs: tuple[str, ...] = ()
     log_dir: Path | None = None
+    # Which round of the run this session is (0-based) and the run's planned
+    # total — exported to the agent's env so it can pace multi-round work.
+    round_index: int | None = None
+    rounds_total: int | None = None
     # When resuming, the native engine session id of the interrupted Horizon run.
     resume_session_id: str | None = None
     # Optional cooperative cancellation token supplied by the orchestrator.
     cancel: Any | None = None
     metadata: Metadata = field(default_factory=dict)
-
-
-class GroundAgent(ABC):
-    """Maintains human-facing state and creates work for Horizon."""
-
-    @abstractmethod
-    def run_round(self, context: GroundContext) -> GroundUpdate:
-        """Run one fresh Ground invocation from explicit context."""
-
-    @abstractmethod
-    def handle_horizon_result(
-        self,
-        context: GroundContext,
-        result: HorizonResult,
-    ) -> GroundUpdate:
-        """Translate Horizon output into roadmap, reports, issues, or tasks."""
 
 
 class HorizonAgent(ABC):

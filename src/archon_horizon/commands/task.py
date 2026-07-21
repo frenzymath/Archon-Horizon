@@ -20,6 +20,7 @@ import dataclasses
 import typer
 
 from archon_horizon.core.clock import utc_now
+from archon_horizon.core.collection_health import roadmap_health_warnings, task_health_warnings
 from archon_horizon.core.roadmap import Roadmap
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.status_sync import roadmap_status_for_task_status
@@ -66,17 +67,33 @@ def _task_dict(task: HorizonTask) -> dict:
     }
 
 
+def _warn_tasks(tasks) -> list[str]:
+    warnings = task_health_warnings(tasks)
+    for warning in warnings:
+        log.warn(warning)
+    return warnings
+
+
+def _with_task_warnings(payload: dict, tasks) -> dict:
+    """Keep legacy JSON shapes when healthy; attach actionable warnings only."""
+    warnings = task_health_warnings(tasks)
+    return {**payload, **({"warnings": warnings} if warnings else {})}
+
+
 @app.command("list")
 def list_tasks(ctx: typer.Context, as_json: bool = _JSON) -> None:
     """List tasks."""
     tasks = _store(ctx).list()
+    warnings = task_health_warnings(tasks)
     if as_json:
-        emit_json({"tasks": [_task_dict(t) for t in tasks]})
+        emit_json({"tasks": [_task_dict(t) for t in tasks], "warnings": warnings})
         return
     if not tasks:
         log.info("No tasks.")
+        _warn_tasks(tasks)
         return
     log.results_table([(t.id, t.status.value, t.title or t.objective[:48]) for t in tasks], title="Tasks")
+    _warn_tasks(tasks)
 
 
 @app.command("show")
@@ -88,7 +105,12 @@ def show_task(ctx: typer.Context, task_id: str = typer.Argument(...), as_json: b
     except Exception:
         log.error(f"No task {task_id!r}.")
         raise typer.Exit(1)
-    emit_json(_task_dict(task)) if as_json else log.info(str(_task_dict(task)))
+    warnings = task_health_warnings(store.list())
+    if as_json:
+        emit_json({**_task_dict(task), **({"warnings": warnings} if warnings else {})})
+        return
+    log.info(str(_task_dict(task)))
+    _warn_tasks(store.list())
 
 
 @app.command("set")
@@ -134,7 +156,12 @@ def set_task(
     if edited:
         store.append_history(task_id, history_entry(actor, "edited", note=", ".join(edited) + " updated"))
     updated = store.put(dataclasses.replace(task, **changes))
-    emit_json(_task_dict(updated)) if as_json else log.success(f"Updated task {task_id}.")
+    tasks = store.list()
+    if as_json:
+        emit_json(_with_task_warnings(_task_dict(updated), tasks))
+        return
+    log.success(f"Updated task {task_id}.")
+    _warn_tasks(tasks)
 
 
 def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, actor: str | None) -> None:
@@ -149,6 +176,10 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
         if item.id not in wanted or item.status == target:
             items.append(item)
             continue
+        # Propagate the status to the linked milestone and record a structured
+        # history entry — but do NOT write a prose comment. The comment duplicated
+        # progress narration that already lives in the task and its commits (the
+        # "same comments in roadmap and task" problem); the history entry is enough.
         store.append_history(
             item.id,
             history_entry(
@@ -159,13 +190,6 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
                 note=f"synced from task {task.id}",
             ),
         )
-        store.add_comment(
-            item.id,
-            f"**Status synced from task `{task.id}`.**\n\n"
-            f"- Task status changed to `{status.value}`.\n"
-            f"- Roadmap item moved from `{item.status.value}` to `{target.value}`.",
-            actor,
-        )
         items.append(dataclasses.replace(
             item,
             status=target,
@@ -174,6 +198,16 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
         changed = True
     if changed:
         store.save(Roadmap(items=tuple(items), updated_at=utc_now()))
+        # The synced status may complete a parent's subtree (or contradict a done
+        # parent) — say so, never silently fix: the editor decides.
+        from archon_horizon.core.roadmap import hierarchy_status_warnings
+
+        warnings = [
+            *hierarchy_status_warnings(tuple(items)),
+            *roadmap_health_warnings(tuple(items)),
+        ]
+        for warning in warnings:
+            log.warn(warning)
 
 
 @app.command("add")
@@ -208,7 +242,12 @@ def add_task(
     )
     store.put(task)
     store.append_history(task_id, history_entry(actor, "created", after=task.status.value, note="opened"))
-    emit_json(_task_dict(task)) if as_json else log.success(f"Added task {task_id}.")
+    tasks = store.list()
+    if as_json:
+        emit_json(_with_task_warnings(_task_dict(task), tasks))
+        return
+    log.success(f"Added task {task_id}.")
+    _warn_tasks(tasks)
 
 
 @app.command("comment")
@@ -227,14 +266,18 @@ def comment_task(
         log.error(f"No task {task_id!r}.")
         raise typer.Exit(1)
     store.add_comment(task_id, body, author or agent_author())
+    tasks = store.list()
     if as_json:
-        emit_json({"id": task_id, "commented": True})
+        emit_json(_with_task_warnings({"id": task_id, "commented": True}, tasks))
         return
     log.success(f"Commented on task {task_id}.")
+    _warn_tasks(tasks)
 
 
 @app.command("remove")
 def remove_task(ctx: typer.Context, task_id: str = typer.Argument(...)) -> None:
     """Remove a task (deletes its YAML file). Open to agents and humans alike."""
-    _store(ctx).delete(task_id)
+    store = _store(ctx)
+    store.delete(task_id)
     log.success(f"Removed task {task_id}.")
+    _warn_tasks(store.list())

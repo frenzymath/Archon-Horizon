@@ -1,24 +1,18 @@
-"""Blueprint parsing and DAG generation.
+"""Blueprint -> dependency DAG.
 
-One parser (ported from Archon's KaTeX renderer) feeds both the dependency
-DAG and, later, HTML rendering — no plasTeX/leanblueprint dependency.
+The DAG is built by Horizon's vendored **hgraph** core, which reconciles the
+blueprint LaTeX against the real Lean sources. There is no second engine.
 """
 
 from __future__ import annotations
 
-from .dag import build_dag
-from .model import Blueprint, BlueprintNode
-from .parser import KNOWN_ENVS, parse_blueprint, strip_comments
-from .workspace import project_blueprint, project_dag, workspace_dags
+from .hgraph_graph import build_project_graph
+from .workspace import project_dag, published_dag, published_dags, workspace_dags
 
 __all__ = [
-    "KNOWN_ENVS",
-    "Blueprint",
-    "BlueprintNode",
-    "build_dag",
-    "parse_blueprint",
-    "project_blueprint",
+    "build_project_graph",
     "project_dag",
-    "strip_comments",
+    "published_dag",
+    "published_dags",
     "workspace_dags",
 ]

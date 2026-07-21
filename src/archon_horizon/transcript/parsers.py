@@ -40,6 +40,63 @@ def _loads(line: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+def _native_ts(obj: dict) -> datetime | None:
+    """The native ISO timestamp shared by Claude and Codex persisted logs."""
+    raw = obj.get("timestamp")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _tag_value(text: str, tag: str) -> str | None:
+    """Read one simple XML-like field from Claude's task notification."""
+    opening, closing = f"<{tag}>", f"</{tag}>"
+    start = text.find(opening)
+    if start < 0:
+        return None
+    start += len(opening)
+    end = text.find(closing, start)
+    return text[start:end].strip() if end >= 0 else None
+
+
+def _subagent_name(args: object, fallback: str = "subagent") -> str:
+    if isinstance(args, dict):
+        for key in ("description", "task_name", "agent_type", "name", "subagent_type"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return fallback
+
+
+def _subagent_start(*, name: str, key: str | None = None, engine: str, attrs: dict | None = None) -> TranscriptEvent:
+    data: dict[str, object] = {"lifecycle": "subagent", "status": "running", "name": name, "engine": engine}
+    if key:
+        data["subagent_key"] = key
+    if attrs:
+        data.update({k: v for k, v in attrs.items() if v is not None and v != ""})
+    return TranscriptEvent(TranscriptKind.SUBAGENT_START, text=f"Dispatched subagent “{name}”", data=data)
+
+
+def _subagent_end(
+    *, name: str | None = None, key: str | None = None, status: str = "completed",
+    engine: str, summary: str | None = None, attrs: dict | None = None,
+) -> TranscriptEvent:
+    label = name.strip() if isinstance(name, str) and name.strip() else "Subagent"
+    data: dict[str, object] = {"lifecycle": "subagent", "status": status, "engine": engine}
+    if name:
+        data["name"] = name
+    if key:
+        data["subagent_key"] = key
+    if summary:
+        data["summary"] = summary
+    if attrs:
+        data.update({k: v for k, v in attrs.items() if v is not None and v != ""})
+    return TranscriptEvent(TranscriptKind.SUBAGENT_END, text=f"{label} {status}", data=data)
+
+
 def _int_or_zero(value: object) -> int:
     try:
         return int(value or 0)
@@ -200,6 +257,24 @@ def parse_claude_line(line: str) -> list[TranscriptEvent]:
                         usage=event_usage,
                     )
                 )
+                # Claude Code's interactive log keeps child interiors in a
+                # separate subagents/ directory, but the parent Agent/Task call
+                # is the authoritative instant at which delegation happened.
+                # Emit a small parent-log lifecycle row without copying the
+                # (potentially huge) prompt into it.
+                tool_name = str(block.get("name") or "")
+                if not obj.get("parent_tool_use_id") and tool_name in ("Agent", "Task"):
+                    args = block.get("input", {})
+                    attrs = {
+                        "subagent_type": args.get("subagent_type") if isinstance(args, dict) else None,
+                        "model": args.get("model") if isinstance(args, dict) else None,
+                    }
+                    events.append(_subagent_start(
+                        name=_subagent_name(args),
+                        key=str(block.get("id") or "") or None,
+                        engine="claude",
+                        attrs=attrs,
+                    ))
             elif btype == "tool_result":
                 events.append(
                     TranscriptEvent(
@@ -222,8 +297,40 @@ def parse_claude_line(line: str) -> list[TranscriptEvent]:
         if model:
             data["model"] = model
         events.append(TranscriptEvent(TranscriptKind.USAGE, data=data, usage=usage))
+        subtype = str(obj.get("subtype") or "")
+        if obj.get("is_error") or subtype.startswith("error"):
+            # The engine's own structured verdict on the run — surfaced as an
+            # ERROR event so failure classification can read the typed subtype
+            # (e.g. ``error_during_execution``) instead of grepping stderr.
+            events.append(TranscriptEvent(
+                TranscriptKind.ERROR,
+                text=str(obj.get("result") or subtype or "engine reported an error"),
+                data={"subtype": subtype} if subtype else {},
+            ))
         if obj.get("result"):
             events.append(TranscriptEvent(TranscriptKind.TEXT, text=obj["result"]))
+    elif kind == "queue-operation" and obj.get("operation") == "enqueue":
+        # Async Claude agents announce every stop through a task-notification.
+        # The notification contains the spawning tool-use id, a terminal status,
+        # and a semantic summary such as `Agent "Lane F1" finished`.  Keep only
+        # that compact metadata; the full result remains in Claude's native log.
+        content = obj.get("content")
+        if isinstance(content, str) and "<task-notification>" in content:
+            status = (_tag_value(content, "status") or "completed").lower()
+            summary = _tag_value(content, "summary")
+            name: str | None = None
+            if summary and summary.startswith('Agent "') and summary.endswith('" finished'):
+                name = summary[len('Agent "'):-len('" finished')]
+            # The same queue also carries background Bash and monitor notices;
+            # those are subprocess lifecycle, not agent lifecycle.
+            if name:
+                events.append(_subagent_end(
+                    name=name,
+                    key=_tag_value(content, "tool-use-id"),
+                    status=status,
+                    engine="claude",
+                    summary=summary,
+                ))
     parent = obj.get("parent_tool_use_id")
     if parent:
         attr: dict[str, object] = {"parent_tool_use_id": parent}
@@ -238,6 +345,9 @@ def parse_claude_line(line: str) -> list[TranscriptEvent]:
             attr["model"] = model
         for event in events:
             event.data.update(attr)
+    at = _native_ts(obj)
+    if at is not None:
+        events = [dataclasses.replace(event, at=at) for event in events]
     return events
 
 
@@ -305,10 +415,11 @@ def parse_codex_line(line: str) -> list[TranscriptEvent]:
             receivers = item.get("receiver_thread_ids") or item.get("receiver_thread_id")
             if isinstance(receivers, str):
                 receivers = [receivers]
-            return [
+            tool = str(item.get("tool") or "spawn_agent")
+            events = [
                 TranscriptEvent(
                     TranscriptKind.TOOL_CALL,
-                    tool=str(item.get("tool") or "spawn_agent"),
+                    tool=tool,
                     data={
                         "sender_thread_id": item.get("sender_thread_id"),
                         "receiver_thread_ids": list(receivers or []),
@@ -316,6 +427,15 @@ def parse_codex_line(line: str) -> list[TranscriptEvent]:
                     usage=event_usage,
                 )
             ]
+            if tool == "spawn_agent":
+                name = str(item.get("task_name") or item.get("agent_type") or "subagent")
+                for receiver in receivers or [None]:
+                    events.append(_subagent_start(
+                        name=name,
+                        key=receiver if isinstance(receiver, str) else None,
+                        engine="codex",
+                    ))
+            return events
     elif kind == "turn.completed":
         usage = line_usage or TranscriptUsage()
         return [
@@ -334,13 +454,7 @@ _CODEX_SHELL_TOOLS = ("exec_command", "shell", "local_shell", "bash", "container
 def _codex_ts(obj: dict) -> datetime | None:
     """The native ISO timestamp on a Codex line, as an aware datetime — so events
     keep their real order/time instead of defaulting to parse time."""
-    raw = obj.get("timestamp")
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+    return _native_ts(obj)
 
 
 def _codex_command_str(args: object) -> str:
@@ -393,9 +507,37 @@ def _codex_rollout_item(payload: dict) -> list[TranscriptEvent]:
             # Same shape as the main stream's command_execution, so the UI's
             # ShellCommandBlock renders it instead of dumping raw JSON.
             return [TranscriptEvent(TranscriptKind.TOOL_CALL, tool="Bash", data={"command": _codex_command_str(args)})]
-        return [TranscriptEvent(TranscriptKind.TOOL_CALL, tool=name, data={"input": args})]
+        events = [TranscriptEvent(TranscriptKind.TOOL_CALL, tool=name, data={"input": args})]
+        if name == "spawn_agent":
+            events.append(_subagent_start(
+                name=_subagent_name(args),
+                key=str(payload.get("call_id") or "") or None,
+                engine="codex",
+            ))
+        return events
     if ptype in ("function_call_output", "custom_tool_call_output"):
-        return [TranscriptEvent(TranscriptKind.TOOL_RESULT, data={"content": payload.get("output")})]
+        output = payload.get("output")
+        events = [TranscriptEvent(TranscriptKind.TOOL_RESULT, data={"content": output})]
+        # Older and headless Codex collaboration APIs return terminal agent
+        # states from wait_agent as {"status": {id: {"completed": report}}}.
+        # Recognize that shape defensively; newer interactive Codex is closed by
+        # the child rollout's task_complete event in the interactive tailer.
+        decoded = _decode_codex_args(output)
+        statuses = decoded.get("status") if isinstance(decoded, dict) else None
+        if isinstance(statuses, dict):
+            for key, state in statuses.items():
+                if not isinstance(state, dict):
+                    continue
+                for status in ("completed", "failed", "cancelled", "interrupted"):
+                    if status not in state:
+                        continue
+                    report = state.get(status)
+                    summary = str(report).strip().splitlines()[0][:240] if report else None
+                    events.append(_subagent_end(
+                        key=str(key), status=status, engine="codex", summary=summary,
+                    ))
+                    break
+        return events
     return []
 
 
@@ -442,16 +584,33 @@ def parse_codex_rollout_line(line: str) -> list[TranscriptEvent]:
                 meta[key] = val
         if meta:
             events = [TranscriptEvent(TranscriptKind.SESSION_META, data=meta)]
-    elif otype == "event_msg" and payload.get("type") == "token_count":
-        info = payload.get("info") or {}
-        last = info.get("last_token_usage") or info.get("total_token_usage") or {}
-        usage = TranscriptUsage(
-            tokens_in=int(last.get("input_tokens", 0) or 0),
-            tokens_out=int(last.get("output_tokens", 0) or 0),
-            cached_tokens_in=int(last.get("cached_input_tokens", 0) or 0),
-            reasoning_tokens_out=int(last.get("reasoning_output_tokens", 0) or 0),
-        )
-        events = [TranscriptEvent(TranscriptKind.USAGE, data=_usage_data(usage), usage=usage)]
+    elif otype == "event_msg":
+        if payload.get("type") == "token_count":
+            info = payload.get("info") or {}
+            last = info.get("last_token_usage") or info.get("total_token_usage") or {}
+            usage = TranscriptUsage(
+                tokens_in=int(last.get("input_tokens", 0) or 0),
+                tokens_out=int(last.get("output_tokens", 0) or 0),
+                cached_tokens_in=int(last.get("cached_input_tokens", 0) or 0),
+                reasoning_tokens_out=int(last.get("reasoning_output_tokens", 0) or 0),
+            )
+            events = [TranscriptEvent(TranscriptKind.USAGE, data=_usage_data(usage), usage=usage)]
+        elif payload.get("type") == "task_complete":
+            # With fork_turns/all, Codex replays earlier task_complete records at
+            # the child rollout's start timestamp.  `completed_at` retains their
+            # real epoch, so ignore a replay whose two clocks disagree.
+            completed_at = payload.get("completed_at")
+            replayed = (
+                at is not None
+                and isinstance(completed_at, (int, float))
+                and abs(at.timestamp() - float(completed_at)) > 5
+            )
+            if not replayed:
+                attrs = {}
+                duration_ms = payload.get("duration_ms")
+                if isinstance(duration_ms, (int, float)):
+                    attrs["duration_seconds"] = max(0, float(duration_ms) / 1000)
+                events = [_subagent_end(engine="codex", attrs=attrs)]
     if at is not None:
         events = [dataclasses.replace(event, at=at) for event in events]
     return events

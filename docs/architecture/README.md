@@ -6,29 +6,31 @@ Archon Horizon is engineered specifically for orchestrating **Long Horizon Agent
 
 ## Table of Contents
 
-- [1. Two-Agent Collaboration Model](#1-two-agent-collaboration-model)
+- [1. Horizon Loop & Fresh-Context Review](#1-horizon-loop--fresh-context-review)
   - [Horizon Agent](#horizon-agent)
-  - [Ground Agent](#ground-agent)
+  - [Ground Helper](#ground-helper)
 - [2. Multi-Project Workspace Foundation](#2-multi-project-workspace-foundation)
 - [3. Harness Seam & Provider Routing](#3-harness-seam--provider-routing)
 - [4. Native Subagents & Skills](#4-native-subagents--skills)
 
 ---
 
-## 1. Two-Agent Collaboration Model
+## 1. Horizon Loop & Fresh-Context Review
 
-Archon Horizon divides cognitive responsibilities between two abstract, engine-agnostic agent roles operating across deterministic synchronization boundaries. Both roles are defined in [`agents/harness_agents.py`](../../src/archon_horizon/agents/harness_agents.py), driven by the prompts in [`agents/prompts.py`](../../src/archon_horizon/agents/prompts.py), and their reports are parsed by [`agents/parsing.py`](../../src/archon_horizon/agents/parsing.py).
+Archon Horizon has one orchestrated driver: the Horizon agent. It owns the
+proof loop, workspace strategy, and dispatch decisions. Independent review is a
+native subagent checkpoint, not a second alternating orchestrator role.
 
 ```
 +-----------------------------------------------------------------------------+
 |                            Archon Horizon Workspace                         |
 |                                                                             |
 |   +-----------------------+   Collaboration   +-------------------------+   |
-|   |     Ground Agent      | <---------------> |      Horizon Agent      |   |
+|   |   Ground helper (review) | <--- native dispatch --- |   Horizon Agent   |   |
 |   |                       |       Rounds      |                         |   |
-|   | • Blueprints & DAGs   |                   | • Autonomous Lean Proofs|   |
-|   | • Roadmap & Memory    |                   | • Build & Tool Exec     |   |
-|   | • Inbox Triage        |                   | • Proof Repair Loops    |   |
+|   | • Fresh strategy view |                   | • Autonomous Lean Proofs|   |
+|   | • Graph/task hygiene  |                   | • Build & Tool Exec     |   |
+|   | • Issues & memory     |                   | • Proof Repair Loops    |   |
 |   +-----------------------+                   +-------------------------+   |
 +-----------------------------------------------------------------------------+
 ```
@@ -38,15 +40,15 @@ The **Horizon Agent** acts as the dedicated autonomous formalization engine. Gra
 - Executing long-running proof searches and writing formal Lean 4 code directly within target projects.
 - Running compiler toolchains (`lake build`), diagnosing error messages, and performing self-directed proof repair loops.
 - Reporting formalization progress, partial proof milestones, and blockers back to the workspace via structured artifacts.
-- Respecting standing protections (soft freezes) established by the Ground Agent or human supervisors.
+- Respecting standing protections (soft freezes) established by helpers or human supervisors.
 
-### Ground Agent
-The **Ground Agent** acts as the human-aligned supervisor, architect, and project manager. Constrained by targeted prompts to ensure human-grade clarity and organization, its responsibilities include:
-- Maintaining and refining human-readable blueprints and LaTeX-subset dependency structures.
-- Organizing roadmap milestones, breaking down high-level mathematical goals into concrete tasks.
-- Triaging communication via local and GitHub inboxes.
-- Summarizing progress, managing workspace memory, and preparing dashboard material.
-- Invoking specialized native subagents (e.g., `blueprint-reviewer`, `diff-auditor`) for focused auditing.
+### Ground Helper
+The read-only **Ground** helper is dispatched by Horizon before terminal task
+completion, after long stretches of work, and after strategy pivots. It rebuilds
+context from the ledger diff, reports, roadmap, inbox, graph, and Lean state and
+answers whether the workspace is converging. It files concise issues or memory
+items but does not edit source or mark tasks done. `work-reviewer` handles a
+narrow proof/diff audit; `janitor` handles documentation and inbox hygiene.
 
 ---
 
@@ -75,5 +77,6 @@ Archon Horizon decouples high-level orchestration from the underlying LLM execut
 ## 4. Native Subagents & Skills
 
 When a workspace is initialized or updated (`horizon init --update`, and again at the start of every run), Horizon compiles agent descriptors into native engine structures. The descriptors are provisioned by [`commands/subagent.py`](../../src/archon_horizon/commands/subagent.py) and [`commands/skills.py`](../../src/archon_horizon/commands/skills.py) during [`horizon init`](../../src/archon_horizon/commands/init.py), compiled per-engine by [`subagents/compile.py`](../../src/archon_horizon/subagents/compile.py), and MCP wiring lives in [`config/mcp.py`](../../src/archon_horizon/config/mcp.py):
-- **Subagents** (both engines): Specialized roles such as `blueprint-reviewer` and `diff-auditor` are compiled to workspace-local `.claude/agents/<name>.md` (Claude) and `.codex/agents/<name>.toml` (Codex). Read-only is engine-enforced (Claude `disallowedTools`; Codex `sandbox_mode = "read-only"`).
-- **Skills**: Modular capability guides are provisioned under `.claude/skills/<name>/SKILL.md`. **Claude Code** auto-discovers them. **Codex** has no such discovery, so Horizon inlines a skills index (names, descriptions, and the absolute `SKILL.md` paths to read on demand) into each compiled Codex agent, and the Ground/Horizon prompts point both engines at the same files.
+- **Subagents** (both engines): Specialized roles such as `ground`, `work-reviewer`, and `blueprint` are compiled to workspace-local `.claude/agents/<name>.md` (Claude) and `.codex/agents/<name>.toml` (Codex). Read-only is engine-enforced (Claude `disallowedTools`; Codex `sandbox_mode = "read-only"`).
+- **Model ownership:** descriptors do not pin a model, tier, or effort. Helpers inherit the parent by default; Horizon chooses a lighter capable model for mechanical work or the same/high-effort model for mathematical review through the engine's native dispatch mechanism.
+- **Skills**: Modular capability guides are provisioned under `.claude/skills/<name>/SKILL.md`. **Claude Code** auto-discovers them. **Codex** has no such discovery, so Horizon inlines a skills index (names, descriptions, and the absolute `SKILL.md` paths to read on demand) into each compiled Codex agent.

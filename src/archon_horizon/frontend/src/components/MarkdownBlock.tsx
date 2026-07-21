@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import katex from 'katex';
 import { highlightLeanLines } from '../utils/leanHighlight';
 import styles from './MarkdownBlock.module.css';
@@ -17,9 +18,13 @@ interface MarkdownBlockProps {
  * converter; only the markdown syntax we recognize emits raw HTML. The
  * wrapper always carries the base `.markdown` class so the stylesheet's
  * heading / list / table / code-block rules apply; callers layer their
- * own class on top for view-specific overrides. */
+ * own class on top for view-specific overrides.
+ *
+ * The conversion is memoized on `content`: KaTeX and Lean highlighting make it
+ * expensive on a large body (reports reach a couple of MB), and a live-tailed
+ * log re-renders its panels on every poll while the text is unchanged. */
 export default function MarkdownBlock({ content, className }: MarkdownBlockProps) {
-  const html = markdownToHtml(content);
+  const html = useMemo(() => markdownToHtml(content), [content]);
   const cls = className ? `${styles.markdown} ${className}` : styles.markdown;
   return <div className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
 }
@@ -30,7 +35,8 @@ export default function MarkdownBlock({ content, className }: MarkdownBlockProps
  * behavior), so wrapped prose isn't broken mid-sentence. Blank lines start
  * a new block. HTML comments (`<!-- ... -->`) are stripped — they exist in
  * the templates as authoring guidance, not user-facing content. Math is
- * rendered with KaTeX: `$$...$$` for display, `$...$` for inline.
+ * rendered with KaTeX: `$$...$$` / `\[...\]` for display, `$...$` /
+ * `\(...\)` for inline.
  *
  * Supports: ATX headings (# through ######), bullet and ordered lists,
  * blockquotes, horizontal rules, fenced code blocks, inline code, tables,
@@ -58,18 +64,24 @@ export function markdownToHtml(content: string): string {
     return stash(`<pre><code${cls}>${body}</code></pre>`);
   });
 
-  // Block math: `$$...$$` may span multiple lines, so extract before
-  // paragraph splitting.
+  // Block math: `$$...$$` or `\[...\]` may span multiple lines, so extract
+  // before paragraph splitting.
   result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) =>
+    stash(renderMath(tex.trim(), true)),
+  );
+  result = result.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) =>
     stash(renderMath(tex.trim(), true)),
   );
 
   // Inline math: `$...$` on a single line, no empty body, not preceded by
-  // a backslash (escaped). Stash so `_`/`*` inside don't get treated as
-  // markdown emphasis.
+  // a backslash (escaped) — or the LaTeX `\(...\)` delimiters. Stash so
+  // `_`/`*` inside don't get treated as markdown emphasis.
   result = result.replace(
     /(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g,
     (_, tex) => stash(renderMath(tex, false)),
+  );
+  result = result.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) =>
+    stash(renderMath(tex.trim(), false)),
   );
 
   // Tables: header row, separator row, then one or more body rows.

@@ -164,33 +164,24 @@ def session_change_summary(
     project_paths: tuple[str, ...],
     *,
     base: str | None = None,
-    worktree: bool = False,
-    fallback_files: tuple[str, ...] = (),
-    exclude_paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Change summary for the commit ``sha`` vs ``base``, scoped to
-    ``project_paths`` (workspace-relative directory prefixes).
-
-    ``worktree=True`` compares the current working tree (uncommitted state)
-    against ``base`` instead of a commit — the live view for a session still
-    running that has not committed yet.
+    """Change summary for the commit ``sha``, scoped to ``project_paths``
+    (workspace-relative directory prefixes).
 
     ``base`` is the commit to diff against; pass None (the normal case) to use
     this commit's own git PARENT — exactly what git records the commit as
     changing. The workspace ledger is ONE shared branch that every run commits
     onto, so a commit's parent is the ledger state immediately before it (it may
     belong to another run or a dashboard publish — fine, the diff still shows
-    only what this commit changed). Diffing against a same-run "previous session"
-    would instead span all the interleaved commits between them. Only when there
-    is no parent at all (the repo's first commit) is the result flagged
-    ``initial`` for the UI to explain.
+    only what this commit changed). Only when there is no parent at all (the
+    repo's first commit) is the result flagged ``initial`` for the UI to explain.
 
     Per-file rows carry LOC (total + code) and sorry counts before/after; the
     roll-ups (``sorry_delta``, ``loc_code_delta``, …) are Lean-only, and a
     parallel set is provided for blueprint (`.tex`) files. Diffs are fetched
     lazily per file (see :func:`session_file_diff`), not inlined here.
     """
-    empty_files = [{"path": p, "category": file_category(p)} for p in sorted(fallback_files)]
+    empty_files: list[dict[str, Any]] = []
 
     def _empty(reason: str) -> dict[str, Any]:
         return {
@@ -208,7 +199,7 @@ def session_change_summary(
             "lean_files_changed": sum(1 for r in empty_files if r["category"] == "lean"),
         }
 
-    if not worktree and not sha:
+    if not sha:
         # The session's integration commit was a no-op — nothing changed.
         return _empty("no-changes")
     if not git_available():
@@ -218,29 +209,18 @@ def session_change_summary(
     if not git.is_repo():
         return _empty("no-vcs")
 
-    if worktree:
-        # Live view: diff the current working tree against the last committed
-        # session (``base``). ``effective_sha=None`` means "working tree".
-        effective_sha: str | None = None
-        base_source = "working-tree"
+    # Diff against the commit's own git parent (the ledger state right before
+    # it) unless an explicit base is given — this is exactly what the commit
+    # changed, and it is robust to the shared ledger branch interleaving many
+    # runs' commits.
+    if base is not None:
+        base_source = "explicit-base"
     else:
-        # Diff against the commit's own git parent (the ledger state right before
-        # it) unless an explicit base is given — this is exactly what the commit
-        # changed, and it is robust to the shared ledger branch interleaving many
-        # runs' commits.
-        effective_sha = sha
-        if base is not None:
-            base_source = "explicit-base"
-        else:
-            base = git.parent_sha(sha)
-            base_source = "git-parent" if base is not None else "none"
-    initial = base is None and not worktree
+        base = git.parent_sha(sha)
+        base_source = "git-parent" if base is not None else "none"
+    initial = base is None
 
-    excluded = {p for p in exclude_paths if p}
-    rows_all = git.numstat(base, effective_sha, project_paths)
-    excluded_hits = {row[2] for row in rows_all if row[2] in excluded}
-    rows_raw = [row for row in rows_all if row[2] not in excluded]
-    files = [_file_row(git, base, effective_sha, add, dele, path) for add, dele, path in rows_raw]
+    files = [_file_row(git, base, sha, add, dele, path) for add, dele, path in git.numstat(base, sha, project_paths)]
     files.sort(key=lambda r: (
         {"lean": 0, "blueprint": 1, "other": 2}[r["category"]],
         r.get("sorry_delta", 0),
@@ -251,15 +231,13 @@ def session_change_summary(
     return {
         "available": True,
         "initial": initial,
-        "worktree": worktree,
         "base_source": base_source,
-        "sha": None if worktree else sha,
+        "sha": sha,
         "base": base,
         "files": files,
         "lean": lean,
         "blueprint": blueprint,
         "other_count": sum(1 for r in files if r["category"] == "other"),
-        "excluded_count": len(excluded_hits) if worktree else 0,
         "sorry_delta": lean["sorry_delta"],
         "loc_add": lean["add"],
         "loc_del": lean["del"],
@@ -268,109 +246,21 @@ def session_change_summary(
 
 
 def session_file_diff(
-    root: Path, sha: str | None, path: str, *, base: str | None = None, worktree: bool = False
+    root: Path, sha: str | None, path: str, *, base: str | None = None
 ) -> dict[str, Any]:
-    """Unified diff of one file at ``sha`` vs ``base`` (the previous session's
-    commit), capped in size. ``worktree=True`` diffs the working-tree file
-    against ``base`` (the live view for a running session)."""
-    if not git_available() or (not sha and not worktree):
+    """Unified diff of one file at ``sha`` vs its parent (or ``base``), capped
+    in size — the click-to-diff behind a commit card."""
+    if not git_available() or not sha:
         return {"path": path, "available": False, "diff": ""}
     git = WorkspaceGit(root)
     if not git.is_repo():
         return {"path": path, "available": False, "diff": ""}
-    if base is None and not worktree:
+    if base is None:
         base = git.parent_sha(sha)
-    text = git.diff(base, None if worktree else sha, (path,))
+    text = git.diff(base, sha, (path,))
     truncated = len(text) > _MAX_FILE_DIFF_CHARS
     if truncated:
         text = text[:_MAX_FILE_DIFF_CHARS] + "\n… diff truncated …\n"
     return {"path": path, "available": True, "diff": text, "truncated": truncated}
 
 
-def aggregate_session_summary(
-    root: Path,
-    project_paths: tuple[str, ...],
-    commits: list[tuple[str, str]],
-) -> dict[str, Any]:
-    """Aggregate all of a session's commits into one change summary.
-
-    ``commits`` is ``[(sha, subject), …]`` oldest-first (from
-    :meth:`WorkspaceGit.session_commits`). Each commit is diffed against its own
-    git parent (what that commit changed); per-file the deltas are summed (the
-    session's own contribution) while the *after* values are taken from the
-    latest commit, so the roll-ups reflect the whole session's work without the
-    interleaving that spanning far commit ranges would introduce.
-    """
-    # Per-file accumulator: summed deltas + latest 'after' snapshot.
-    acc: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    for sha, _subject in commits:
-        summary = session_change_summary(root, sha, project_paths, base=None)
-        for row in summary.get("files", []):
-            path = row["path"]
-            a = acc.get(path)
-            if a is None:
-                a = {"path": path, "category": row["category"], "add": 0, "del": 0,
-                     "sorry_delta": 0, "loc_delta": 0, "loc_code_delta": 0,
-                     "decl_delta": {}, "_first_before_loc": None}
-                acc[path] = a
-                order.append(path)
-            a["add"] += row.get("add", 0)
-            a["del"] += row.get("del", 0)
-            if row["category"] != "other":
-                a["sorry_delta"] += row.get("sorry_delta", 0)
-                a["loc_delta"] += row.get("loc_after", 0) - row.get("loc_before", 0)
-                a["loc_code_delta"] += row.get("loc_code_after", 0) - row.get("loc_code_before", 0)
-                for k, v in row.get("decl_delta", {}).items():
-                    a["decl_delta"][k] = a["decl_delta"].get(k, 0) + v
-                # Latest 'after' snapshot wins; remember the earliest 'before'.
-                a["sorry_after"] = row.get("sorry_after", 0)
-                a["loc_after"] = row.get("loc_after", 0)
-                a["loc_code_after"] = row.get("loc_code_after", 0)
-                a["decl_after"] = row.get("decl_after", {})
-                if a["_first_before_loc"] is None:
-                    a["_first_before_loc"] = row.get("loc_before", 0)
-
-    files: list[dict[str, Any]] = []
-    for path in order:
-        a = acc[path]
-        row: dict[str, Any] = {"path": path, "category": a["category"], "add": a["add"], "del": a["del"]}
-        if a["category"] != "other":
-            after = a.get("loc_after", 0)
-            # before = after − session's own delta, so after/delta render the
-            # session's contribution consistently in the UI.
-            row.update({
-                "loc_after": after, "loc_before": after - a["loc_delta"],
-                "loc_code_after": a.get("loc_code_after", 0),
-                "loc_code_before": a.get("loc_code_after", 0) - a["loc_code_delta"],
-                "sorry_after": a.get("sorry_after", 0),
-                "sorry_before": a.get("sorry_after", 0) - a["sorry_delta"],
-                "sorry_delta": a["sorry_delta"],
-                "decl_after": a.get("decl_after", {}),
-                "decl_delta": {k: v for k, v in sorted(a["decl_delta"].items()) if v},
-                "added": (a["_first_before_loc"] == 0 and after > 0),
-                "deleted": (after == 0 and (a["_first_before_loc"] or 0) > 0),
-            })
-        files.append(row)
-
-    files.sort(key=lambda r: (
-        {"lean": 0, "blueprint": 1, "other": 2}[r["category"]],
-        r.get("sorry_delta", 0),
-        r["path"],
-    ))
-    lean = _rollup([r for r in files if r["category"] == "lean"])
-    blueprint = _rollup([r for r in files if r["category"] == "blueprint"])
-    return {
-        "available": True,
-        "initial": False,
-        "base_source": "session-commits",
-        "commits": [{"sha": sha, "subject": subject} for sha, subject in commits],
-        "files": files,
-        "lean": lean,
-        "blueprint": blueprint,
-        "other_count": sum(1 for r in files if r["category"] == "other"),
-        "sorry_delta": lean["sorry_delta"],
-        "loc_add": lean["add"],
-        "loc_del": lean["del"],
-        "lean_files_changed": lean["files"],
-    }

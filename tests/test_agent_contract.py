@@ -1,18 +1,22 @@
-"""Agent prompt/output contract: prompts expose schema, parser consumes it."""
+"""Agent prompt contract: a task directive + "load the `horizon` skill".
+
+The prompt pushes no role prose or workspace state — the skill is the contract
+and state is pulled through the CLI — so these tests pin (a) the small
+directive shape and (b) that the load-bearing conventions actually live in the
+packaged skill files.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from archon_horizon.agents.base import HorizonContext, GroundContext
-from archon_horizon.agents.parsing import parse_ground_update
-from archon_horizon.agents.prompts import compose_horizon_prompt, compose_ground_prompt
-from archon_horizon.core.inbox import InboxItem, InboxKind
-from archon_horizon.core.labels import AGENT_READY
-from archon_horizon.core.roadmap import Roadmap
+from archon_horizon.agents.base import HorizonContext
+from archon_horizon.agents.prompts import horizon_task_prompt
 from archon_horizon.core.sessions import RunRecord
 from archon_horizon.core.tasks import HorizonTask, WriteSet
 from archon_horizon.core.workspace import Project, Workspace
+
+_SKILLS_DIR = Path(__file__).resolve().parents[1] / "src" / "archon_horizon" / "skills"
 
 
 def _workspace(tmp_path: Path) -> Workspace:
@@ -23,75 +27,7 @@ def _workspace(tmp_path: Path) -> Workspace:
     )
 
 
-def test_ground_prompt_contains_archon_horizon_contract(tmp_path: Path) -> None:
-    run = RunRecord(id="S-1", rounds_requested=1)
-    ctx = GroundContext(
-        workspace=_workspace(tmp_path),
-        run=run,
-        focus=run.focus,
-        roadmap=Roadmap(),
-        accepted_inbox=(InboxItem(id="I-1", provider="local", kind=InboxKind.HINT, body="use affine", labels=(AGENT_READY,)),),
-        blueprint_summary="ag-main: 1 nodes, 0 proved, 0 edges, 0 dangling",
-        memory="avoid old lemma",
-    )
-
-    prompt = compose_ground_prompt(ctx)
-
-    assert "Ground agent" in prompt
-    # No machine-readable report contract anymore, but CLI reads should be parseable.
-    assert "--json" in prompt
-    assert "--author ground" in prompt
-    assert "supervisor" in prompt and "janitor" in prompt
-    assert "at most 4 concise bullets" in prompt
-    assert "## Progress" in prompt
-    assert "4 sorries -> 3 sorries" in prompt
-    assert "No change because" in prompt
-    assert "inline `-` bullets" in prompt
-    assert "## Why I stopped" in prompt
-    assert "fully complete" in prompt
-    # Ground does not own a task, so it gets no task-status CLI instruction.
-    assert "task set <task_id> --status done" not in prompt
-    assert "not a list of commands" in prompt
-    assert "Avoid directive language" in prompt
-    assert "archive stale or consumed items" in prompt
-    assert "10 open memory items" in prompt
-    assert "3-4 open info items" in prompt
-    assert "# Skills" in prompt and "horizon-inbox" in prompt  # capabilities are skills now
-    assert "ag-main: 1 nodes" in prompt
-    assert "use affine" in prompt
-
-
-def test_ground_prompt_compacts_large_inbox(tmp_path: Path) -> None:
-    items = tuple(
-        InboxItem(
-            id=f"I-{i:04d}",
-            provider="local",
-            kind=InboxKind.HINT,
-            body=("detail " * 200) + str(i),
-            labels=(AGENT_READY,),
-        )
-        for i in range(12)
-    )
-    ctx = GroundContext(
-        workspace=_workspace(tmp_path),
-        run=RunRecord(id="S-1", rounds_requested=1),
-        focus=RunRecord(id="S-1", rounds_requested=1).focus,
-        roadmap=Roadmap(),
-        accepted_inbox=items,
-        blueprint_summary="",
-        memory="",
-    )
-
-    prompt = compose_ground_prompt(ctx)
-
-    assert "I-0000" in prompt
-    assert "I-0009" in prompt
-    assert "I-0010" not in prompt
-    assert "2 more accepted inbox item(s) omitted" in prompt
-    assert "detail " * 120 not in prompt
-
-
-def test_horizon_prompt_is_task_scoped(tmp_path: Path) -> None:
+def test_horizon_prompt_is_directive_plus_skill(tmp_path: Path) -> None:
     task = HorizonTask(
         id="T-1",
         project="ag-main",
@@ -103,27 +39,34 @@ def test_horizon_prompt_is_task_scoped(tmp_path: Path) -> None:
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
     )
 
-    prompt = compose_horizon_prompt(ctx)
+    prompt = horizon_task_prompt(ctx)
 
-    assert "Horizon agent" in prompt
-    assert "Task focus" in prompt
-    assert "you choose the strategy from the live Lean state" in prompt
-    assert "write local helper scripts/tools" in prompt
-    assert "## Progress" in prompt
-    assert "4 sorries -> 3 sorries" in prompt
-    assert "inline `-` bullets" in prompt
-    assert "## Why I stopped" in prompt
-    # Horizon owns its task status and records `done` via the CLI when fully complete.
-    assert "fully complete" in prompt
-    assert "task set <task_id> --status done" in prompt
+    # The directive: skill pointer + task identity + one-shot framing.
+    assert "`horizon`" in prompt and "skill" in prompt
+    assert "T-1" in prompt
     assert "Prove Foo.bar" in prompt
-    assert "files=Foo.lean" in prompt  # carried as "Suggested scope"
     assert "roadmap=R-1" in prompt
-    assert "--json" in prompt
-    assert "--author horizon" in prompt
+    assert "ag-main" in prompt
+    assert "one-shot" in prompt
+    # No pushed policy/state: those moved to the skill / the CLI (pull).
+    assert "# Roadmap" not in prompt
+    assert "# Memory" not in prompt
+    assert "# Subagents" not in prompt
+    assert len(prompt) < 2000
+
+
+def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
+    # What the old composed prompt pushed must survive in the packaged skill.
+    skill = (_SKILLS_DIR / "horizon" / "SKILL.md").read_text("utf-8")
+    assert "## Progress" in skill and "## Why I stopped" in skill  # report shape
+    assert "--status done" in skill                                # status ownership
+    assert "FULLY complete" in skill
+    assert "foreground" in skill                                   # one-shot discipline
+    subagents = (_SKILLS_DIR / "subagents" / "SKILL.md").read_text("utf-8")
+    assert "model" in subagents and "lighter capable" in subagents  # dispatcher-owned model economy
+    assert "ground" in skill and "before marking" in skill          # fresh-context convergence gate
 
 
 class _RecordingHarness:
@@ -150,7 +93,6 @@ def test_horizon_resumes_native_session_when_engine_supports_it(tmp_path: Path) 
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-1",
     )
 
@@ -173,7 +115,6 @@ def test_horizon_falls_back_to_full_prompt_without_resume_support(tmp_path: Path
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-1",
     )
 
@@ -211,7 +152,6 @@ def test_horizon_retries_fresh_when_native_resume_cannot_start(tmp_path: Path) -
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-gone",
     )
 
@@ -240,7 +180,6 @@ def test_horizon_does_not_retry_when_resumed_session_did_work(tmp_path: Path) ->
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
         task=task,
-        roadmap=Roadmap(),
         resume_session_id="sid-1",
     )
 
@@ -253,72 +192,40 @@ def test_horizon_does_not_retry_when_resumed_session_did_work(tmp_path: Path) ->
     assert len(harness.requests) == 1  # no fallback retry
 
 
-def test_parse_ground_update_is_report_only() -> None:
-    # The whole response IS the report when the agent emits only its report; the
-    # structured effects happened live (disk + CLI), so there is nothing else to parse.
-    update = parse_ground_update("  Set strategy; recommended R-1 next.  ")
-
-    assert update.report == "Set strategy; recommended R-1 next."
-    assert update.artifact_refs == ()
-
-
-def test_parse_ground_update_keeps_last_explicit_report_block() -> None:
-    text = """Let me inspect the workspace.
-Done. Here's the run-local report.
-## Run-local report
-old
-Done. Here's the run-local report.
-## Run-local report
-new
-"""
-
-    update = parse_ground_update(text)
-
-    assert update.report == "## Run-local report\nnew"
-
-
-def test_prompt_body_loads_from_bundled_default(tmp_path: Path) -> None:
-    # With no workspace override, the composer falls back to the bundled md bodies.
-    from archon_horizon.agents.prompts import bundled_prompt_names
-
-    assert set(bundled_prompt_names()) == {"ground", "horizon"}
+def test_workspace_wide_task_prompt_names_no_single_project(tmp_path: Path) -> None:
     ctx = HorizonContext(
         workspace=_workspace(tmp_path),
         run=RunRecord(id="S-1", rounds_requested=1),
-        task=HorizonTask(id="T-1", project="ag-main", objective="x", write_set=WriteSet()),
-        roadmap=Roadmap(),
+        task=HorizonTask(id="T-2", project="", objective="tidy", write_set=WriteSet()),
     )
-    assert "You are Archon Horizon's Horizon agent" in compose_horizon_prompt(ctx)
+    prompt = horizon_task_prompt(ctx)
+    assert "workspace-wide" in prompt
 
 
-def test_workspace_prompt_override_wins(tmp_path: Path) -> None:
-    # A workspace copy at <state_dir>/prompts/<name>.md overrides the bundled body,
-    # so a human can retune the agent's instructions without touching code.
-    ws = _workspace(tmp_path)
-    override_dir = ws.state_path / "prompts"
-    override_dir.mkdir(parents=True)
-    (override_dir / "horizon.md").write_text("CUSTOM HORIZON ROLE PROSE.", "utf-8")
+def test_agent_env_carries_full_session_identity(tmp_path: Path) -> None:
+    # The env is the engine-agnostic context channel: run/round/session/task are
+    # exported so Claude Code and Codex sessions can read their own identity.
+    from archon_horizon.agents.harness_agents import HarnessHorizonAgent
 
+    task = HorizonTask(id="T-9", project="ag-main", title="Prove the crux", objective="x")
+    log_dir = tmp_path / "runs" / "0004" / "sessions" / "0002-horizon-T-9"
+    log_dir.mkdir(parents=True)
     ctx = HorizonContext(
-        workspace=ws,
-        run=RunRecord(id="S-1", rounds_requested=1),
-        task=HorizonTask(id="T-1", project="ag-main", objective="Prove Foo.bar", write_set=WriteSet()),
-        roadmap=Roadmap(),
+        workspace=_workspace(tmp_path),
+        run=RunRecord(id="0004", rounds_requested=3),
+        task=task,
+        log_dir=log_dir,
+        round_index=1,
+        rounds_total=3,
     )
-    prompt = compose_horizon_prompt(ctx)
-    assert "CUSTOM HORIZON ROLE PROSE." in prompt
-    assert "You are Archon Horizon's Horizon agent" not in prompt  # bundled body replaced
-    # Dynamic sections are still injected around the custom body.
-    assert "Prove Foo.bar" in prompt
-    assert "# Skills" in prompt
+    harness = _RecordingHarness(resume=False)
+    HarnessHorizonAgent(harness).run_task(ctx)
 
-
-def test_install_prompts_writes_editable_copies(tmp_path: Path) -> None:
-    from archon_horizon.agents.prompts import install_prompts
-
-    written = install_prompts(tmp_path)
-    assert set(written) == {"ground", "horizon"}
-    assert (tmp_path / ".archon-horizon" / "prompts" / "ground.md").is_file()
-    assert (tmp_path / ".archon-horizon" / "prompts" / "horizon.md").is_file()
-    # Re-installing over identical copies is a no-op.
-    assert install_prompts(tmp_path) == []
+    env = harness.request.metadata["env"]
+    assert env["ARCHON_HORIZON_RUN"] == "0004"
+    assert env["ARCHON_HORIZON_SESSION"] == "0002-horizon-T-9"
+    assert env["ARCHON_HORIZON_SESSION_DIR"] == str(log_dir.resolve())
+    assert env["ARCHON_HORIZON_ROUND"] == "1"
+    assert env["ARCHON_HORIZON_ROUNDS"] == "3"
+    assert env["ARCHON_HORIZON_TASK"] == "T-9"
+    assert env["ARCHON_HORIZON_TASK_TITLE"] == "Prove the crux"

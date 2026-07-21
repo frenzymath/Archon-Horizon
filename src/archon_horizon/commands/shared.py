@@ -52,11 +52,11 @@ def github_cli_status() -> tuple[str, str]:
 def agent_author(default: str | None = None) -> str | None:
     """The author to stamp on agent-authored writes, from the run environment.
 
-    The orchestrator exports ``ARCHON_HORIZON_AGENT_ROLE`` (``ground``/``horizon``)
-    for the agent it is running; everything else falls back to ``default``.
+    The orchestrator exports ``ARCHON_HORIZON_AGENT_ROLE`` (``horizon``) for the
+    agent it is running; everything else falls back to ``default``.
     """
     role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
-    if role in {"ground", "horizon"}:
+    if role == "horizon":
         return role
     return default
 
@@ -117,21 +117,18 @@ def local_inbox(workspace) -> FilesystemInboxProvider:
 
 
 def roadmap_store(workspace):
-    """The roadmap store, using per-item YAML shards."""
-    from archon_horizon.store.codec import YamlCodec
-    from archon_horizon.store.filesystem import FilesystemRoadmapStore
+    """The roadmap store — same construction as the orchestrator's (build_stores),
+    so the CLI and the run loop can never drift on codec/paths."""
+    from archon_horizon.config.loader import build_stores
 
-    codec = YamlCodec()
-    return FilesystemRoadmapStore(workspace.state_path / "roadmap", codec)
+    return build_stores(workspace).roadmap
 
 
 def task_store(workspace):
-    """The task store, using the YAML codec — every write goes through
-    ``yaml.safe_dump``, so editing tasks via the CLI can't corrupt them."""
-    from archon_horizon.store.codec import YamlCodec
-    from archon_horizon.store.filesystem import FilesystemTaskStore
+    """The task store — same construction as the orchestrator's (build_stores)."""
+    from archon_horizon.config.loader import build_stores
 
-    return FilesystemTaskStore(workspace.state_path / "tasks", YamlCodec())
+    return build_stores(workspace).tasks
 
 
 def inbox_providers(cfg, workspace):

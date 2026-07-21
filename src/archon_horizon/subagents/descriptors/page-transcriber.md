@@ -11,10 +11,9 @@ dispatcher_notes: |
     a page range.
   - Hard cap: at most 5 pages per call. Beyond ~5 pages the context gets too long
     and transcription accuracy drops — split a larger range across several calls.
-  - I use AI **vision** on rendered page images, NOT an OCR tool. Give me a
-    vision-capable harness/model (the `references.transcription` harness, which is
-    vision-capable). If the assigned model can't read images, I report that
-    rather than guessing.
+  - I use AI **vision** on rendered page images, NOT an OCR tool. The Horizon
+    dispatcher must choose a vision-capable model for this call; if the assigned
+    model can't read images, I report that rather than guessing.
   - I write `references/<slug>/tex/page-NNNN.tex` (one file per page) so the
     blueprint can cite `\source{<slug>:page-NNNN}`.
 ---

@@ -1,0 +1,11 @@
+id: '0002'
+focus:
+  projects:
+  - MiniTopology
+  task: DEMO.2
+  tasks:
+  - DEMO.2
+rounds_requested: 1
+start_round: 0
+created_at: '2026-07-19T09:00:00+00:00'
+metadata: {}

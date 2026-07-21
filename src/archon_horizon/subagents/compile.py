@@ -7,11 +7,11 @@ into the workspace-local native config the active engine discovers on its own:
   - Claude Code → ``<workspace>/.claude/agents/<name>.md``
   - Codex       → ``<workspace>/.codex/agents/<name>.toml``
 
-Dispatch (parallelism, approvals) then belongs to the engine; Horizon only
-installs the descriptors. The model is resolved per-harness from the
-descriptor's explicit ``model`` or symbolic ``tier``; when neither is set we omit
-the model so the subagent inherits the parent session (which keeps Horizon's
-provider routing intact). ``read_only`` maps to each engine's own enforcement
+Dispatch (parallelism, approvals, model, and effort) then belongs to the Horizon
+agent through the engine's native mechanism; Horizon only installs the role
+descriptors. Generated descriptors deliberately omit model settings, so helpers
+inherit unless the Horizon agent chooses a different model for that particular
+dispatch. ``read_only`` maps to each engine's own enforcement
 (Claude ``disallowedTools``; Codex ``sandbox_mode = "read-only"``) — a real,
 engine-enforced guarantee rather than a prompt-only request.
 
@@ -43,19 +43,6 @@ def _marker_line(name: str, comment: str) -> str:
     )
 
 
-def resolve_model(descriptor: SubagentDescriptor, harness: HarnessConfig) -> str | None:
-    """Concrete model for a descriptor under a harness, or ``None`` to inherit.
-
-    Explicit ``model`` wins; else a symbolic ``tier`` is resolved via the
-    harness's tier map; else ``None`` (omit → inherit the parent session).
-    """
-    if descriptor.model:
-        return descriptor.model
-    if descriptor.tier:
-        return harness.tier_model(descriptor.tier)
-    return None
-
-
 def _toml_basic(value: str) -> str:
     """A single-line TOML basic string with the escapes TOML requires."""
     escaped = (
@@ -73,9 +60,6 @@ def render_claude_agent(descriptor: SubagentDescriptor, harness: HarnessConfig) 
     # Description is a YAML flow scalar; quote to stay safe with ``\`` and ``:``.
     desc = descriptor.description.strip().replace("\\", "\\\\").replace('"', '\\"')
     lines.append(f'description: "{desc}"')
-    model = resolve_model(descriptor, harness)
-    if model:
-        lines.append(f"model: {model}")
     if descriptor.read_only:
         lines.append("disallowedTools: [" + ", ".join(_READ_ONLY_DENY) + "]")
     lines.append("---")
@@ -94,9 +78,6 @@ def render_codex_agent(
     lines = [_marker_line(descriptor.name, "#")]
     lines.append(f"name = {_toml_basic(descriptor.name)}")
     lines.append(f"description = {_toml_basic(descriptor.description.strip())}")
-    model = resolve_model(descriptor, harness)
-    if model:
-        lines.append(f"model = {_toml_basic(model)}")
     if descriptor.read_only:
         lines.append('sandbox_mode = "read-only"')
     # ``developer_instructions`` carries the prompt body. Use a multiline LITERAL
@@ -209,8 +190,9 @@ def install_subagents(
     """Compile descriptors into native agents for every engine in use.
 
     Emits Claude and/or Codex native subagents (workspace-local) depending on
-    which engine kinds appear in ``harnesses``, resolving each descriptor's model
-    against that engine's harness config. Returns ``{engine: [names written]}``.
+    which engine kinds appear in ``harnesses``. The generated native descriptors
+    omit model and effort so the parent Horizon agent controls each dispatch.
+    Returns ``{engine: [names written]}``.
     """
     descriptors = load_descriptors(_builtin_dir())
     descriptors.update(load_descriptors(descriptor_dir))

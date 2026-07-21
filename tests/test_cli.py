@@ -127,8 +127,13 @@ def test_task_command_writes_safe_yaml(tmp_path: Path) -> None:
     assert yaml.safe_load(task_file.read_text("utf-8"))["status"] == "done"
     roadmap_file = ws / ".archon-horizon" / "roadmap" / "items" / "A.3.yaml"
     assert yaml.safe_load(roadmap_file.read_text("utf-8"))["status"] == "done"
+    # Dedup: the status syncs to the linked milestone, but NO prose comment is
+    # written onto the roadmap (that duplicated the task's narration). The
+    # transition is recorded in structured history instead.
     comments_dir = ws / ".archon-horizon" / "roadmap" / "comments" / "A.3"
-    assert any("T-1" in p.read_text("utf-8") for p in comments_dir.glob("*.md"))
+    assert not comments_dir.exists() or not any(comments_dir.glob("*.md"))
+    history_file = ws / ".archon-horizon" / "roadmap" / "history" / "A.3.jsonl"
+    assert history_file.exists() and "synced from task T-1" in history_file.read_text("utf-8")
     assert _run(ws, "task", "list") == 0
     assert _run(ws, "task", "remove", "T-1") == 0
     assert not task_file.exists()
@@ -172,7 +177,11 @@ def test_init_scaffolds_minimal_state_dirs(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     assert _run(ws, "init", "--no-interactive") == 0
     state_dirs = sorted(p.name for p in (ws / ".archon-horizon").iterdir() if p.is_dir())
-    assert state_dirs == ["blueprints", "inbox", "prompts", "roadmap", "runs", "subagents", "tasks", "tools", "vcs"]
+    assert state_dirs == ["blueprints", "inbox", "roadmap", "runs", "subagents", "tasks", "tools", "vcs"]
+    # Engine-native orientation files point every engine at the horizon skill.
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        body = (ws / name).read_text("utf-8")
+        assert "horizon" in body and "SKILL.md" in body
 
 
 def test_init_does_not_seed_starter_subagents(tmp_path: Path) -> None:
@@ -210,7 +219,7 @@ def test_init_advisor_with_null_harness_writes_prompt_only(tmp_path: Path) -> No
     prompt = ws / ".archon-horizon" / "runs" / "post-init-advisor" / "prompt.md"
     assert prompt.exists()
     assert not (ws / ".archon-horizon" / "reports" / "post-init-advisor-prompt.md").exists()
-    assert "interactive workspace advisor" in prompt.read_text("utf-8")
+    assert "workspace advisor" in prompt.read_text("utf-8")
 
 
 def test_init_advisor_launches_interactive_claude_backend(
@@ -232,9 +241,8 @@ def test_init_advisor_launches_interactive_claude_backend(
     monkeypatch.setattr("subprocess.run", fake_run)
     config = json.dumps(
         {
-            "ground_kind": "claude-code",
-            "ground_model": "sonnet",
-            "horizon_kind": "null",
+            "horizon_kind": "claude-code",
+            "horizon_model": "sonnet",
         }
     )
 
@@ -243,7 +251,7 @@ def test_init_advisor_launches_interactive_claude_backend(
     argv, kwargs = next(call for call in calls if call[0][0] == "claude")
     assert argv[:3] == ["claude", "--model", "sonnet"]
     assert "-p" not in argv
-    assert "interactive workspace advisor" in argv[-1]
+    assert "workspace advisor" in argv[-1]
     assert kwargs["cwd"] == ws
 
 

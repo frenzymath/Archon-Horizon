@@ -846,6 +846,29 @@ tr:hover td { background: rgba(99, 102, 241, 0.03); }
   text-align: left;
 }
 .button-reset:hover { background: transparent; }
+/* Roadmap tree expand/collapse: the chevron sits left of each parent card;
+ * leaf rows get an equal-width spacer so cards stay aligned. */
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 20px;
+  flex: none;
+  justify-content: center;
+  margin-top: 8px; /* optically centers on the card's summary row */
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+  line-height: 1;
+}
+.tree-toggle:hover { color: var(--blue); }
+.tree-toggle-count {
+  font-size: 10px;
+  font-weight: 600;
+}
+.tree-toggle-spacer {
+  width: 20px;
+  flex: none;
+}
 .tag-chip, .type-chip, .source-chip, .chip-select, .priority-chip {
   --tag-fg: var(--tag-slate-fg);
   --tag-bg: var(--tag-slate-bg);
@@ -1123,6 +1146,19 @@ button.danger { color: var(--red); }
 .subagent-name { font-weight: 700; color: var(--text-primary); }
 .subagent-model { font-size: 10.5px; font-weight: 600; color: #6d28d9; background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 999px; padding: 0 6px; white-space: nowrap; }
 .subagent-count { margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--text-muted); }
+
+/* Compact parent-log lifecycle rows: delegation should be visible even when the
+   native child transcript lives in a separate engine-owned file. */
+.subagent-lifecycle-card { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 7px 10px; border: 1px solid color-mix(in srgb, #7c3aed 30%, var(--border)); border-radius: 6px; background: color-mix(in srgb, #7c3aed 5%, var(--bg-secondary)); }
+.subagent-lifecycle-card.ended { border-color: color-mix(in srgb, #15803d 30%, var(--border)); background: color-mix(in srgb, #15803d 5%, var(--bg-secondary)); }
+.subagent-lifecycle-glyph { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; color: #7c3aed; background: color-mix(in srgb, #7c3aed 12%, transparent); font-weight: 800; }
+.subagent-lifecycle-card.ended .subagent-lifecycle-glyph { color: #15803d; background: color-mix(in srgb, #15803d 12%, transparent); }
+.subagent-lifecycle-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.subagent-lifecycle-main strong { color: var(--text-primary); font-size: 12px; }
+.subagent-lifecycle-main > span { color: var(--text-secondary); font-size: 11px; }
+.subagent-lifecycle-main small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70ch; }
+.subagent-lifecycle-meta { display: flex; align-items: center; gap: 5px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.subagent-lifecycle-meta span { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary); background: var(--bg-primary); font-size: 10.5px; white-space: nowrap; }
 .sublog-lines { padding-bottom: 4px; }
 .transcript-viewer.role-subagent .log-line,
 .subagent-sublog .log-line {
@@ -1486,6 +1522,43 @@ button.danger { color: var(--red); }
 .change-commit { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
 .change-commit-sha { font-family: var(--mono, monospace); color: var(--text-muted); flex-shrink: 0; }
 .change-commit-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Commit-granular "progress" cards: each commit's message + its own diff. */
+.commits-panel .commits-count {
+  display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; color: var(--accent-text);
+  background: var(--accent-bg); box-shadow: inset 0 0 0 1px var(--accent-ring);
+}
+.commit-cards { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; }
+.commit-card {
+  border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px;
+  background: var(--bg-secondary); overflow: hidden;
+}
+.commit-card.agent { border-left-color: var(--accent); }
+.commit-card.system { border-left-color: var(--border); opacity: 0.8; }
+.commit-card-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 12px; background: none; border: none; cursor: pointer;
+  text-align: left; font: inherit; color: var(--text-primary); min-width: 0;
+}
+.commit-card-head:hover { background: var(--bg-tertiary); }
+.commit-kind {
+  flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.03em; padding: 1px 6px; border-radius: 4px;
+  color: var(--text-muted); background: var(--bg-tertiary);
+}
+.commit-card.agent .commit-kind { color: var(--accent-text); background: var(--accent-bg); }
+.commit-copy { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.commit-subject {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-weight: 500;
+}
+.commit-time { color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.commit-stat { flex-shrink: 0; font-size: 12px; color: var(--text-muted); }
+.commit-sha { flex-shrink: 0; font-family: var(--mono, monospace); font-size: 12px; color: var(--text-muted); }
+.commit-empty { padding: 4px 14px 10px; }
+.commit-loading { padding: 10px 16px; }
+.commit-card .change-table { margin: 0 6px 8px; }
 .change-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .change-tabs { display: inline-flex; gap: 4px; }
 .change-tabs button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 6px; background: none; cursor: pointer; font-size: 12px; color: var(--text-secondary); }
@@ -1501,6 +1574,25 @@ button.danger { color: var(--red); }
 .diff-line.meta { color: var(--text-muted); }
 .log-stop-note { margin: 10px 12px; }
 .log-lines { display: flex; flex-direction: column; background: var(--bg-primary); }
+.log-expand-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-primary));
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.log-expand-more:hover { background: color-mix(in srgb, var(--accent) 9%, var(--bg-primary)); }
+.log-expand-rest { font-weight: 400; color: var(--text-muted); }
 .log-line {
   display: grid;
   grid-template-columns: 58px 108px minmax(0, auto) minmax(0, 1fr);
@@ -1796,6 +1888,7 @@ button.danger { color: var(--red); }
 .dv-root .dv-stat { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .dv-root .dv-legend { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
 .dv-root .leg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.15); }
+.dv-root .leg-box { width: 13px; height: 10px; border-radius: 3px; display: inline-block; border: 2px solid; }
 .dv-root .leg-bar { width: 48px; height: 8px; border-radius: 4px; display: inline-block; background: linear-gradient(90deg,#facc15,#f59e0b,#f97316); }
 .dv-root .leg-txt { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-right: 6px; }
 .dv-root .dv-controls { background: var(--bg-tertiary); min-height: 40px; padding: 6px 12px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; border: 1px solid var(--border); flex-wrap: wrap; }
@@ -1823,12 +1916,12 @@ button.danger { color: var(--red); }
 .dv-root .dv-range-val { flex: 0 0 40px; text-align: left; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
 
 /* ── DAG floating stats/metadata overlay (ported from Archon) ── */
-.dv-root .dv-stats { position: absolute; top: 12px; left: 12px; z-index: 5; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 188px; font-size: 11px; color: var(--text-secondary); box-shadow: 0 4px 16px rgba(15,23,42,.10); }
+.dv-root .dv-stats { position: absolute; top: 58px; left: 12px; z-index: 5; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 188px; font-size: 11px; color: var(--text-secondary); box-shadow: 0 4px 16px rgba(15,23,42,.10); }
 .dv-root .dv-stats-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .dv-root .dv-stats h4 { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 7px; }
 .dv-root .dv-stats-head h4 { margin-bottom: 0; }
 .dv-root .dv-stats-toggle { width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: 14px; cursor: pointer; padding: 0; }
-.dv-root .dv-stats-show { position: absolute; top: 12px; left: 12px; z-index: 5; background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; font-weight: 600; padding: 6px 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(15,23,42,.08); }
+.dv-root .dv-stats-show { position: absolute; top: 58px; left: 12px; z-index: 5; background: var(--bg-primary); color: var(--text-secondary); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; font-weight: 600; padding: 6px 10px; cursor: pointer; box-shadow: 0 2px 8px rgba(15,23,42,.08); }
 .dv-root .dv-stats .row { display: flex; justify-content: space-between; gap: 14px; line-height: 1.7; }
 .dv-root .dv-stats .row .v { font-family: var(--font-mono); color: var(--text-primary, #0f172a); }
 .dv-root .dv-stats .v.done { color: var(--green); } .dv-root .dv-stats .v.work { color: var(--orange); } .dv-root .dv-stats .v.inf { color: var(--red); } .dv-root .dv-stats .v.mathlib { color: #3b82f6; }
@@ -1843,6 +1936,43 @@ button.danger { color: var(--red); }
 .dv-root .dv-brand { font-weight: 700; font-size: 13px; color: var(--text-primary, #0f172a); white-space: nowrap; }
 .dv-root .dv-toolbar .project-picker-select { margin: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .dv-root .dv-toolbar .project-picker-select select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-primary); color: var(--text-primary, #0f172a); }
+
+/* ── Chapter-collapsed Graphviz DAG (ported from hgraph) ──────────── */
+.chapter-graph { width: 100%; height: 100%; min-height: 430px; display: flex; flex-direction: column; background: var(--bg-primary); border: 1px solid var(--border); overflow: hidden; }
+.chapter-graph-controls { box-sizing: border-box; height: 46px; padding: 5px 10px; display: flex; align-items: center; gap: 7px; flex: 0 0 46px; flex-wrap: nowrap; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--bg-secondary); z-index: 2; }
+.chapter-graph-controls select,
+.chapter-graph-controls button { border: 1px solid var(--border); border-radius: 5px; background: var(--bg-primary); color: var(--text-secondary); padding: 4px 8px; font-size: 11px; }
+.chapter-graph-controls select { max-width: 260px; }
+.chapter-graph-controls button { cursor: pointer; font-weight: 650; }
+.chapter-graph-controls button:hover { border-color: var(--accent); color: var(--accent-text); }
+.chapter-graph-controls span { color: var(--text-muted); font-size: 10px; margin-left: 3px; }
+.chapter-graph-canvas { position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none; background: radial-gradient(circle at center, color-mix(in srgb, var(--accent-bg) 20%, transparent), transparent 65%); }
+.chapter-graph-canvas:active { cursor: grabbing; }
+.chapter-graph-inner { position: absolute; left: 50%; top: 50%; width: max-content; height: max-content; transform-origin: center; will-change: transform; }
+.chapter-graph-inner svg { display: block; overflow: visible; }
+.chapter-graph-inner g.node,
+.chapter-graph-inner g.cluster,
+.chapter-graph-inner g.edge { transition: opacity 120ms ease; }
+.chapter-graph-inner g.node,
+.chapter-graph-inner g.cluster { cursor: pointer; }
+.chapter-graph-inner g.node:hover text { font-weight: 700; }
+.chapter-graph-inner g.node.dag-node-dependency polygon,
+.chapter-graph-inner g.node.dag-node-dependency ellipse,
+.chapter-graph-inner g.node.dag-node-dependency path { stroke: #2563eb !important; stroke-width: 3px !important; }
+.chapter-graph-inner g.node.dag-node-dependent polygon,
+.chapter-graph-inner g.node.dag-node-dependent ellipse,
+.chapter-graph-inner g.node.dag-node-dependent path { stroke: #f59e0b !important; stroke-width: 3px !important; }
+.chapter-graph-inner g.node.dag-node-selected polygon,
+.chapter-graph-inner g.node.dag-node-selected ellipse,
+.chapter-graph-inner g.node.dag-node-selected path { stroke: #0f172a !important; stroke-width: 3.2px !important; }
+.chapter-graph-inner g.edge.dag-edge-incoming path { stroke: #2563eb !important; stroke-width: 2.8px !important; }
+.chapter-graph-inner g.edge.dag-edge-incoming polygon { stroke: #2563eb !important; fill: #2563eb !important; }
+.chapter-graph-inner g.edge.dag-edge-outgoing path { stroke: #f59e0b !important; stroke-width: 2.8px !important; }
+.chapter-graph-inner g.edge.dag-edge-outgoing polygon { stroke: #f59e0b !important; fill: #f59e0b !important; }
+.chapter-graph-loading,
+.chapter-graph-error,
+.chapter-graph-empty { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--bg-primary) 92%, transparent); color: var(--text-muted); font-size: 12px; box-shadow: 0 3px 12px rgba(15, 23, 42, .08); }
+.chapter-graph-error { color: var(--red); max-width: 520px; }
 
 /* Single-line page header: title · stats · picker. */
 .panel-heading-inline { display: flex; align-items: baseline; gap: 0.85rem; flex-wrap: wrap; }

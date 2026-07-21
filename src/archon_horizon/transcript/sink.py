@@ -69,3 +69,21 @@ def read_transcript(path: Path) -> list[TranscriptEvent]:
         if line:
             events.append(event_from_dict(json.loads(line)))
     return events
+
+
+def latest_report_text(path: Path) -> str:
+    """Return the last substantive assistant text from a transcript.
+
+    Interactive sessions do not have a structured harness report. Their final
+    assistant message is the best report artifact, while the initial seed prompt
+    is explicitly excluded.
+    """
+    for event in reversed(read_transcript(path)):
+        if event.kind is not TranscriptKind.TEXT:
+            continue
+        if event.data.get("role") == "prompt":
+            continue
+        text = event.text.strip()
+        if text:
+            return text
+    return ""

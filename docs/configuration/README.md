@@ -27,9 +27,7 @@ The file `horizon init` scaffolds looks roughly like this:
 workspace:
   name: my-workspace
   state_dir: .archon-horizon
-  rounds: 1                       # max collaboration rounds per run
-  ground_agent:
-    harness: ground-default
+  rounds: 1                       # max Horizon sessions per run
   horizon_agent:
     harness: horizon-default
   scheduler:
@@ -40,11 +38,8 @@ external_libraries:
     rev: v4.x.0
 
 harnesses:
-  ground-default:
-    kind: "claude-code"
-    model: claude-opus-4-8
   horizon-default:
-    kind: "claude-code"       # both agents default to Claude Code
+    kind: "claude-code"       # primary Horizon session engine
     model: claude-opus-4-8
     # options are engine-specific — e.g. `effort` applies to Codex, not Claude Code
 
@@ -65,12 +60,8 @@ Global defaults for the workspace and the collaboration loop (see [`WorkspaceCon
 | :--- | :--- | :--- |
 | `name` | — (required) | Human-readable workspace name. |
 | `state_dir` | `.archon-horizon` | Directory holding managed state (roadmap, inboxes, reports, search cache). |
-| `rounds` | `1` | Maximum ground/horizon collaboration rounds per run. |
-| `start_with` / `end_with` | `ground` | Which role opens/closes a run. Set to `horizon` to skip the opening or final reconcile Ground turn. |
-| `ground_agent.harness` | — | Named harness (from `harnesses:`) that runs the Ground agent. |
-| `horizon_agent.harness` | — | Named harness that runs the Horizon agent. |
-| `ground_agent.subagents` | all | Restrict which native subagents Ground may dispatch. |
-| `ground_agent.subagent_harness` | Ground's harness | Harness (and thus model) used to run Ground's subagents — point this at a cheaper or larger model. |
+| `rounds` | `1` | Maximum Horizon sessions per run. Long runs schedule the read-only `ground` helper at convergence checkpoints. |
+| `horizon_agent.harness` | — | Named harness (from `harnesses:`) that runs the Horizon agent. |
 | `scheduler.max_parallel_sessions` | `1` | How many Horizon sessions run concurrently. |
 | `scheduler.unknown_write_set_policy` | `lock-project` | What to do when a task's write set is unknown (see [`orchestration/scheduler.py`](../../src/archon_horizon/orchestration/scheduler.py)). |
 
@@ -78,18 +69,13 @@ Global defaults for the workspace and the collaboration loop (see [`WorkspaceCon
 
 ## 3. `harnesses`
 
-A harness is a named execution engine. Each `workspace` role and subagent points at one by name (see [`config/harnesses.py`](../../src/archon_horizon/config/harnesses.py) and the [Architecture guide](../architecture/README.md#3-harness-seam--provider-routing)).
+A harness is a named execution engine. The workspace selects one for its Horizon sessions; native helpers inherit that session by default, and Horizon may choose a per-dispatch override when the engine supports one (see [`config/harnesses.py`](../../src/archon_horizon/config/harnesses.py) and the [Architecture guide](../architecture/README.md#3-harness-seam--provider-routing)).
 
 ```yaml
 harnesses:
-  ground-default:
+  horizon-default:
     kind: "claude-code"         # claude-code | codex | command | null
     model: claude-opus-4-8
-    models:                     # optional tier → concrete model map
-      small: claude-haiku-4-5-20251001
-      medium: claude-sonnet-5
-    options:
-      config_dir: ~/.claude-ground   # pin this harness to a specific account/home dir
   horizon-codex:
     kind: "codex"
     model: gpt-5.5
@@ -100,8 +86,7 @@ harnesses:
 | Key | Purpose |
 | :--- | :--- |
 | `kind` | Engine type: `claude-code`, `codex`, a custom `command` (alias `external-agent`), or `null` (in-process, for tests). |
-| `model` | Primary model — also the `big` tier default. |
-| `models` | Optional map of symbolic tiers (`small`, `medium`, `big`) → concrete models. Must stay within the same provider. Native subagents resolve tiers through this. |
+| `model` | Primary model for the Horizon session. Helpers inherit by default; the Horizon agent chooses any per-dispatch override through the native engine. |
 | `command` / `args` | For `kind: command`, the external CLI to launch and its arguments. |
 | `options` | Backend-specific options — e.g. `effort` for Codex, or `config_dir` to pin auth/session home (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). |
 | `options.max_retries` | Transient API errors (rate limit, overload, 5xx, network) are retried with exponential backoff. Default `2` (i.e. 3 attempts); set `0` to disable. A usage/billing limit is never retried — it's labelled and surfaced. |
@@ -201,14 +186,9 @@ Ad-hoc, per-run protections can also be added with `horizon inbox protect` — s
 
 ## 8. `references`
 
-Optional override for page-level PDF reference transcription. Defaults to the Ground subagent harness; set both fields to pin a cheap vision-capable model.
-
-```yaml
-references:
-  transcription:
-    harness: ground-default
-    model: <vision-capable-model>
-```
+Page transcription is dispatched by the Horizon agent with a suitable
+vision-capable model and effort. Model selection is deliberately not encoded in
+`config.yaml` or helper descriptors.
 
 ---
 

@@ -1,22 +1,27 @@
-"""Wire blueprints to the workspace: read project sources -> parsed DAG.
+"""Wire blueprints to the workspace: project sources -> DAG JSON.
 
-The roadmap wants the DAG generated directly from parsed blueprint source (no
-``leanblueprint web`` build step). A project's ``blueprint.path`` directory is
-globbed for ``.tex``, concatenated, parsed once, and turned into the DAG JSON
-the dashboard and the DAG-consistency subagent consume.
+The DAG is built by **hgraph** and nothing else. hgraph resolves ``\\uses`` /
+``\\lean`` at sync time against the real Lean sources, so the graph reflects what
+is actually proved rather than what the LaTeX claims — and it carries the
+per-node layer (chapter, comments, reviews, failure memory) the plain parser
+never could. The graph core ships inside Horizon, so there is no external graph
+dependency or fallback engine: a project without a blueprint entry simply has
+no DAG.
+
+A project must be declared in ``config.yaml`` to get one. There is no
+auto-discovery of undeclared directories — the manifest is the source of truth.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from archon_horizon.core.workspace import Workspace
+from archon_horizon.log import log
 
-from .dag import build_dag
-from .leandag_graph import build_project_graph
-from .model import Blueprint
-from .parser import parse_blueprint
+from .hgraph_graph import build_project_graph as build_hgraph_graph
 
 
 def _find_blueprint_dir(
@@ -40,61 +45,64 @@ def _find_blueprint_dir(
         p = project_root / candidate
         if p.is_dir():
             return p
-    
+
     # Fallback to project root if it contains tex files directly
     if list(project_root.glob("*.tex")):
         return project_root
-        
+
     return None
 
-def project_blueprint(workspace: Workspace, name: str) -> Blueprint | None:
-    """Parse one project's blueprint sources into a :class:`Blueprint`, or None."""
-    proj = workspace.project(name)
-    bp_dir = _find_blueprint_dir(workspace.root / proj.path, proj.blueprint_path, workspace.root)
-    if not bp_dir:
-        return None
-    sources = sorted(bp_dir.rglob("*.tex"))
-    if not sources:
-        return None
-    text = "\n".join(path.read_text("utf-8") for path in sources)
-    return parse_blueprint(text)
 
+def project_dag(workspace: Workspace, name: str, *, sync: bool = True) -> dict | None:
+    """The DAG for one project, or None when it has no usable blueprint.
 
-def project_dag(workspace: Workspace, name: str) -> dict | None:
-    """Build the dependency DAG for one project's blueprint, or None."""
-    blueprint = project_blueprint(workspace, name)
-    return build_dag(blueprint) if blueprint is not None else None
-
-
-def project_rich_dag(workspace: Workspace, name: str) -> dict | None:
-    """Rich leandag graph for one project, falling back to the parser DAG.
-
-    Slow (leandag scans the Lean tree) — call it from the build/cache step, not
-    the live per-poll server path.
+    ``sync=True`` reconciles the blueprint + Lean sources into ``<project>/hgraph/``
+    first: authoritative, but it scans the Lean tree and is slow on a large
+    blueprint — call it from the build/publish step, never the live server path.
+    ``sync=False`` reads the hgraph as it stands, which is the cheap refresh.
     """
     proj = workspace.project(name)
     project_root = workspace.root / proj.path
     bp_dir = _find_blueprint_dir(project_root, proj.blueprint_path, workspace.root)
-    rich = build_project_graph(project_root, bp_dir)
-    if rich is not None:
-        return rich
-    return project_dag(workspace, name)
+    return build_hgraph_graph(project_root, bp_dir, sync=sync)
 
 
-def workspace_dags_rich(workspace: Workspace) -> dict[str, dict]:
-    """Rich DAGs for every project (leandag when available, else the parser)."""
+def workspace_dags(
+    workspace: Workspace, projects: Sequence[str] | None = None, *, sync: bool = True
+) -> dict[str, dict]:
+    """DAGs for every configured project that has a usable blueprint.
+
+    ``projects`` restricts the build to a subset — e.g. a run's own scope — so
+    other projects' cached DAGs are left untouched. Unknown names are ignored.
+    See :func:`project_dag` for ``sync``.
+
+    One project failing to build must not cost every other project its DAG, so a
+    failure is reported and skipped rather than raised. It is never silent: a
+    project that *should* have a graph and doesn't is exactly the regression this
+    used to hide behind a fallback engine.
+    """
     out: dict[str, dict] = {}
-    for name in workspace.projects:
-        dag = project_rich_dag(workspace, name)
+    for name in _selected_projects(workspace, projects):
+        try:
+            dag = project_dag(workspace, name, sync=sync)
+        except Exception as exc:  # noqa: BLE001 - one bad project, not all of them
+            log.warn(f"Blueprint DAG for '{name}' failed to build: {exc}")
+            continue
         if dag is not None:
             out[name] = dag
-    return out or workspace_dags(workspace)
+    return out
 
 
 def published_dags(workspace: Workspace) -> dict[str, dict]:
-    """DAGs for the live server: the cached (possibly rich) JSON if present,
-    else a fresh parser DAG. Reading the cache keeps the 5s poll cheap even when
-    the cache was built with leandag."""
+    """DAGs for the live server: the cached JSON if present, else a fresh build.
+
+    Reading the cache is what keeps the 5s poll cheap; the cache is rewritten
+    every round, so the miss path is effectively only a workspace whose DAG has
+    never been built. That path must SYNC: an unsynced read of a project with no
+    ``<project>/hgraph/`` yet returns an empty graph, which would render as "this
+    blueprint has no nodes" rather than as "not built yet". It costs a few
+    seconds once, and populates the hgraph for every later read.
+    """
     out: dict[str, dict] = {}
     cache_dir = workspace.state_path / "blueprints"
     for name in workspace.projects:
@@ -105,17 +113,17 @@ def published_dags(workspace: Workspace) -> dict[str, dict]:
                 continue
             except (OSError, ValueError):
                 pass
-        dag = project_dag(workspace, name)
+        dag = project_dag(workspace, name, sync=True)
         if dag is not None:
             out[name] = dag
     return out
 
 
 def published_dag(workspace: Workspace, name: str) -> dict | None:
-    """The published (possibly rich) DAG for a single project — the cached JSON
-    if present, else a fresh parser DAG. Same source as :func:`published_dags`
-    but for one project, so an on-demand fetch of one heavy blueprint doesn't
-    read every project's cache file."""
+    """The published DAG for a single project — the cached JSON if present, else
+    a fresh build (see :func:`published_dags` on why the miss path syncs). Same
+    source as :func:`published_dags` but for one project, so an on-demand fetch
+    of one heavy blueprint doesn't read every project's cache file."""
     if not name:
         return None
     cached = workspace.state_path / "blueprints" / f"{name}.json"
@@ -125,48 +133,15 @@ def published_dag(workspace: Workspace, name: str) -> dict | None:
         except (OSError, ValueError):
             pass
     try:
-        return project_dag(workspace, name)
+        return project_dag(workspace, name, sync=True)
     except KeyError:
-        # `name` may be an auto-discovered directory that isn't a configured
-        # project (e.g. the static-export output dir) — no blueprint to build.
+        # `name` may be a directory that isn't a configured project (e.g. the
+        # static-export output dir) — no blueprint to build.
         return None
 
 
-def workspace_dags(workspace: Workspace) -> dict[str, dict]:
-    """DAGs for every project that has a parseable blueprint."""
-    out: dict[str, dict] = {}
-    
-    # Configured projects
-    for name in workspace.projects:
-        dag = project_dag(workspace, name)
-        if dag is not None:
-            out[name] = dag
-            
-    # Auto-detect unconfigured projects in the workspace root
-    if not out:
-        for p in workspace.root.iterdir():
-            if p.is_dir() and not p.name.startswith(".") and p.name != "src":
-                bp_dir = _find_blueprint_dir(p, None)
-                if bp_dir:
-                    sources = sorted(bp_dir.rglob("*.tex"))
-                    if sources:
-                        text = "\n".join(path.read_text("utf-8") for path in sources)
-                        blueprint = parse_blueprint(text)
-                        if blueprint:
-                            dag = build_dag(blueprint)
-                            if dag:
-                                out[p.name] = dag
-                                
-        # Also try workspace root itself as a single project
-        bp_dir = _find_blueprint_dir(workspace.root, None)
-        if bp_dir and workspace.name not in out:
-            sources = sorted(bp_dir.rglob("*.tex"))
-            if sources:
-                text = "\n".join(path.read_text("utf-8") for path in sources)
-                blueprint = parse_blueprint(text)
-                if blueprint:
-                    dag = build_dag(blueprint)
-                    if dag:
-                        out[workspace.name] = dag
-                        
-    return out
+def _selected_projects(workspace: Workspace, projects: Sequence[str] | None) -> list[str]:
+    """Configured project names, optionally restricted to ``projects``."""
+    if projects is None:
+        return list(workspace.projects)
+    return [name for name in workspace.projects if name in set(projects)]

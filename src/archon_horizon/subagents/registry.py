@@ -4,13 +4,13 @@ Discovery mirrors Archon's model, adapted to Horizon's workspace state:
 
 * built-in deterministic subagents remain available by name;
 * workspace descriptors live under ``.archon-horizon/subagents/<name>.md``;
-* a descriptor names a harness, or falls back to the Ground harness.
+* a descriptor names a harness, or falls back to the caller's default harness.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -56,8 +56,6 @@ def parse_descriptor_file(path: Path) -> SubagentDescriptor:
         write_domain=str(raw["write_domain"]) if raw.get("write_domain") else None,
         read_only=bool(raw.get("read_only", False)),
         default_enabled=bool(raw.get("default_enabled", True)),
-        tier=str(raw["tier"]) if raw.get("tier") else None,
-        model=str(raw["model"]) if raw.get("model") else None,
         prompt_body=text[match.end():],
         source_path=path,
     )
@@ -91,34 +89,6 @@ def build_registry(
     return SubagentRegistry(subagents)
 
 
-def _enabled_names(names: Sequence[str] | str | None, registry: SubagentRegistry) -> list[str]:
-    if names is None:
-        return registry.names()
-    if isinstance(names, str):
-        return registry.names() if names == "*" else [names]
-    return list(names)
-
-
-def build_subagents(
-    names: Sequence[str] | str | None = None,
-    *,
-    descriptor_dir: Path | None = None,
-    harnesses: Mapping[str, Harness] = {},
-    default_harness: Harness | None = None,
-) -> tuple[Subagent, ...]:
-    """Instantiate subagents by name; ``None`` keeps all available defaults."""
-    registry = build_registry(
-        descriptor_dir or Path(),
-        harnesses=harnesses,
-        default_harness=default_harness,
-    )
-    return tuple(
-        subagent
-        for name in _enabled_names(names, registry)
-        if (subagent := registry.get(name)) is not None
-    )
-
-
 def descriptor_summary(descriptor_dir: Path) -> str:
     builtin_dir = Path(__file__).parent / "descriptors"
     descriptors = load_descriptors(builtin_dir)
@@ -128,10 +98,6 @@ def descriptor_summary(descriptor_dir: Path) -> str:
     lines: list[str] = []
     for descriptor in descriptors.values():
         tags: list[str] = []
-        if descriptor.model:
-            tags.append(f"model={descriptor.model}")
-        elif descriptor.tier:
-            tags.append(f"tier={descriptor.tier}")
         if descriptor.read_only:
             tags.append("read-only")
         tag = f" [{', '.join(tags)}]" if tags else ""

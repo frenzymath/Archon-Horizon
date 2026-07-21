@@ -50,6 +50,59 @@ def test_claude_subagent_event_carries_its_own_model() -> None:
     assert event.data["model"] == "claude-haiku-4-5"
 
 
+def test_claude_parent_emits_dispatch_and_completion_lifecycle() -> None:
+    dispatch = json.dumps({
+        "type": "assistant",
+        "timestamp": "2026-07-19T01:06:16.249Z",
+        "message": {"content": [{
+            "type": "tool_use", "id": "toolu_lane_f1", "name": "Agent",
+            "input": {
+                "description": "Lane F1: carve discharge",
+                "subagent_type": "general-purpose",
+                "model": "opus",
+                "prompt": "large prompt deliberately omitted from lifecycle",
+            },
+        }]},
+    })
+    events = parse_claude_line(dispatch)
+    assert [event.kind for event in events] == [TranscriptKind.TOOL_CALL, TranscriptKind.SUBAGENT_START]
+    started = events[-1]
+    assert started.data["name"] == "Lane F1: carve discharge"
+    assert started.data["subagent_key"] == "toolu_lane_f1"
+    assert started.data["model"] == "opus"
+    assert "large prompt" not in started.text
+    assert started.at.isoformat() == "2026-07-19T01:06:16.249000+00:00"
+
+    notification = json.dumps({
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": "2026-07-19T02:12:33.699Z",
+        "content": (
+            "<task-notification>\n"
+            "<tool-use-id>toolu_lane_f1</tool-use-id>\n"
+            "<status>completed</status>\n"
+            '<summary>Agent "Lane F1: carve discharge" finished</summary>\n'
+            "</task-notification>"
+        ),
+    })
+    (ended,) = parse_claude_line(notification)
+    assert ended.kind is TranscriptKind.SUBAGENT_END
+    assert ended.data["name"] == "Lane F1: carve discharge"
+    assert ended.data["subagent_key"] == "toolu_lane_f1"
+    assert ended.data["status"] == "completed"
+    assert ended.at.isoformat() == "2026-07-19T02:12:33.699000+00:00"
+
+    background = json.dumps({
+        "type": "queue-operation", "operation": "enqueue",
+        "content": (
+            "<task-notification><status>completed</status>"
+            '<summary>Background command "lake build" completed (exit code 0)</summary>'
+            "</task-notification>"
+        ),
+    })
+    assert parse_claude_line(background) == []
+
+
 def test_claude_harness_materializes_native_subagent_session(tmp_path: Path) -> None:
     line = {
         "type": "assistant",
@@ -92,9 +145,55 @@ def test_codex_spawn_agent_surfaces_receiver_threads() -> None:
             "receiver_thread_ids": ["t-child-1", "t-child-2"],
         },
     })
-    (event,) = parse_codex_line(line)
-    assert event.kind is TranscriptKind.TOOL_CALL and event.tool == "spawn_agent"
-    assert event.data["receiver_thread_ids"] == ["t-child-1", "t-child-2"]
+    events = parse_codex_line(line)
+    assert events[0].kind is TranscriptKind.TOOL_CALL and events[0].tool == "spawn_agent"
+    assert events[0].data["receiver_thread_ids"] == ["t-child-1", "t-child-2"]
+    assert [event.kind for event in events[1:]] == [TranscriptKind.SUBAGENT_START] * 2
+    assert [event.data["subagent_key"] for event in events[1:]] == ["t-child-1", "t-child-2"]
+
+
+def test_codex_rollout_emits_named_dispatch_and_terminal_status() -> None:
+    dispatch = json.dumps({
+        "timestamp": "2026-07-20T05:41:13.856Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call", "name": "spawn_agent", "call_id": "call_spawn",
+            "arguments": json.dumps({"task_name": "signature_audit", "message": "secret"}),
+        },
+    })
+    events = parse_codex_rollout_line(dispatch)
+    assert [event.kind for event in events] == [TranscriptKind.TOOL_CALL, TranscriptKind.SUBAGENT_START]
+    assert events[-1].data["name"] == "signature_audit"
+    assert events[-1].data["subagent_key"] == "call_spawn"
+
+    completed = json.dumps({
+        "timestamp": "2026-07-20T05:50:00.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output", "call_id": "call_wait",
+            "output": json.dumps({"status": {"child-key": {"completed": "Audit complete\nDetails"}}}),
+        },
+    })
+    events = parse_codex_rollout_line(completed)
+    assert [event.kind for event in events] == [TranscriptKind.TOOL_RESULT, TranscriptKind.SUBAGENT_END]
+    assert events[-1].data["status"] == "completed"
+    assert events[-1].data["summary"] == "Audit complete"
+
+    replayed = json.dumps({
+        "timestamp": "2026-07-20T05:41:13.913Z",
+        "type": "event_msg",
+        "payload": {"type": "task_complete", "completed_at": 1784525880, "duration_ms": 108841},
+    })
+    assert parse_codex_rollout_line(replayed) == []
+
+    terminal = json.dumps({
+        "timestamp": "2026-07-20T06:10:55.119Z",
+        "type": "event_msg",
+        "payload": {"type": "task_complete", "completed_at": 1784527855, "duration_ms": 1781193},
+    })
+    (ended,) = parse_codex_rollout_line(terminal)
+    assert ended.kind is TranscriptKind.SUBAGENT_END
+    assert ended.data["duration_seconds"] == 1781.193
 
 
 def test_codex_rollout_parser_maps_substance() -> None:
@@ -134,11 +233,18 @@ def test_codex_harness_ingests_child_rollout(tmp_path: Path) -> None:
     sessions.mkdir(parents=True)
     child = sessions / f"rollout-2026-06-29T10-00-00-{tid}.jsonl"
     child.write_text("\n".join([
+        json.dumps({"timestamp": "2026-06-29T10:00:00Z", "type": "session_meta", "payload": {
+            "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": "parent", "agent_path": "/root/audit", "agent_nickname": "Harvey",
+            }}},
+        }}),
         json.dumps({"type": "response_item", "payload": {
             "type": "message", "role": "assistant",
             "content": [{"type": "output_text", "text": "child subagent report"}]}}),
         json.dumps({"type": "response_item", "payload": {
             "type": "function_call", "name": "exec_command", "arguments": "{}", "call_id": "x"}}),
+        json.dumps({"timestamp": "2026-06-29T10:10:00Z", "type": "event_msg", "payload": {
+            "type": "task_complete"}}),
     ]), "utf-8")
 
     script = tmp_path / "fake_codex.py"
@@ -157,5 +263,11 @@ def test_codex_harness_ingests_child_rollout(tmp_path: Path) -> None:
     child_texts = [e.text for e in events if e.kind is TranscriptKind.TEXT and e.data.get("subagent_thread_id") == tid]
     assert "child subagent report" in child_texts
     assert any(e.kind is TranscriptKind.SESSION_META and e.data.get("subagent_thread_id") == tid for e in events)
-    child_dir = tmp_path / "a" / "subagents" / "0001-codex-019eaa00"
+    assert any(
+        e.kind is TranscriptKind.SUBAGENT_END
+        and e.data.get("subagent_key") == tid
+        and e.data.get("name") == "Harvey"
+        for e in events
+    )
+    child_dir = tmp_path / "a" / "subagents" / "0001-Harvey"
     assert (child_dir / "report.md").read_text("utf-8") == "child subagent report\n"

@@ -21,9 +21,10 @@ round. Record status through the CLI — invoke it via the `$HORIZON_BIN` env va
 - `done` — the assigned objective is **FULLY complete**: the Lean is proved and
   builds, the blueprint node(s) are closed, nothing in the objective remains. Not
   "mostly done", not "the hard part is done", not "a clean commit landed". **Only
-  you can set this, and only when it is genuinely, completely finished.** Ground
-  verifies it against the diff and the Lean state and will flip a premature `done`
-  back — so a false `done` wastes a round, it doesn't save one.
+  you can set this, and only when it is genuinely, completely finished.** A
+  reviewer (human or work-reviewer subagent) checks it against the diff and the
+  Lean state and will flip a premature `done` back — so a false `done` wastes a
+  round, it doesn't save one.
 - `blocked` — you cannot make progress: a dependency is missing, a decision is
   needed, or an external constraint stops you. Say why in a comment.
 - `failed` — you genuinely could not do the work (not merely "ran out of time" —
@@ -38,10 +39,15 @@ round. Record status through the CLI — invoke it via the `$HORIZON_BIN` env va
 "$HORIZON_BIN" task set <task_id> --status failed    # could not do it; explain
 ```
 
-Authorship is automatic — the CLI stamps your role (`ground`/`horizon`) from the
+Authorship is automatic — the CLI stamps your role (normally `horizon`) from the
 run environment; do not pass `--author`. Setting a status appends an auditable
 history entry, and if the task has `roadmap_refs` the linked roadmap items are
 synced (done→done, blocked/failed→blocked, cancelled→rejected).
+
+Task commands also report advisory queue-health warnings. Review an oversized
+open queue for duplicated or roadmap-only objectives, and investigate a task
+that has remained `running` past the stale-status window. These warnings never
+change status for you; if the state is intentional, it may remain as-is.
 
 ## Comment as you work
 

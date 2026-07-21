@@ -1,12 +1,12 @@
 ---
 name: subagents
-description: How the Ground agent delegates to native subagents to divide review/upkeep work — spawning by name, read-only enforcement, model tiers, and the dynamic descriptor roster.
+description: How the Horizon agent delegates to native subagents for review and upkeep — spawning by name, read-only enforcement, dispatch-time model choice, and the dynamic descriptor roster.
 ---
 
-Subagents are **Ground's toolkit**: focused helpers the Ground agent spawns to
-divide up review and upkeep after a Horizon run. The Horizon agent does not
-spawn them — it makes its own progress and lets Ground's subagents check it
-afterward.
+Subagents are **your toolkit for delegation**: focused helpers you spawn to
+divide up review and upkeep while you keep proving. The `ground` helper is the
+fresh-context checkpoint for workspace-wide strategy and hygiene; it is a
+subagent, not a second orchestrator role.
 
 Each subagent is a single Markdown descriptor in
 `.archon-horizon/subagents/<name>.md`. At the start of every `horizon run` those
@@ -16,8 +16,8 @@ workspace-local:
 - Claude Code → `.claude/agents/<name>.md`
 - Codex → `.codex/agents/<name>.toml`
 
-The current roster is also injected into the Ground prompt from those
-descriptors. Use that summary to pick the right subagent and scope.
+List the descriptors under `.archon-horizon/subagents/` to see the current
+roster; pick the right subagent and scope from their descriptions.
 
 ## Dispatch
 
@@ -36,13 +36,20 @@ can still file issues/memory and write its report via the `horizon inbox` CLI;
 that is how read-only agents act. The descriptor's `write_domain` documents what
 a writer is expected to touch (Lean/blueprint/reference source).
 
-## Model tier
+## Model and effort — the Horizon agent owns the spend
 
-A descriptor selects its model engine-agnostically: `tier: small|medium|big`
-(resolved per-harness from that harness's `models:` map) or an explicit `model:`
-override. When neither is set, the subagent inherits the parent session's model
-— which keeps provider routing intact. Prefer a cheaper `tier` for mechanical
-checks.
+Descriptors intentionally carry no model, tier, or effort setting. Generated
+Claude/Codex descriptors inherit the parent session by default. At dispatch time,
+the Horizon agent chooses the native model and reasoning effort for that helper:
+use the same model/effort for mathematical review, a lighter capable option for
+mechanical search/lint/hygiene, and a vision-capable option for page transcription.
+If the engine cannot express a per-call override, inherit the parent and record
+the choice in the report rather than hiding a model policy in `config.yaml`.
+
+The same rule applies to a named subagent, a bare Task/Agent spawn, or any
+workflow fan-out. Match model and effort to the actual slice, and before a large
+fan-out check `"$HORIZON_BIN" usage --json`. If headroom is low, commit work in
+flight first so an interruption loses nothing.
 
 To add or change a subagent, edit its descriptor under
 `.archon-horizon/subagents/` — it recompiles on the next run. Do not rely on a

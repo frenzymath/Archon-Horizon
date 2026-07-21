@@ -29,6 +29,21 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
+        # Reap abandoned connections. HTTP/1.1 means keep-alive, so a connection's
+        # thread parks in `readline()` waiting for the next request — and without a
+        # timeout it parks *forever* when the peer vanishes without a FIN or RST.
+        # That is exactly what a dropped SSH tunnel (or a suspended laptop) leaves
+        # behind: a half-open socket no TCP layer will ever tear down. Each drop
+        # stranded a browser's whole connection pool, one thread and one fd apiece,
+        # until the process could no longer spawn threads — still holding the port,
+        # no longer able to serve it, which forced a restart on a fresh port.
+        #
+        # Well above the dashboard's 5s poll (an idle keep-alive between polls must
+        # never be cut) and above a slow transfer of the largest payload, but short
+        # enough that a dead tunnel's threads are returned promptly. On timeout,
+        # `handle_one_request` closes the connection; a live browser just reconnects.
+        timeout = 60
+
         def log_message(self, *args: object) -> None:
             return
 
@@ -38,9 +53,12 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         # otherwise dump as a full traceback per connection — pure noise, not a
         # real failure. Swallow those benign resets across the whole request
         # lifecycle (the requestline read in handle(), the flush in finish()).
+        # A `TimeoutError` from the `timeout` above is the same kind of non-event —
+        # a peer that stopped talking — and carries no errno, so it is matched by
+        # type rather than by number.
         @staticmethod
         def _benign_conn_error(exc: BaseException) -> bool:
-            if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
                 return True
             return isinstance(exc, OSError) and exc.errno in (errno.EPIPE, errno.ECONNRESET)
 
@@ -78,7 +96,19 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         def _json(self, obj: object, code: int = 200) -> None:
             self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
 
-        def _api_response(self, obj: object) -> None:
+        def _send_304(self, etag: str) -> None:
+            try:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
+                    raise
+
+        def _api_response(self, obj: object, etag: str | None = None) -> None:
             """Send a GET /api/* JSON payload with conditional-GET + gzip.
 
             The dashboard polls /api/state every 5s and the payload can be several
@@ -86,20 +116,14 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
             instead of re-sending the whole body, and gzip shrinks the payload
             (~10x for this JSON) when it *does* change. Both are safe/generic for
             every /api/* GET, so this is not special-cased to /api/state.
+            ``etag`` overrides the body hash with a precomputed validator (the
+            /api/state change stamp).
             """
             body = json.dumps(obj).encode("utf-8")
-            etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+            if etag is None:
+                etag = '"' + hashlib.sha256(body).hexdigest() + '"'
             if self.headers.get("If-None-Match") == etag:
-                try:
-                    self.send_response(304)
-                    self.send_header("ETag", etag)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                except OSError as exc:
-                    if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
-                        raise
+                self._send_304(etag)
                 return
             encoding: str | None = None
             # Only worth compressing a payload big enough to beat the CPU/overhead;
@@ -133,8 +157,18 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
                     self._json({"error": "not found"}, 404)
                 return
             if dist_dir is None:
+                # No built SPA (a source checkout without `npm run build`): the
+                # /api/* endpoints still serve; the page just says how to build.
                 if route == "/":
-                    self._send(200, service.render_html(live=True).encode("utf-8"), "text/html; charset=utf-8")
+                    notice = (
+                        "<!doctype html><meta charset='utf-8'><title>Archon Horizon</title>"
+                        "<body style='font-family:system-ui;max-width:640px;margin:80px auto'>"
+                        "<h1>Dashboard frontend not built</h1>"
+                        "<p>This install has no packaged <code>frontend/dist</code>. Build it with:</p>"
+                        "<pre>cd src/archon_horizon/frontend && npm install && npm run build</pre>"
+                        "<p>The JSON API is live at <a href='/api/state'>/api/state</a>.</p></body>"
+                    )
+                    self._send(200, notice.encode("utf-8"), "text/html; charset=utf-8")
                 else:
                     self._json({"error": "not found"}, 404)
                 return
@@ -157,7 +191,16 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         def do_GET(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             try:
-                if route.startswith("/api/"):
+                if route == "/api/state":
+                    # Short-circuit BEFORE the (expensive) state computation: the
+                    # stamp is a cheap stat-walk over everything state() reads, so
+                    # an unchanged 5s poll costs ~1ms instead of a full recompute.
+                    etag = 'W/"' + service.state_stamp() + '"'
+                    if self.headers.get("If-None-Match") == etag:
+                        self._send_304(etag)
+                        return
+                    self._api_response(service.serve_endpoint(self.path), etag=etag)
+                elif route.startswith("/api/"):
                     self._api_response(service.serve_endpoint(self.path))
                 else:
                     self._serve_asset(route)

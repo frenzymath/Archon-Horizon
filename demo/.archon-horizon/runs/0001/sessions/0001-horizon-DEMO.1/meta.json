@@ -1,0 +1,15 @@
+{
+  "role": "horizon",
+  "task_id": "DEMO.1",
+  "project": "MiniTopology",
+  "round": 0,
+  "rounds": 1,
+  "harness": "claude-demo",
+  "harness_kind": "claude-code",
+  "model": "claude-sonnet-4-20250514",
+  "effort": "medium",
+  "status": "completed",
+  "started_at": "2026-07-18T08:03:00+00:00",
+  "ended_at": "2026-07-18T08:14:00+00:00",
+  "workspace_sha": "6ef16ffbb53a122b59cb176d827656b699b1e461"
+}

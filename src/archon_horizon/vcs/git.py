@@ -14,8 +14,7 @@ The git model:
   aside) so its files, not a submodule gitlink, are committed.
 * Structured provenance (run / round / role / session / task / projects) rides
   each commit as **git trailers**, so agents and the dashboard can query it
-  deterministically instead of parsing prose. Computed metrics attach as **git
-  notes**, which can be written/edited after the commit.
+  deterministically instead of parsing prose.
 
 Everything here shells out to ``git`` and degrades gracefully when ``git`` is
 absent (``git_available()`` is False; constructors still build).
@@ -24,16 +23,26 @@ absent (``git_available()`` is False; constructors still build).
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import subprocess
+import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from archon_horizon.core.workspace import Workspace
 
 
 class GitError(RuntimeError):
     pass
+
+
+def _is_ref_race(exc: GitError) -> bool:
+    """True when a commit failed only because a concurrent writer held/advanced
+    the ref or index — serialization doing its job, safe to retry. The first two
+    are git's own errors; the third is the pre-commit guard's stale-base reject."""
+    text = str(exc)
+    return "cannot lock ref" in text or "index.lock" in text or "ledger HEAD advanced" in text
 
 
 def git_available() -> bool:
@@ -47,6 +56,8 @@ def _run(
     work_tree: Path | None = None,
     cwd: Path | None = None,
     check: bool = True,
+    index_file: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> str:
     cmd = ["git"]
     if git_dir is not None:
@@ -60,7 +71,7 @@ def _run(
         capture_output=True,
         text=True,
         check=False,
-        env=_git_env(),
+        env=_git_env(index_file, extra_env),
     )
     if check and completed.returncode != 0:
         raise GitError(f"{' '.join(cmd)} failed: {completed.stderr.strip()}")
@@ -122,26 +133,127 @@ _COMMON_EXCLUDES = (
 )
 
 # Workspace-ledger-only excludes: the project git dirs and ephemeral leases that
-# live under the workspace root (a project work tree never contains these).
-_WORKSPACE_EXCLUDES = (".archon-horizon/vcs/", ".archon-horizon/locks/")
+# live under the workspace root (a project work tree never contains these). The
+# ``bin/`` dir holds the auto-installed ``hgit`` wrapper — a regenerable tool, not
+# project state, so it stays out of the ledger even under a broad ``git add -A``.
+_WORKSPACE_EXCLUDES = (
+    ".archon-horizon/vcs/",
+    ".archon-horizon/locks/",
+    ".archon-horizon/bin/",
+    ".archon-horizon/cache/",  # dashboard poll caches — derived, never history
+    # Raw model transcripts and live usage counters stay on the workspace
+    # filesystem for the dashboard; they are too large and may contain secrets.
+    ".archon-horizon/runs/**/sessions/**/transcript.jsonl",
+    ".archon-horizon/runs/**/sessions/**/usage.json",
+)
 
-# A pre-commit guard installed into every out-of-tree git so an accidental
-# credential (in a transcript, config, or dropped file) is caught before it is
-# committed. High-confidence formats only, to avoid blocking ordinary content;
-# set ARCHON_HORIZON_ALLOW_SECRETS=1 to bypass in a pinch.
+# A pre-commit guard installed into every out-of-tree git. Two protections:
+#
+# 1. Secrets: an accidental credential (in a transcript, config, or dropped
+#    file) is caught before it is committed. High-confidence formats only, to
+#    avoid blocking ordinary content; ARCHON_HORIZON_ALLOW_SECRETS=1 bypasses.
+#
+# 2. Silent clobbers on the shared ledger: a commit whose index was seeded
+#    from a STALE HEAD (a concurrent session committed since the read-tree)
+#    produces a tree that simply lacks the other session's new files — git
+#    commits it without any error and the files are deleted. Likewise a plain
+#    commit through a polluted shared index sweeps in thousands of staged
+#    deletions. Both present the same way at commit time: staged deletions the
+#    committer never asked for. The guard:
+#      - if ARCHON_COMMIT_BASE is set (Archon's own integration commits set it
+#        to the sha the private index was seeded from), require it to still be
+#        HEAD — a cheap compare-and-swap; the caller re-seeds and retries;
+#      - otherwise (an agent's plain git) reject any commit that stages
+#        deletions, unless ARCHON_HORIZON_ALLOW_DELETIONS=1 says they are
+#        intentional. New/modified files are always fine.
 _SECRET_HOOK = r"""#!/bin/sh
-# Auto-installed by Archon Horizon. Blocks commits introducing obvious secrets.
-[ "$ARCHON_HORIZON_ALLOW_SECRETS" = "1" ] && exit 0
-added=$(git diff --cached --no-color -U0 --diff-filter=AM 2>/dev/null | grep '^+' | grep -v '^+++')
-hit=$(printf '%s\n' "$added" | grep -Ein \
-  'ghp_[0-9A-Za-z]{30,}|gho_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|sk-ant-[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----')
-if [ -n "$hit" ]; then
-  echo "Archon Horizon: possible secret in staged changes; commit blocked." >&2
-  echo "Remove it, or set ARCHON_HORIZON_ALLOW_SECRETS=1 to override." >&2
+# Auto-installed by Archon Horizon. Blocks obvious secrets and silent clobbers.
+if [ "$ARCHON_HORIZON_ALLOW_SECRETS" != "1" ]; then
+  added=$(git diff --cached --no-color -U0 --diff-filter=AM 2>/dev/null | grep '^+' | grep -v '^+++')
+  hit=$(printf '%s\n' "$added" | grep -Ein \
+    'ghp_[0-9A-Za-z]{30,}|gho_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|sk-ant-[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----')
+  if [ -n "$hit" ]; then
+    echo "Archon Horizon: possible secret in staged changes; commit blocked." >&2
+    echo "Remove it, or set ARCHON_HORIZON_ALLOW_SECRETS=1 to override." >&2
+    exit 1
+  fi
+fi
+
+head=$(git rev-parse --verify --quiet HEAD) || head=""
+[ -n "$head" ] || exit 0   # first commit: nothing to clobber
+
+if [ -n "$ARCHON_COMMIT_BASE" ]; then
+  if [ "$ARCHON_COMMIT_BASE" != "$head" ]; then
+    echo "Archon Horizon: ledger HEAD advanced since this index was seeded" >&2
+    echo "(base $ARCHON_COMMIT_BASE, HEAD $head). Committing now would silently" >&2
+    echo "revert the concurrent session's files. Re-seed and retry." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+[ "$ARCHON_HORIZON_ALLOW_DELETIONS" = "1" ] && exit 0
+dels=$(git diff --cached --name-only --diff-filter=D 2>/dev/null)
+if [ -n "$dels" ]; then
+  n=$(printf '%s\n' "$dels" | wc -l | tr -d ' ')
+  echo "Archon Horizon: this commit would DELETE $n tracked file(s) you did not change, e.g.:" >&2
+  printf '%s\n' "$dels" | head -5 >&2
+  echo "This almost always means the index was seeded from a stale HEAD (a concurrent" >&2
+  echo "session committed since your read-tree) or you are committing through the" >&2
+  echo "polluted shared index — committing would silently destroy that work." >&2
+  echo "Fix: re-seed against the current HEAD and re-add ONLY your files:" >&2
+  echo "  git read-tree HEAD && git add -- <your files> && git commit ..." >&2
+  echo "If the deletions ARE intentional, set ARCHON_HORIZON_ALLOW_DELETIONS=1 for this commit." >&2
   exit 1
 fi
 exit 0
 """
+
+
+# A prepare-commit-msg hook that stamps run/session/task provenance as git
+# trailers onto commits made from inside a Horizon session, so the dashboard can
+# link a commit to its session/task WITHOUT a custom commit wrapper. The agent
+# writes only a semantic message; provenance is added here. Idempotent: a no-op
+# outside a session (no ARCHON_HORIZON_RUN) or when the message is already stamped
+# (e.g. the Python integration path put the trailers in itself).
+_PROVENANCE_HOOK = r"""#!/bin/sh
+# Auto-installed by Archon Horizon. Adds Archon-* provenance trailers from the env.
+msg="$1"
+[ -n "$ARCHON_HORIZON_RUN" ] || exit 0
+[ -n "$msg" ] || exit 0
+grep -q '^Archon-Run:' "$msg" 2>/dev/null && exit 0
+set -- --trailer "Archon-Run=$ARCHON_HORIZON_RUN"
+[ -n "$ARCHON_HORIZON_AGENT_ROLE" ] && set -- "$@" --trailer "Archon-Role=$ARCHON_HORIZON_AGENT_ROLE"
+[ -n "$ARCHON_HORIZON_SESSION" ] && set -- "$@" --trailer "Archon-Session=$ARCHON_HORIZON_SESSION"
+[ -n "$ARCHON_HORIZON_TASK" ] && set -- "$@" --trailer "Archon-Task=$ARCHON_HORIZON_TASK"
+[ -n "$ARCHON_HORIZON_PROJECTS" ] && set -- "$@" --trailer "Archon-Projects=$ARCHON_HORIZON_PROJECTS"
+git interpret-trailers --in-place --trailer "Archon-Commit=agent" "$@" "$msg" 2>/dev/null || exit 0
+exit 0
+"""
+
+# A thin plain-git passthrough to the workspace ledger, installed under
+# ``<state>/bin/hgit`` so an agent commits with normal git semantics WITHOUT
+# exporting GIT_DIR/GIT_WORK_TREE globally — which would redirect ``lake`` and the
+# project's own git too. Reads the ledger paths from the session env.
+_LEDGER_GIT_WRAPPER = """#!/bin/sh
+# Auto-installed by Archon Horizon. `git` against the workspace ledger.
+exec git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" "$@"
+"""
+
+
+def install_ledger_git_wrapper(state_dir: Path) -> Path | None:
+    """Write the ``hgit`` ledger-git passthrough into ``<state>/bin`` and return
+    its path. Idempotent. Returns ``None`` on failure — the explicit
+    ``git --git-dir=… --work-tree=…`` form documented in the skill still works."""
+    try:
+        bin_dir = Path(state_dir) / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        path = bin_dir / "hgit"
+        path.write_text(_LEDGER_GIT_WRAPPER, "utf-8")
+        path.chmod(0o755)
+        return path
+    except OSError:
+        return None
 
 
 def neutralize_nested_git(work_tree: Path) -> str | None:
@@ -176,16 +288,22 @@ def _ensure_repo_hygiene(git_dir: Path, *, extra_excludes: Sequence[str] = ()) -
     hook = hooks / "pre-commit"
     hook.write_text(_SECRET_HOOK, "utf-8")
     hook.chmod(0o755)
+    prov = hooks / "prepare-commit-msg"
+    prov.write_text(_PROVENANCE_HOOK, "utf-8")
+    prov.chmod(0o755)
 
 
-def _prune_ignored_from_index(git_dir: Path, work_tree: Path) -> None:
+def _prune_ignored_from_index(git_dir: Path, work_tree: Path, index_file: Path | None = None) -> None:
     """Drop already-tracked but now-ignored paths from the index (e.g. ``.lake``
     committed before the excludes existed), so the next commit records their
     removal. Touches only the index (``--cached``); the working tree is left
-    intact. Self-heals a workspace that was bloated by the old force-add."""
+    intact. Self-heals a workspace that was bloated by the old force-add.
+
+    ``index_file`` targets a private index — commits stage there, so the pruning
+    has to happen in the index the commit is actually built from."""
     listed = _run(
         ["ls-files", "-z", "-ci", "--exclude-standard"],
-        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
     )
     paths = [p for p in listed.split("\0") if p]
     if not paths:
@@ -194,8 +312,59 @@ def _prune_ignored_from_index(git_dir: Path, work_tree: Path) -> None:
     for start in range(0, len(paths), 500):
         _run(
             ["rm", "--cached", "-q", "--", *paths[start:start + 500]],
-            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
         )
+
+
+def _unstage_gitlinks(git_dir: Path, work_tree: Path, index_file: Path, paths: Sequence[str] | None = None) -> None:
+    """Drop submodule gitlink entries (mode 160000) that are plain directories on disk.
+
+    A commit's index is seeded from HEAD, so a gitlink committed before the nested
+    ``.git`` was neutralized comes back with it. Dropping it lets the following
+    ``add`` re-track the project's actual files, converting the gitlink to a real
+    tree. A path that still owns a live ``.git`` is left alone."""
+    args = ["ls-files", "-s"]
+    if paths:
+        args += ["--", *paths]
+    listing = _run(
+        args, git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file
+    )
+    stale = [
+        path
+        for line in listing.splitlines()
+        if line.startswith("160000") and "\t" in line
+        for path in (line.split("\t", 1)[1],)
+        if not (work_tree / path / ".git").exists()
+    ]
+    for start in range(0, len(stale), 500):
+        _run(
+            ["rm", "--cached", "-q", "--ignore-unmatch", "--", *stale[start:start + 500]],
+            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
+        )
+
+
+def _sync_index_to_head(git_dir: Path, work_tree: Path) -> None:
+    """Point the repo's **shared** index at HEAD, the way a checkout would.
+
+    Nothing ever checks this out-of-tree repo out, so git never populates its
+    shared index on its own. Left alone it is either *empty* — in which case a
+    plain ``git add F && git commit`` records a tree containing only ``F`` and
+    **deletes every other file** — or it is full of some previous flow's leftover
+    staging, which a plain ``git commit`` would sweep in wholesale and which makes
+    the ``pre-commit`` secret guard scan (and reject on) unrelated files.
+
+    Archon's own commits stage in a private index, so nothing here fights them.
+    Keeping the shared index a faithful mirror of HEAD is what makes the ordinary
+    ``git add`` / ``git commit`` an agent runs behave the way it does in any
+    normal repository."""
+    head = _run(
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+    )
+    _run(
+        ["read-tree", head] if head else ["read-tree", "--empty"],
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False,
+    )
 
 
 def _files_in_commit(git_dir: Path, work_tree: Path, sha: str) -> tuple[str, ...]:
@@ -210,12 +379,18 @@ def _files_in_commit(git_dir: Path, work_tree: Path, sha: str) -> tuple[str, ...
     return tuple(line.strip() for line in out.splitlines() if line.strip())
 
 
-def _git_env() -> dict[str, str]:
+def _git_env(index_file: Path | None = None, extra: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Archon Horizon")
     env.setdefault("GIT_AUTHOR_EMAIL", "archon-horizon@local")
     env.setdefault("GIT_COMMITTER_NAME", "Archon Horizon")
     env.setdefault("GIT_COMMITTER_EMAIL", "archon-horizon@local")
+    if index_file is not None:
+        # Stage into a PRIVATE index instead of the repo's shared one. See
+        # WorkspaceGit.commit for why this matters.
+        env["GIT_INDEX_FILE"] = str(index_file)
+    if extra:
+        env.update(extra)
     return env
 
 
@@ -229,13 +404,30 @@ class WorkspaceGit:
     """
 
     def __init__(self, root: Path, git_dir: Path | None = None) -> None:
-        self.root = root
-        self.git_dir = git_dir or (root / ".archon-horizon" / "vcs" / "workspace.git")
+        self.root = root.resolve()
+        self.git_dir = git_dir.resolve() if git_dir else (
+            self.root / ".archon-horizon" / "vcs" / "workspace.git"
+        )
 
-    def _run(self, args: Sequence[str], *, check: bool = True) -> str:
+    def _run(
+        self,
+        args: Sequence[str],
+        *,
+        check: bool = True,
+        index_file: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> str:
         # cwd=root so relative pathspecs resolve against the work tree; the
         # explicit --git-dir means git never discovers a parent .git.
-        return _run(args, git_dir=self.git_dir, work_tree=self.root, cwd=self.root, check=check)
+        return _run(
+            args,
+            git_dir=self.git_dir,
+            work_tree=self.root,
+            cwd=self.root,
+            check=check,
+            index_file=index_file,
+            extra_env=extra_env,
+        )
 
     def is_repo(self) -> bool:
         return self.git_dir.exists()
@@ -245,9 +437,11 @@ class WorkspaceGit:
             self.git_dir.parent.mkdir(parents=True, exist_ok=True)
             _init_bare(self.git_dir)
         # Always refresh excludes + secret hook so existing workspaces self-heal,
-        # then drop any now-ignored paths a previous force-add had tracked.
+        # then reset the shared index to HEAD — clearing any staging a pre-private-index
+        # Horizon (or an interrupted commit) stranded there, which would otherwise be
+        # swept into the next plain `git commit` and trip the secret guard.
         _ensure_repo_hygiene(self.git_dir, extra_excludes=_WORKSPACE_EXCLUDES)
-        _prune_ignored_from_index(self.git_dir, self.root)
+        _sync_index_to_head(self.git_dir, self.root)
 
     def commit(
         self,
@@ -267,33 +461,114 @@ class WorkspaceGit:
         ``trailers`` are appended as machine-queryable ``Key: value`` lines at the
         end of the message (git-trailer convention), so provenance can be read
         back with ``git log --format=%(trailers:key=...)`` rather than parsed
-        from prose. Empty values are dropped."""
+        from prose. Empty values are dropped.
+
+        Staging happens in a **private index**, never the repo's shared one. The
+        shared index is a single mutable resource that agents also commit against
+        with plain ``git``; staging thousands of files into it made every other
+        commit either sweep those files in (``git commit`` commits the whole
+        index) or be rejected outright by the ``pre-commit`` secret guard, which
+        scans everything staged. Worse, it was self-poisoning: a commit that
+        failed or was interrupted left its staging behind, wedging the ledger for
+        good. A private index keeps this atomic — nothing is left behind on
+        failure, and a concurrent agent's index is untouched.
+        """
         if trailers:
             message = message.rstrip() + "\n\n" + "".join(
                 f"{key}: {value}\n" for key, value in trailers.items() if value
             )
-        if paths is None:
-            self._run(["add", "-A"])
-        else:
-            # `.archon-horizon` state and config.yaml are force-added: the user's
-            # own root .gitignore may exclude them, but the ledger must record
-            # them. Project trees are added WITHOUT force, so the excludes and the
-            # project's .gitignore apply — keeping .lake / .olean / .git.disabled
-            # out of the ledger instead of force-committing the whole tree.
-            state = [p for p in paths if p == "config.yaml" or p.split("/", 1)[0] == ".archon-horizon"]
-            projects = [p for p in paths if p not in state]
-            if state:
-                self._run(["add", "-f", "--", *state])
-            if projects:
-                self._run(["add", "-A", "--", *projects])
-        status = self._run(["status", "--porcelain"])
-        if not status and not allow_empty:
-            return None
-        args = ["commit", *_author_args(author)]
-        if allow_empty:
-            args.append("--allow-empty")
-        self._run([*args, "-m", message])
-        return self.current_sha()
+
+        with tempfile.TemporaryDirectory(prefix="archon-index-") as tmp:
+            index = Path(tmp) / "index"
+            # Re-seed and retry if HEAD moves under us: the private index is built
+            # from a snapshot of HEAD, so committing against a HEAD that has since
+            # advanced would write a tree that silently reverts the other writer's
+            # files. Comparing HEAD before/after staging turns that data loss into
+            # a retry. Concurrent `horizon run` processes against one shared
+            # ledger make this window real, so allow several attempts.
+            attempts = 5
+            for attempt in range(attempts):
+                head = self.current_sha()
+                self._run(["read-tree", head] if head else ["read-tree", "--empty"], index_file=index)
+                # Drop now-ignored paths inherited from HEAD, so this commit records
+                # their removal (the self-heal for trees bloated by the old force-add),
+                # and likewise any gitlink HEAD still carries for a neutralized repo.
+                _prune_ignored_from_index(self.git_dir, self.root, index)
+                _unstage_gitlinks(self.git_dir, self.root, index, paths)
+
+                if paths is None:
+                    self._run(["add", "-A"], index_file=index)
+                else:
+                    # `.archon-horizon` state and config.yaml are force-added: the user's
+                    # own root .gitignore may exclude them, but the ledger must record
+                    # them. Project trees are added WITHOUT force, so the excludes and the
+                    # project's .gitignore apply — keeping .lake / .olean / .git.disabled
+                    # out of the ledger instead of force-committing the whole tree.
+                    # ``runs/`` is intentionally added without ``-f`` so the
+                    # raw transcript/usage excludes above apply to new files;
+                    # session metadata and reports remain tracked normally.
+                    state = [
+                        p for p in paths
+                        if p == "config.yaml"
+                        or (p.split("/", 1)[0] == ".archon-horizon"
+                            and p != ".archon-horizon/runs")
+                    ]
+                    projects = [p for p in paths if p not in state]
+                    if state:
+                        self._run(["add", "-f", "--", *state], index_file=index)
+                    if projects:
+                        self._run(["add", "-A", "--", *projects], index_file=index)
+
+                # Only the index column (porcelain's first char) counts: a bare
+                # `status` is non-empty for untracked/dirty files we did not stage,
+                # which would push us into a `commit` that has nothing to record.
+                staged = any(
+                    line[:1] not in (" ", "?", "")
+                    for line in self._run(["status", "--porcelain"], index_file=index).splitlines()
+                )
+                if not staged and not allow_empty:
+                    return None
+
+                if self.current_sha() != head:
+                    continue  # HEAD advanced while we staged — rebuild on the new one.
+
+                args = ["commit", *_author_args(author)]
+                if allow_empty:
+                    args.append("--allow-empty")
+                try:
+                    # ARCHON_COMMIT_BASE lets the pre-commit guard verify the
+                    # index is still based on the current HEAD at hook time —
+                    # closing the window between the staleness check above and
+                    # the commit, where a concurrent writer's files would be
+                    # silently reverted by our (now stale) tree.
+                    self._run(
+                        [*args, "-m", message],
+                        index_file=index,
+                        extra_env={"ARCHON_COMMIT_BASE": head} if head else None,
+                    )
+                except GitError as exc:
+                    # A writer we didn't see (an agent's plain `git`, another
+                    # run's boundary commit) beat us to the ref between the HEAD
+                    # check above and the commit: git's own compare-and-swap
+                    # rejects with "cannot lock ref 'HEAD': is at X but expected
+                    # Y" (or an index.lock collision). Transient — re-seed from
+                    # the new HEAD and try again.
+                    if attempt + 1 < attempts and _is_ref_race(exc):
+                        time.sleep(0.1 * (attempt + 1) + random.uniform(0.0, 0.2))
+                        continue
+                    raise
+                # HEAD moved; keep the shared index tracking it so the plain `git`
+                # an agent runs still sees a normal, HEAD-mirroring index.
+                _sync_index_to_head(self.git_dir, self.root)
+                return self.current_sha()
+            # Every attempt lost the race. Surface it — falling through to None
+            # would report "nothing changed" for a commit that was never made.
+            raise GitError(
+                f"workspace commit lost the ledger race {attempts} times "
+                "(concurrent writers keep advancing HEAD); try again"
+            )
+
+        raise GitError("ledger HEAD kept moving while staging; commit abandoned after 3 attempts")
 
     def current_sha(self) -> str | None:
         # --verify --quiet: prints nothing (instead of echoing "HEAD") and exits
@@ -376,24 +651,63 @@ class WorkspaceGit:
         out = self._run(["rev-parse", "--verify", "--quiet", f"{sha}^"], check=False)
         return out or None
 
-    def session_commits(
-        self,
-        run_id: str,
-        session: str,
-        *,
-        kinds: Sequence[str] | None = None,
-    ) -> list[tuple[str, str]]:
-        """``(sha, subject)`` for commits tagged with this run and session.
+    def commit_shas_between(self, base: str | None, head: str | None) -> tuple[str, ...]:
+        """Commits reachable from ``head`` but not ``base``, oldest-first."""
+        if not self.is_repo() or not head or head == base:
+            return ()
+        revision = f"{base}..{head}" if base else head
+        out = self._run(["rev-list", "--reverse", revision], check=False)
+        return tuple(line.strip() for line in out.splitlines() if line.strip())
 
-        ``kinds`` filters the ``Archon-Commit`` trailer (for example ``agent``
-        or ``integration``). Without it this preserves the historical behavior:
-        all commits for the session, oldest-first.
+    def commits_detailed_by_refs(self, refs: Sequence[str]) -> list[dict[str, str]]:
+        """Resolve commit refs and return provenance rows in the given order.
+
+        Invalid refs are ignored. This backs recovery for sessions that recorded
+        the exact commit SHA but predate automatic Archon trailers.
         """
-        rows = self.session_commits_detailed(run_id, session)
-        allowed = {k.strip().lower() for k in kinds or () if k.strip()}
-        if allowed:
-            rows = [r for r in rows if str(r.get("kind") or "").lower() in allowed]
-        return [(str(r["sha"]), str(r["subject"])) for r in rows]
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for ref in refs:
+            if not ref:
+                continue
+            sha = self._run(
+                ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                check=False,
+            )
+            if not sha or sha in seen:
+                continue
+            seen.add(sha)
+            out = self._run(
+                [
+                    "show", "-s",
+                    "--format=%H%x1f%s%x1f%cI%x1f"
+                    "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Archon-Session,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Archon-Role,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)",
+                    sha,
+                ],
+                check=False,
+            )
+            parts = out.split("\x1f")
+            if len(parts) > 7:
+                continue
+            parts.extend([""] * (7 - len(parts)))
+            full_sha, subject, date, run_trailer, session_trailer, role_trailer, kind_trailer = parts
+            runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
+            sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
+            roles = [v.strip().lower() for v in role_trailer.split("\x1e") if v.strip()]
+            kinds = [v.strip().lower() for v in kind_trailer.split("\x1e") if v.strip()]
+            rows.append({
+                "sha": full_sha,
+                "subject": subject,
+                "date": date,
+                "run": runs[-1] if runs else "",
+                "session": sessions[-1] if sessions else "",
+                "role": roles[-1] if roles else "",
+                "kind": kinds[-1] if kinds else "agent",
+            })
+        return rows
 
     def session_commits_detailed(self, run_id: str, session: str) -> list[dict[str, str]]:
         """Commit rows for one run/session, oldest-first, with provenance.
@@ -409,7 +723,7 @@ class WorkspaceGit:
         out = self._run(
             ["log", "--fixed-strings", "--all-match",
              f"--grep=Archon-Run: {run_id}", f"--grep=Archon-Session: {session}",
-             "--format=%H%x1f%s%x1f"
+             "--format=%H%x1f%s%x1f%cI%x1f"
              "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
              "%(trailers:key=Archon-Session,valueonly,separator=%x1e)%x1f"
              "%(trailers:key=Archon-Role,valueonly,separator=%x1e)%x1f"
@@ -419,9 +733,9 @@ class WorkspaceGit:
         matched: list[dict[str, str]] = []
         for line in out.splitlines():
             parts = line.split("\x1f")
-            if len(parts) != 6:
+            if len(parts) != 7:
                 continue
-            sha, subject, run_trailer, session_trailer, role_trailer, kind_trailer = parts
+            sha, subject, date, run_trailer, session_trailer, role_trailer, kind_trailer = parts
             runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
             sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
             if run_id in runs and session in sessions:
@@ -431,65 +745,19 @@ class WorkspaceGit:
                 matched.append({
                     "sha": sha,
                     "subject": subject,
+                    "date": date,
                     "role": roles[-1] if roles else "",
                     "kind": kind,
                 })
         matched.reverse()  # oldest-first
         return matched
 
-    def run_agent_changed_files(self, run_id: str) -> set[str]:
-        """Workspace-relative paths touched by this run's *agent-authored* commits.
-
-        Provenance-scoped from the ``Archon-Run``/``Archon-Commit`` trailers: the
-        deterministic integration sweep (``kind=integration``) is excluded because
-        it can capture unrelated project files that a *parallel* run left dirty in
-        the shared worktree. Used to keep the live working-tree view of a running
-        session to this run's own files, so a sibling run's uncommitted changes in
-        the same project don't leak in. One ``git log`` call for the whole run.
-        """
-        if not self.is_repo() or not run_id:
-            return set()
-        # Marker is a plain-ASCII sentinel, not a leading \x1f: ``_run`` strips its
-        # output and Python counts \x1c–\x1f as whitespace, so a leading separator
-        # would be eaten off the first commit. File paths can't contain \x1f, so
-        # "ARCHONCOMMIT\x1f" never collides with a name-only line.
-        marker = "ARCHONCOMMIT\x1f"
-        out = self._run(
-            ["log", "--fixed-strings", f"--grep=Archon-Run: {run_id}",
-             "--name-only", "--no-renames",
-             "--format=ARCHONCOMMIT%x1f%s%x1f"
-             "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)"],
-            check=False,
-        ) or ""
-        files: set[str] = set()
-        in_agent = False
-        for line in out.splitlines():
-            if line.startswith(marker):
-                _, subject, kind_field = line.split("\x1f", 2)
-                kinds = [v.strip().lower() for v in kind_field.split("\x1e") if v.strip()]
-                # Trailer is authoritative; older commits without it infer the
-                # integration sweep from its stable subject (matching
-                # session_commits_detailed), everything else is agent work.
-                kind = kinds[-1] if kinds else (
-                    "integration" if subject.startswith("workspace[") and ": integrate " in subject else "agent"
-                )
-                in_agent = kind == "agent"
-            elif in_agent and line.strip():
-                files.add(line.strip())
-        return files
-
-    def numstat(self, base: str | None, sha: str | None, paths: Sequence[str] = ()) -> list[tuple[int, int, str]]:
-        """``(added, deleted, path)`` per changed file. A ``-`` count (binary) reads as 0.
-
-        ``sha=None`` diffs against the current **working tree** (uncommitted
-        state) — used for the live view of a running session that has not
-        committed yet. ``-uall`` includes new untracked files individually."""
+    def numstat(self, base: str | None, sha: str, paths: Sequence[str] = ()) -> list[tuple[int, int, str]]:
+        """``(added, deleted, path)`` per changed file between two commits.
+        A ``-`` count (binary) reads as 0."""
         if not self.is_repo():
             return []
-        head = [base or self._EMPTY_TREE] + ([sha] if sha is not None else [])
-        args = ["diff", "--numstat", *head]
-        if sha is None:
-            args = ["diff", "--numstat", base or self._EMPTY_TREE]
+        args = ["diff", "--numstat", base or self._EMPTY_TREE, sha]
         if paths:
             args += ["--", *paths]
         rows: list[tuple[int, int, str]] = []
@@ -549,19 +817,6 @@ class WorkspaceGit:
         listed = self._run(["ls-tree", "-r", "--name-only", sha, "--", path], check=False)
         return out if listed.strip() else None
 
-    def add_note(self, sha: str, text: str) -> None:
-        """Attach (overwrite) a git note on ``sha`` — a place for computed metrics
-        that can be written after the commit without rewriting history."""
-        if self.is_repo():
-            self._run(["notes", "add", "-f", "-m", text, sha], check=False)
-
-    def read_note(self, sha: str) -> str | None:
-        if not self.is_repo():
-            return None
-        out = self._run(["notes", "show", sha], check=False)
-        return out or None
-
-
 def _parse_porcelain(status: str) -> tuple[str, ...]:
     paths: list[str] = []
     for line in status.splitlines():
@@ -572,73 +827,3 @@ def _parse_porcelain(status: str) -> tuple[str, ...]:
             entry = entry.split(" -> ", 1)[1]
         paths.append(entry.strip().strip('"'))
     return tuple(paths)
-
-
-class ProjectGit:
-    """Compatibility wrapper for project-scoped git operations.
-
-    Newer workspace runs commit project files into the workspace repository, but
-    setup and older callers still use this small wrapper when registering a
-    VCS-enabled project.
-    """
-
-    def __init__(self, git_dir: Path, work_tree: Path) -> None:
-        self.git_dir = git_dir
-        self.work_tree = work_tree
-
-    def is_repo(self) -> bool:
-        return self.git_dir.exists()
-
-    def init(self) -> None:
-        if not self.is_repo():
-            self.git_dir.parent.mkdir(parents=True, exist_ok=True)
-            _init_bare(self.git_dir)
-        neutralize_nested_git(self.work_tree)
-        _ensure_repo_hygiene(self.git_dir)
-        _prune_ignored_from_index(self.git_dir, self.work_tree)
-
-    def commit(self, message: str, *, author: tuple[str, str] | None = None) -> str | None:
-        _run(["add", "-A"], git_dir=self.git_dir, work_tree=self.work_tree)
-        status = _run(["status", "--porcelain"], git_dir=self.git_dir, work_tree=self.work_tree)
-        if not status:
-            return None
-        _run(["commit", *_author_args(author), "-m", message], git_dir=self.git_dir, work_tree=self.work_tree)
-        return self.current_sha()
-
-    def ensure_initial_commit(self, message: str = "project: baseline (registered)") -> str | None:
-        self.init()
-        if self.current_sha():
-            return None
-        _run(["add", "-A"], git_dir=self.git_dir, work_tree=self.work_tree)
-        _run(["commit", "--allow-empty", "-m", message], git_dir=self.git_dir, work_tree=self.work_tree)
-        return self.current_sha()
-
-    def current_sha(self) -> str | None:
-        sha = _run(
-            ["rev-parse", "--verify", "--quiet", "HEAD"],
-            git_dir=self.git_dir,
-            work_tree=self.work_tree,
-            check=False,
-        )
-        return sha or None
-
-
-def project_git_for(workspace: Workspace, name: str) -> ProjectGit | None:
-    """Build a :class:`ProjectGit` for a VCS-enabled project, else None."""
-    project = workspace.project(name)
-    if not project.vcs.enabled:
-        return None
-    git_dir = project.vcs.git_dir or (workspace.state_path / "vcs" / f"{name}.git")
-    if not git_dir.is_absolute():
-        git_dir = workspace.root / git_dir
-    return ProjectGit(git_dir=git_dir, work_tree=workspace.project_path(name))
-
-
-def collect_revisions(workspace: Workspace) -> dict[str, str | None]:
-    """Map each VCS-enabled project to its current SHA."""
-    revisions: dict[str, str | None] = {}
-    for name in workspace.projects:
-        git = project_git_for(workspace, name)
-        if git is not None and git.is_repo():
-            revisions[name] = git.current_sha()
-    return revisions

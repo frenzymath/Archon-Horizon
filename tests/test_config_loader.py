@@ -111,33 +111,6 @@ def test_project_dependencies_are_loaded(tmp_path: Path) -> None:
     assert workspace.project("consumer").depends_on == ("shared",)
 
 
-def test_reference_transcription_config_defaults_and_overrides(tmp_path: Path) -> None:
-    _write_config(tmp_path)
-    cfg = load_config(tmp_path)
-    assert cfg.reference_transcription.harness is None
-    assert cfg.reference_transcription_model_name is None
-    assert cfg.reference_transcription_harness_name == "ground-default"
-
-    body = CONFIG.replace(
-        "projects:\n",
-        "references:\n"
-        "  transcription:\n"
-        "    harness: cheap-vision\n"
-        "    model: flash-transcriber\n"
-        "harnesses:\n"
-        "  cheap-vision:\n"
-        "    kind: null\n"
-        "    model: default-cheap\n"
-        "projects:\n",
-    )
-    overridden = tmp_path / "overridden"
-    overridden.mkdir()
-    _write_config(overridden, body)
-    cfg2 = load_config(overridden)
-    assert cfg2.reference_transcription_harness_name == "cheap-vision"
-    assert cfg2.reference_transcription_model_name == "flash-transcriber"
-
-
 def test_external_libraries_parsed_and_resolved(tmp_path: Path) -> None:
     body = CONFIG.replace(
         "projects:\n",
@@ -397,7 +370,6 @@ def test_build_orchestrator_runs_with_harness_overrides(tmp_path: Path) -> None:
     }
     orch = build_orchestrator(tmp_path, harnesses=overrides)
     holder["store"] = orch.task_store
-    orch.start_with = "ground"  # this test asserts the opening-Ground (G/H/G) layout
     _queue_task(orch)
     reports = orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
 
@@ -408,57 +380,14 @@ def test_build_orchestrator_runs_with_harness_overrides(tmp_path: Path) -> None:
     run_dir = tmp_path / ".archon-horizon" / "runs" / "0001"
     assert (run_dir / "run.yaml").exists()
     sessions = sorted((run_dir / "sessions").iterdir())
-    assert sessions[0].name == "0001-ground"
-    assert any((s / "transcript.jsonl").exists() for s in sessions)
-    assert (sessions[0] / "report.md").exists()
+    # Horizon-only: a Horizon session, then a system session for its aftermath. No Ground.
     assert any("horizon-R-1" in s.name for s in sessions)
-    system = next(s for s in sessions if s.name.endswith("-system"))
-    system_report = (system / "report.md").read_text("utf-8")
-    assert "## Checklist" in system_report
-    assert "## Issues" in system_report
-    assert "Report saved:" in system_report
-    system_events = read_transcript(system / "transcript.jsonl")
-    assert any("Report saved:" in event.text for event in system_events)
-    # Flat alternation: a reconcile ground closes the G/H/G round, named uniformly.
-    assert any(s.name.endswith("-ground") for s in sessions[2:])
+    assert not any(s.name.endswith("-ground") for s in sessions)
+    assert any((s / "transcript.jsonl").exists() for s in sessions)
+    # The Horizon step's aftermath is recorded in a system session ("Report saved:").
+    system_reports = [(s / "report.md").read_text("utf-8") for s in sessions if s.name.endswith("-system")]
+    assert any("Report saved:" in r for r in system_reports)
     assert not (tmp_path / ".archon-horizon" / "reports").exists()
-
-
-def test_resume_skips_finished_rounds_and_reruns_the_interrupted_one(tmp_path: Path) -> None:
-    import shutil
-
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        # Horizon fails, so R-1 stays retryable and round 1 has work to resume into.
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=False, text="boom")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.start_with = "ground"  # exercise the opening-Ground (offset-1) resume layout
-    _queue_task(orch)
-    # Two rounds on a focused task (re-run each round). Each agent step is followed
-    # by its own system session: [Ground, system, Horizon, system, Ground, system, …].
-    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=2))
-    sessions_dir = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions"
-    sessions = sorted(sessions_dir.iterdir())
-    assert [s.name for s in sessions[:5]] == [
-        "0001-ground", "0002-system", "0003-horizon-R-1", "0004-system", "0005-ground",
-    ]
-    # Simulate a crash during round 1: drop its sessions.
-    for s in sessions[5:]:
-        shutil.rmtree(s)
-
-    reports = orch.run(orch.run_store.get("0001"), resume=True)
-
-    # Round 0 finished, so it is skipped; resume then drives a fresh batch of
-    # ``rounds_requested`` (2) Horizon rounds from the resume point — the interrupted
-    # round 1 (re-run) plus round 2 — so the run keeps being pushed forward.
-    assert [r.round_index for r in reports] == [1, 2]
-    assert all(r.tasks_run == ("R-1",) for r in reports)
-    # The opening ground was not re-run, and round 1's horizon was recreated.
-    after = sorted(p.name for p in sessions_dir.iterdir())
-    assert after[:5] == ["0001-ground", "0002-system", "0003-horizon-R-1", "0004-system", "0005-ground"]
-    assert any("horizon-R-1" in name for name in after[5:])
 
 
 def test_resume_of_cleanly_finished_run_runs_a_fresh_batch(tmp_path: Path) -> None:
@@ -485,48 +414,6 @@ def test_resume_of_cleanly_finished_run_runs_a_fresh_batch(tmp_path: Path) -> No
     assert all(r.tasks_run == ("R-1",) for r in reports)
 
 
-def test_default_alternation_starts_on_horizon(tmp_path: Path) -> None:
-    """The default run opens on Horizon and closes on Ground — H-G-H-G-…-G with no
-    upfront planning Ground. Each agent step is followed by its own system session,
-    so a 2-round run is [system, Horizon, system, Ground, system, Horizon, …]."""
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=False, text="boom")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    _queue_task(orch)
-    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=2))
-
-    sessions_dir = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions"
-    agents = [s.name for s in sorted(sessions_dir.iterdir()) if not s.name.endswith("-system")]
-    # No opening Ground: the first agent session is a Horizon, then Grounds only
-    # ever appear *after* a Horizon (H, G, H, G).
-    assert agents == ["0002-horizon-R-1", "0004-ground", "0006-horizon-R-1", "0008-ground"]
-
-
-def test_write_lock_conflict_warns_but_still_runs_horizon(tmp_path: Path) -> None:
-    """The write lock is advisory: when a concurrent holder owns an overlapping
-    write set, the Horizon still runs (it is no longer deferred) and a
-    ``task.lock_warning`` is emitted instead of ``task.deferred``."""
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=True, text="done")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    _queue_task(orch)
-    # Simulate another concurrent run holding the same project's write set.
-    assert orch.locks.acquire("other-run", WriteSet(projects=("ag-main",)))
-
-    reports = orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
-
-    assert reports[0].tasks_run == ("R-1",)  # ran despite the conflict, not deferred
-    types = {e.type for e in orch.event_log.read_all()}
-    assert "task.lock_warning" in types
-    assert "task.deferred" not in types
-
-
 def test_queue_focus_never_reopens_agent_declared_done(tmp_path: Path) -> None:
     """`done` is the agent's word and terminal: the orchestrator never reopens a
     done focused task — not mid-run, and not on an explicit human launch. Re-running
@@ -548,39 +435,6 @@ def test_queue_focus_never_reopens_agent_declared_done(tmp_path: Path) -> None:
     # Even an explicit launch (initial=True) does NOT reopen a done task.
     orch._queue_focus_for_round(run, initial=True)
     assert orch.task_store.get("R-1").status is TaskStatus.DONE
-
-
-def test_resume_reconcile_recovery_does_not_consume_a_batch_round(tmp_path: Path) -> None:
-    """When resume must first replay a dangling reconcile Ground (a Horizon finished
-    but its Ground never ran), that recovery is extra — the run still gets a full
-    batch of ``rounds_requested`` Horizon rounds afterwards."""
-    import shutil
-
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=False, text="boom")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.start_with = "ground"
-    _queue_task(orch)
-    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=2))
-
-    # Crash losing only round 1's reconcile Ground: drop everything after round 1's
-    # Horizon so the last completed session is that Horizon (reconcile_only=True).
-    sessions_dir = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions"
-    survivors = sorted(sessions_dir.iterdir())
-    last_horizon = [p for p in survivors if p.name.endswith("-horizon-R-1")][-1]
-    for p in survivors:
-        if p.name > last_horizon.name:
-            shutil.rmtree(p)
-    runlog = orch.run_logs.get("0001")
-    assert orch._resume_point(runlog)[2] is True  # reconcile_only
-
-    reports = orch.run(orch.run_store.get("0001"), resume=True)
-    # The recovery Ground replays round 1's reconcile (no RoundReport), then a full
-    # batch of 2 Horizon rounds runs — rounds 2 and 3, not just one.
-    assert [r.round_index for r in reports] == [2, 3]
 
 
 def test_resume_rounds_override_sets_the_fresh_batch_size(tmp_path: Path) -> None:
@@ -653,43 +507,6 @@ def dataclasses_replace_status(orch, task_id: str, status: TaskStatus):
     return orch.task_store.put(dataclasses.replace(task, status=status))
 
 
-def test_recover_horizon_result_reads_the_horizon_not_system_session(tmp_path: Path) -> None:
-    """Resume's reconcile path recovers the prior Horizon result by index.
-
-    System sessions are interleaved on disk (``[ground, system, horizon, …]``)
-    but excluded from the ``2i+1`` index scheme. Recovering round 0 must return
-    the Horizon session's data (task R-1), not the system session that sits at
-    the same unfiltered index — the regression guarded here.
-    """
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=False, text="boom")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.start_with = "ground"  # opening Ground → offset-1 layout this test targets
-    _queue_task(orch)
-    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=1))
-    runlog = orch.run_logs.get("0001")
-
-    # offset=1: an opening Ground sits at filtered index 0, so round 0's Horizon
-    # is at 2*0+1 (see _resume_point/_opening_offset).
-    recovered = orch._recover_horizon_result(runlog, 0, 1)
-    assert recovered is not None
-    assert recovered.task_id == "R-1"          # the horizon session, not "" from -system
-    # A crashed (ok=False) session records no terminal status, so the machine
-    # returns the task to queued; the recovered session meta carries that.
-    assert recovered.status is TaskStatus.QUEUED
-    assert "## Checklist" not in recovered.report  # i.e. not the system session's report
-
-    # Degenerate layout guard: if the 2i+offset math lands on a non-Horizon
-    # session (here the opening Ground, whose session status is "ok" — not a
-    # TaskStatus), recover nothing instead of raising ``TaskStatus('ok')``. This
-    # is what a run recorded with only Grounds (older lock-skip builds) hit on
-    # resume.
-    assert orch._recover_horizon_result(runlog, 0, 0) is None
-
-
 def _fake_completed_session(runlog, label: str, *, role: str) -> None:
     """Create a runlog session that reads as complete (carries a session_end)."""
     from archon_horizon.transcript.sink import JsonlTranscriptSink
@@ -700,86 +517,6 @@ def _fake_completed_session(runlog, label: str, *, role: str) -> None:
     sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"role": role}))
     sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": True}))
     session.write_meta({"role": role, "status": "ok"})
-
-
-def test_resume_point_reconcile_only_when_last_session_is_a_horizon(tmp_path: Path) -> None:
-    """A run interrupted right after a Horizon completed (its reconcile Ground never
-    ran) resumes by replaying just that Ground — reconcile_only=True."""
-    _write_config(tmp_path)
-    orch = build_orchestrator(tmp_path, harnesses={
-        "ground-default": NullHarness(""), "horizon-default": NullHarness("")})
-    orch.start_with = "ground"
-    runlog = orch.run_logs.allocate()
-    _fake_completed_session(runlog, "ground", role="ground")         # opening Ground
-    _fake_completed_session(runlog, "horizon-R-1", role="horizon")   # Horizon, no reconcile Ground
-
-    assert orch._resume_point(runlog) == (False, 0, True)
-
-
-def test_resume_point_degenerate_all_ground_layout_resumes_into_horizon(tmp_path: Path) -> None:
-    """A legacy run recorded with only Grounds (older builds that skipped Horizon on
-    a lock conflict) has an odd completed-session count yet ends on a Ground. It must
-    resume into a fresh Horizon (reconcile_only=False), not a bare reconcile Ground —
-    the parity-based check used to get this wrong and crash on resume."""
-    _write_config(tmp_path)
-    orch = build_orchestrator(tmp_path, harnesses={
-        "ground-default": NullHarness(""), "horizon-default": NullHarness("")})
-    orch.start_with = "ground"
-    runlog = orch.run_logs.allocate()
-    for _ in range(6):  # opening Ground + 5 more Grounds, no Horizons (like real run 0012)
-        _fake_completed_session(runlog, "ground", role="ground")
-
-    run_opening, resume_round, reconcile_only = orch._resume_point(runlog)
-    assert reconcile_only is False  # ends on a Ground → next step is a Horizon, not a Ground
-
-
-def test_resume_offset_zero_when_no_opening_ground(tmp_path: Path) -> None:
-    """A ``start_with='horizon'`` run has no opening Ground, so a system session is
-    flushed first and the first agent session on disk is round-0's Horizon. The
-    resume math must shift down by one (offset 0); otherwise it mistakes the
-    Horizon for the opening Ground and skips/misaligns the interrupted agent.
-    """
-    import shutil
-
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("Recommended R-1."),
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=True, text="done")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.start_with = "horizon"
-    _queue_task(orch)
-    orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=2))
-
-    sessions_dir = tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions"
-    names = sorted(p.name for p in sessions_dir.iterdir())
-    # No opening Ground: a system flush leads, then the round-0 Horizon.
-    assert names[0].endswith("-system")
-    assert "horizon-R-1" in names[1]
-
-    runlog = orch.run_logs.get("0001")
-    agents = orch._agent_sessions(runlog)
-    assert orch._is_ground_session(agents[0]) is False
-    assert orch._opening_offset(agents) == 0
-    # Both rounds finished → resume starts at the next round (2), not round 1.
-    assert orch._resume_point(runlog) == (False, 2, False)
-
-    # Simulate a crash losing round 1: drop everything after round 0's reconcile
-    # Ground. Resume must re-run round 1 (offset keeps the indices aligned).
-    survivors = sorted(sessions_dir.iterdir())
-    keep = [p for p in survivors if p.name.endswith("-ground")][0]  # 0004-ground
-    for p in survivors:
-        if p.name > keep.name:
-            shutil.rmtree(p)
-    runlog = orch.run_logs.get("0001")
-    assert orch._opening_offset(orch._agent_sessions(runlog)) == 0
-    assert orch._resume_point(runlog) == (False, 1, False)
-
-    reports = orch.run(orch.run_store.get("0001"), resume=True)
-    # Fresh batch of ``rounds_requested`` (2) from the resume point: round 1 (the
-    # dropped round) plus round 2.
-    assert [r.round_index for r in reports] == [1, 2]
-    assert all(r.tasks_run == ("R-1",) for r in reports)
 
 
 def test_resume_run_id_zero_pads_bare_number(tmp_path: Path) -> None:
@@ -801,91 +538,15 @@ def test_resume_run_id_zero_pads_bare_number(tmp_path: Path) -> None:
     assert run.id == "0001"
 
 
-def test_subagent_harness_override_defaults_to_ground(tmp_path: Path) -> None:
+def test_unknown_workspace_keys_are_ignored(tmp_path: Path) -> None:
+    # Retired keys from the two-agent era (roles/start_with/end_with) must not
+    # break loading an older config.yaml — they are simply ignored.
     body = CONFIG.replace(
-        "  ground_agent:\n    harness: ground-default\n",
-        "  ground_agent:\n    harness: ground-default\n    subagent_harness: cheap\n",
-    ).replace(
-        "harnesses:\n",
-        'harnesses:\n  cheap:\n    kind: "null"\n',
+        "  rounds: 1\n",
+        "  rounds: 1\n  roles: [horizon]\n  start_with: ground\n  end_with: horizon\n",
     )
     _write_config(tmp_path, body)
-    overrides = {
-        "ground-default": NullHarness("g"),
-        "horizon-default": NullHarness("h"),
-        "cheap": NullHarness("c"),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    assert orch.ground_subagents  # builtin descriptors are loaded
-    assert all(sub.harness is overrides["cheap"] for sub in orch.ground_subagents)
-
-    # Without the override, subagents fall back to the Ground harness.
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    _write_config(plain, CONFIG)
-    orch2 = build_orchestrator(plain, harnesses=overrides)
-    assert all(sub.harness is overrides["ground-default"] for sub in orch2.ground_subagents)
-
-
-def test_roles_parse_defaults_and_filters() -> None:
-    from archon_horizon.config.schema import _parse_roles
-
-    assert _parse_roles(None) == ("ground", "horizon")          # unset -> both
-    assert _parse_roles([]) == ("ground", "horizon")            # empty -> both
-    assert _parse_roles(["bogus"]) == ("ground", "horizon")     # unknown -> both
-    assert _parse_roles(["horizon"]) == ("horizon",)
-    assert _parse_roles(["ground"]) == ("ground",)
-    assert _parse_roles("horizon") == ("horizon",)              # bare string
-    assert _parse_roles(["Horizon", "GROUND"]) == ("horizon", "ground")  # case-insensitive
-    assert _parse_roles(["horizon", "ground", "horizon"]) == ("horizon", "ground")  # dedup, ordered
-
-
-def test_roles_parsed_from_workspace_config(tmp_path: Path) -> None:
-    body = CONFIG.replace("  rounds: 1\n", "  rounds: 1\n  roles: [horizon]\n")
-    _write_config(tmp_path, body)
     cfg = load_config(tmp_path)
-    assert cfg.roles == ("horizon",)
+    assert cfg.rounds == 1
 
 
-def test_horizon_only_loop_runs_no_ground(tmp_path: Path) -> None:
-    # roles: [horizon] drives a Horizon-only loop: a Horizon step each round, and no
-    # Ground session at all (neither opening nor reconcile).
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("ground must not run"),
-        # Records no terminal status, so R-1 stays queued and re-runs each round.
-        "horizon-default": NullHarness(lambda req: HarnessResult(ok=True, text="wip")),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.roles = ("horizon",)
-    _queue_task(orch)
-
-    reports = orch.run(RunRecord(id="", focus=Focus(tasks=("R-1",)), rounds_requested=2))
-
-    assert [r.round_index for r in reports] == [0, 1]
-    assert all(r.tasks_run == ("R-1",) for r in reports)
-    names = [s.name for s in sorted((tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions").iterdir())]
-    assert any("horizon-R-1" in n for n in names)
-    assert not any(n.endswith("-ground") for n in names)  # no Ground ever
-
-
-def test_ground_only_loop_runs_no_horizon(tmp_path: Path) -> None:
-    # roles: [ground] drives a Ground-only loop: one standalone Ground session per
-    # round, and no Horizon step (no task selection).
-    _write_config(tmp_path)
-    overrides = {
-        "ground-default": NullHarness("organized the workspace"),
-        "horizon-default": NullHarness("horizon must not run"),
-    }
-    orch = build_orchestrator(tmp_path, harnesses=overrides)
-    orch.roles = ("ground",)
-    _queue_task(orch)
-
-    reports = orch.run(RunRecord(id="", rounds_requested=2))
-
-    assert [r.round_index for r in reports] == [0, 1]
-    names = [s.name for s in sorted((tmp_path / ".archon-horizon" / "runs" / "0001" / "sessions").iterdir())]
-    assert len([n for n in names if n.endswith("-ground")]) == 2  # one Ground per round
-    assert not any("horizon" in n for n in names)
-    # The queued task is never touched (no Horizon selected it).
-    assert orch.task_store.get("R-1").status is TaskStatus.QUEUED

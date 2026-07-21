@@ -2,9 +2,8 @@
 
 ``build_orchestrator`` is the payoff: a directory containing ``config.yaml``
 becomes a wired, runnable :class:`Orchestrator`. Engine selection is entirely
-config-driven — the Ground/Horizon agents receive whichever ``Harness`` the
-registry built for the names in ``workspace.ground_agent.harness`` /
-``horizon_agent.harness``.
+config-driven — the Horizon agent receives whichever ``Harness`` the registry
+built for the name in ``workspace.horizon_agent.harness``.
 """
 
 from __future__ import annotations
@@ -15,18 +14,16 @@ from pathlib import Path
 
 import yaml
 
-from archon_horizon.agents.harness_agents import HarnessHorizonAgent, HarnessGroundAgent
+from archon_horizon.agents.harness_agents import HarnessHorizonAgent
 from archon_horizon.core.freeze import FreezeLevel, FreezeRule, FreezeSet
 from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.harnesses.base import Harness
 from archon_horizon.inboxes.base import InboxProvider
 from archon_horizon.log import log
-from archon_horizon.orchestration.locks import FilesystemLockManager
 from archon_horizon.orchestration.orchestrator import Orchestrator
 from archon_horizon.orchestration.scheduler import FreezeAwareScheduler
 from archon_horizon.orchestration.sync import MultiProviderSyncCoordinator
 from archon_horizon.runlog import RunLogTree
-from archon_horizon.subagents.registry import build_subagents
 from archon_horizon.store.base import (
     EventLog,
     MemoryStore,
@@ -107,7 +104,6 @@ def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:
             name=pc.name,
             path=Path(pc.path),
             type=pc.type,
-            vcs=pc.vcs,
             blueprint_path=Path(pc.blueprint_path) if pc.blueprint_path else None,
             build_command=pc.build_command,
             depends_on=pc.depends_on,
@@ -199,41 +195,22 @@ def build_orchestrator(
     freeze = build_freeze(cfg)
 
     built = harnesses if harnesses is not None else (registry or HarnessRegistry()).build_all(cfg.harnesses)
-    ground_harness = _resolve_harness(built, cfg.ground_harness, "ground")
-    ground = HarnessGroundAgent(ground_harness)
     horizon = HarnessHorizonAgent(_resolve_harness(built, cfg.horizon_harness, "horizon"))
-    subagent_harness = (
-        _resolve_harness(built, cfg.subagent_harness, "subagent")
-        if cfg.subagent_harness
-        else ground_harness
-    )
-    ground_subagents = build_subagents(
-        cfg.ground_subagents,
-        descriptor_dir=workspace.state_path / "subagents",
-        harnesses=built,
-        default_harness=subagent_harness,
-    )
 
     stores = build_stores(workspace, codec)
     return Orchestrator(
         workspace=workspace,
-        ground=ground,
         horizon=horizon,
         scheduler=FreezeAwareScheduler(
             freeze=freeze, max_parallel=cfg.scheduler.max_parallel_sessions
         ),
         sync=MultiProviderSyncCoordinator(inbox_providers),
-        locks=FilesystemLockManager(workspace.state_path / "locks"),
         event_log=stores.events,
         roadmap_store=stores.roadmap,
-        memory_store=stores.memory,
         task_store=stores.tasks,
         inbox_providers=inbox_providers,
         run_store=stores.runs,
         run_logs=stores.run_logs,
-        ground_subagents=ground_subagents,
         freeze=freeze,
-        start_with=cfg.start_with,
-        end_with=cfg.end_with,
-        roles=cfg.roles,
+        budget=cfg.budget if cfg.budget.configured else None,
     )

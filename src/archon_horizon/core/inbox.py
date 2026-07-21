@@ -50,9 +50,10 @@ class InboxItem:
     status: InboxStatus = InboxStatus.OPEN
     scope: InboxScope = field(default_factory=InboxScope)
     # Who the item is FOR (vs ``scope``, which is what it is ABOUT). Empty means
-    # anyone. Conventions: "horizon", "ground", "human", "project:<name>".
+    # anyone. Conventions: "horizon", "human", "project:<name>" ("ground" may
+    # appear on items from older workspaces).
     audience: str = ""
-    # Who wrote it (provenance for the UI to colour by): human / horizon / ground
+    # Who wrote it (provenance for the UI to colour by): human / horizon
     # / github / <name>. Distinct from ``audience``.
     author: str = ""
     source_ref: str | None = None
@@ -76,8 +77,8 @@ class InboxDraft:
 def reaches_horizon(item: "InboxItem", project: str | None) -> bool:
     """Whether an item should be injected for the Horizon agent on ``project``.
 
-    The Ground agent triages everything, so it has no such filter; Horizon
-    only sees general items, items addressed to it, or items for its project.
+    Horizon sees general items, items addressed to it, or items for its project.
+    A Ground checkpoint may inspect all inbox items directly during its audit.
     """
     scoped_projects = item.scope.targets("projects")
     if scoped_projects and project not in scoped_projects:

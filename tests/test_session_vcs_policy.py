@@ -11,10 +11,9 @@ import pytest
 from archon_horizon.config import operations
 from archon_horizon.config.loader import build_workspace, load_config
 from archon_horizon.core.tasks import WriteSet
-from archon_horizon.core.workspace import Project, ProjectVcs, Workspace
-from archon_horizon.orchestration.locks import FilesystemLockManager
+from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.vcs.git import WorkspaceGit, git_available
-from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session, project_checkpoint
+from archon_horizon.vcs.integration import integrate_workspace_baseline, integrate_workspace_session
 
 
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
@@ -157,8 +156,7 @@ def test_workspace_integration_excludes_build_and_nested_git_artifacts(tmp_path:
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
     workspace = Workspace(
         name="ws", root=tmp_path,
-        projects={"p": Project(name="p", path=Path("projects/p"),
-                               vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/p.git")))},
+        projects={"p": Project(name="p", path=Path("projects/p"))},
     )
     ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
 
@@ -200,8 +198,7 @@ def test_nested_git_project_is_committed_as_files_not_gitlink(tmp_path: Path) ->
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
     workspace = Workspace(
         name="ws", root=tmp_path,
-        projects={"leheng": Project(name="leheng", path=Path("projects/leheng"),
-                                    vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/leheng.git")))},
+        projects={"leheng": Project(name="leheng", path=Path("projects/leheng"))},
     )
 
     integrate_workspace_run(workspace, run_id="0001", projects=("leheng",))
@@ -253,8 +250,7 @@ def test_existing_gitlink_is_converted_to_tracked_files(tmp_path: Path) -> None:
 
     workspace = Workspace(
         name="ws", root=tmp_path,
-        projects={"leheng": Project(name="leheng", path=Path("projects/leheng"),
-                                    vcs=ProjectVcs(enabled=True, git_dir=Path(".archon-horizon/vcs/leheng.git")))},
+        projects={"leheng": Project(name="leheng", path=Path("projects/leheng"))},
     )
     integrate_workspace_run(workspace, run_id="0001", projects=("leheng",))
 
@@ -298,11 +294,3 @@ def test_secret_guard_hook_blocks_credentials(tmp_path: Path) -> None:
     assert allowed.returncode == 0
 
 
-def test_filesystem_lock_manager_blocks_overlapping_files(tmp_path: Path) -> None:
-    locks = FilesystemLockManager(tmp_path / ".archon-horizon" / "locks")
-
-    assert locks.acquire("run-a", WriteSet(files=("projects/p/Foo.lean",)))
-    assert not locks.acquire("run-b", WriteSet(files=("projects/p/Foo.lean",)))
-    assert locks.acquire("run-c", WriteSet(files=("projects/q/Bar.lean",)))
-    locks.release("run-a")
-    assert locks.acquire("run-b", WriteSet(files=("projects/p/Foo.lean",)))

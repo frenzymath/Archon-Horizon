@@ -13,21 +13,17 @@ from __future__ import annotations
 import dataclasses
 import json
 import threading
-import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from archon_horizon.agents.base import HorizonAgent, HorizonContext, GroundAgent, GroundContext, GroundUpdate
-from archon_horizon.blueprint.checks import blueprint_coverage, blueprint_lint_issues, dag_consistency_issues
-from archon_horizon.blueprint.workspace import workspace_dags, workspace_dags_rich
+from archon_horizon.agents.base import HorizonAgent, HorizonContext
+from archon_horizon.blueprint.workspace import workspace_dags
+from archon_horizon.config.schema import BudgetConfig
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.events import Event
 from archon_horizon.core.freeze import FreezeSet, frozen_violations
-from archon_horizon.core.inbox import InboxItem, InboxKind, InboxStatus, reaches_horizon
-from archon_horizon.core.labels import is_agent_ready
-from archon_horizon.core.permissions import WriteDomain, horizon_write_domain, ground_write_domain
 from archon_horizon.core.roadmap import Roadmap, RoadmapStatus
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.sessions import RunRecord, SyncBoundary
@@ -37,30 +33,28 @@ from archon_horizon.core.workspace import Workspace
 from archon_horizon.harnesses.base import Cancellation
 from archon_horizon.inboxes.base import InboxProvider
 from archon_horizon.runlog import RunLog, RunLogTree, SessionLog
-from archon_horizon.subagents.base import Subagent, SubagentContext
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 from archon_horizon.transcript.sink import JsonlTranscriptSink
 from archon_horizon.store.base import (
     EventLog,
-    MemoryStore,
     RoadmapStore,
     RunStore,
     TaskStore,
 )
 from archon_horizon.vcs.integration import (
-    author_for,
     integrate_workspace_baseline,
     integrate_workspace_run,
     integrate_workspace_session,
-    project_checkpoint,
 )
 
-from .locks import LockManager, workspace_run_lock
 from .scheduler import Scheduler
 from .sync import SyncCoordinator
 
 
-_TASK_CANCEL_POLL_S = 0.5
+# How often the terminal-status watcher re-reads a running task. It is the only
+# external kill switch for a live session (`horizon task set <id> --status …`),
+# so it stays — but a human close is not latency-critical, so poll gently.
+_TASK_CANCEL_POLL_S = 2.0
 
 
 def _csv(values: object, *, none: str = "none") -> str:
@@ -93,7 +87,7 @@ def _files_summary(value: object, *, limit: int = 8) -> str:
     return f"{len(files)} {noun}: {shown}"
 
 
-_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early"})
+_FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early", "session_budget"})
 
 
 def _is_fatal_failure(meta: dict[str, object] | None) -> bool:
@@ -128,20 +122,20 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
             detail = ", ".join(f"{tid} is {status}" for tid, status in tasks.items())
             return f"Focus task(s) not runnable ({detail}); the scheduler only runs queued tasks."
         return "The pinned focus task(s) were not runnable."
-    if event_type == "ground.failed":
-        reason = data.get("reason") or data.get("failure_reason")
-        rc = data.get("returncode")
-        bits = [b for b in (f"exit {rc}" if rc is not None else "", str(reason) if reason else "") if b]
-        detail = f" ({'; '.join(bits)})" if bits else ""
-        return f"Ground session crashed{detail}; the round's plan/reconcile may be incomplete."
     if event_type == "run.dry-run":
         return f"Dry run planned tasks: {_csv(data.get('planned'))}."
+    if event_type == "skills.stale":
+        return (
+            f"Workspace skills differ from the bundled ones ({_csv(data.get('skills'))}); "
+            "agents will follow this workspace's copy. Run `horizon skills install` to "
+            "refresh (it overwrites local edits)."
+        )
     if event_type == "roadmap.load_failed":
         return f"Roadmap load failed: {data.get('error')}."
     if event_type == "roadmap.restored":
         return "Restored roadmap from the last clean in-memory copy."
     if event_type == "roadmap.updated":
-        return "Roadmap reloaded after Ground session."
+        return "Roadmap reloaded."
     if event_type == "roadmap.deps_unmet":
         return (
             f"Roadmap milestone {data.get('roadmap_id')} has unmet dependencies "
@@ -185,6 +179,16 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         )
     if event_type == "task.blocked":
         return f"Blocked task {data.get('task_id')}: {data.get('reason')}."
+    if event_type == "task.budget_cancelled":
+        return (
+            f"Cancelled task {data.get('task_id')}: its session crossed the configured "
+            f"budget ({data.get('tokens_out')} tokens out > {data.get('limit')})."
+        )
+    if event_type == "run.budget_exhausted":
+        return (
+            f"Run budget exhausted ({data.get('tokens_out')} tokens out, "
+            f"${data.get('cost_usd')}); stopping cleanly — state is on disk, resume to continue."
+        )
     if event_type == "task.deferred":
         return f"Deferred task {data.get('task_id')}: {data.get('reason')}."
     if event_type == "task.lock_warning":
@@ -194,8 +198,6 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         )
     if event_type == "agent.frozen":
         return f"Skipped {data.get('agent')} because that agent is frozen."
-    if event_type == "write_domain.violation":
-        return f"Write-domain violation for task {data.get('task_id')}: {_csv(data.get('paths'))}."
     if event_type == "project.commit":
         project = data.get("project")
         if data.get("changed"):
@@ -277,7 +279,6 @@ def _is_issue_event(event: TranscriptEvent) -> bool:
         "agent.frozen",
         "run.stopped",
         "run.focus_unrunnable",
-        "ground.failed",
     }:
         return True
     status = str(data.get("status") or "")
@@ -298,36 +299,28 @@ class RoundReport:
 @dataclass(slots=True)
 class Orchestrator:
     workspace: Workspace
-    ground: GroundAgent
     horizon: HorizonAgent
     scheduler: Scheduler
     sync: SyncCoordinator
-    locks: LockManager
     event_log: EventLog
     roadmap_store: RoadmapStore
-    memory_store: MemoryStore
     task_store: TaskStore
     inbox_providers: Sequence[InboxProvider] = ()
     run_store: RunStore | None = None
     run_logs: RunLogTree | None = None
-    ground_subagents: tuple[Subagent, ...] = ()
     freeze: FreezeSet = field(default_factory=FreezeSet)
-    # The run is a flat ground/horizon alternation. By default it opens on
-    # horizon and closes on ground (H-G-H-G-…-G, no upfront planning Ground);
-    # set start_with="ground" to prepend an opening Ground, or end_with="horizon"
-    # to drop the closing reconcile Ground.
-    start_with: str = "horizon"
-    end_with: str = "ground"
-    # Which agent roles the run loop drives. Default is both (normal alternation).
-    # ("horizon",) → a Horizon-only loop with no Ground; ("ground",) → a Ground-only
-    # loop with no Horizon (each round is a single Ground session).
-    roles: tuple[str, ...] = ("ground", "horizon")
+    # Optional spend ceilings (workspace.budget). Crossing one stops the run
+    # cleanly, exactly like an engine usage limit: state on disk, --resume works.
+    budget: BudgetConfig | None = None
+    # Why the last run() stopped early, if it did — (reason, retry_after_s|None).
+    # The CLI reads this to write user-facing pause info / exit codes.
+    last_paused: dict[str, object] | None = field(default=None, repr=False)
     # Last roadmap that parsed cleanly; kept in memory if a human-readable item
     # shard is malformed, so one bad edit can't crash the whole run.
     _roadmap_cache: Roadmap | None = field(default=None, repr=False)
     # Orchestrator events buffered into a "system" session transcript, so the
     # deterministic work between agents (commits, sync, integration, publish) is
-    # visible in the Log alongside the ground/horizon sessions.
+    # visible in the Log alongside the horizon sessions.
     _system_buffer: list[TranscriptEvent] = field(default_factory=list, repr=False)
     _collecting: bool = field(default=False, repr=False)
     # The system session currently being written. Consecutive deterministic work
@@ -370,7 +363,7 @@ class Orchestrator:
             status_str = str(data.get('status')).split('.')[-1]
             log.step(f"[{actor}] Finished task: {data.get('task_id')} ({status_str})")
         elif type == "subagent.ran":
-            log.step(f"[ground] Subagent '{data.get('name')}' finished (ok={data.get('ok')})")
+            log.step(f"Subagent '{data.get('name')}' finished (ok={data.get('ok')})")
         elif type == "task.lock_warning":
             log.warn(f"[horizon] Task {data.get('task_id')} overlaps a concurrent run's write set; "
                      "running anyway (advisory lock).")
@@ -455,20 +448,6 @@ class Orchestrator:
 
     # ── context assembly ────────────────────────────────────────────
 
-    def _accepted_inbox(self) -> tuple[InboxItem, ...]:
-        items: list[InboxItem] = []
-        for provider in self.inbox_providers:
-            for item in provider.list_items():
-                if item.status is InboxStatus.OPEN and is_agent_ready(item.labels):
-                    items.append(item)
-        return tuple(items)
-
-    @staticmethod
-    def _render_memory(items: tuple[InboxItem, ...]) -> str:
-        """Memory now lives in the inbox: render the open MEMORY items as text."""
-        notes = [i for i in items if i.kind is InboxKind.MEMORY]
-        return "\n".join(f"- {i.body.strip()}" for i in notes)
-
     def _load_roadmap(self) -> Roadmap:
         """Load the sharded roadmap, tolerating a malformed item shard.
 
@@ -493,17 +472,6 @@ class Orchestrator:
         self._roadmap_cache = roadmap
         return roadmap
 
-    def _blueprint_summary(self) -> str:
-        lines = []
-        for project, dag in workspace_dags(self.workspace).items():
-            nodes = dag.get("nodes", [])
-            proved = sum(1 for n in nodes if n.get("leanok"))
-            lines.append(
-                f"{project}: {len(nodes)} nodes, {proved} proved, "
-                f"{len(dag.get('edges', []))} edges, {len(dag.get('dangling', []))} dangling"
-            )
-        return "\n".join(lines)
-
     def _active_projects(self, run: RunRecord) -> tuple[str, ...]:
         if run.focus.projects:
             return run.focus.projects
@@ -519,89 +487,8 @@ class Orchestrator:
                 return tuple(dict.fromkeys(projects))
         return tuple(self.workspace.projects)
 
-    def _ground_context(
-        self, run: RunRecord, log_dir: Path | None = None, resume_session_id: str | None = None,
-        *, opening: bool = False,
-    ) -> GroundContext:
-        accepted = self._accepted_inbox()
-        return GroundContext(
-            workspace=self.workspace,
-            run=run,
-            focus=run.focus,
-            is_opening=opening,
-            roadmap=self._load_roadmap(),
-            accepted_inbox=accepted,
-            memory=self._render_memory(accepted),
-            blueprint_summary=self._blueprint_summary(),
-            write_domain=ground_write_domain(self.workspace, self._active_projects(run)).allow,
-            log_dir=log_dir,
-            resume_session_id=resume_session_id,
-        )
-
-    # ── freeze / subagents ──────────────────────────────────────────
-
     def _agent_frozen(self, agent: str) -> bool:
         return self.freeze.agent_rule(agent) is not None
-
-    def _local_provider(self) -> InboxProvider | None:
-        for provider in self.inbox_providers:
-            if "create" in provider.capabilities:
-                return provider
-        return None
-
-    def _dispatch_subagents(self, parent: SessionLog | None) -> None:
-        for sub in self.ground_subagents:
-            session = parent.new_subsession(sub.name) if parent is not None else None
-            result = sub.run(SubagentContext(self.workspace, self._log_dir(session)))
-            if session is not None:
-                if not session.transcript_path.exists():
-                    sink = JsonlTranscriptSink(session.transcript_path)
-                    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, data={"subagent": sub.name}))
-                    if result.report:
-                        sink.emit(TranscriptEvent(TranscriptKind.TEXT, text=result.report))
-                    sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": result.ok}))
-                self._write_session_meta(session, {
-                    "role": "subagent",
-                    "name": sub.name,
-                    "ok": result.ok,
-                    "data": result.data,
-                })
-            self._emit("subagent.ran", name=sub.name, ok=result.ok, issues_reported=len(result.issues))
-
-    def _run_blueprint_checks(self) -> None:
-        """Run deterministic blueprint checks without creating inbox items.
-
-        The inbox is authored explicitly by humans/Ground/Horizon through
-        ``horizon inbox``. Deterministic audits are telemetry only, otherwise a
-        large workspace can flood the shared inbox with machine-generated items.
-        """
-        total = 0
-        by_project: dict[str, int] = {}
-        coverage: dict[str, dict[str, int]] = {}
-        for project, dag in workspace_dags(self.workspace).items():
-            try:
-                # Only true soundness defects count as "issues": dangling uses,
-                # cycles, and leanok-depends-on-not-leanok. Unlinked nodes are
-                # work remaining, reported as coverage — not as a defect that
-                # would tell agents the blueprint is broken.
-                count = len(dag_consistency_issues(dag) + blueprint_lint_issues(dag))
-                coverage[project] = blueprint_coverage(dag)
-            except Exception as exc:  # a pathological DAG must not abort the run
-                self._emit("blueprint.checks.failed", actor="orchestrator", project=project, error=str(exc))
-                continue
-            if count:
-                by_project[project] = count
-                total += count
-        if total:
-            self._emit(
-                "blueprint.checks.findings",
-                actor="orchestrator",
-                count=total,
-                projects=by_project,
-                coverage=coverage,
-            )
-        else:
-            self._emit("blueprint.checks.clean", actor="orchestrator", coverage=coverage)
 
     def _task_projects(self, task: HorizonTask) -> tuple[str, ...]:
         """The full project set a task covers — a task may span several projects.
@@ -616,75 +503,24 @@ class Orchestrator:
         self,
         run: RunRecord,
         task: HorizonTask,
-        domain: WriteDomain,
-        runlog: RunLog | None,
         log_dir: Path | None = None,
         resume_session_id: str | None = None,
         cancel: Cancellation | None = None,
+        round_index: int | None = None,
+        rounds_total: int | None = None,
     ) -> HorizonContext:
-        roadmap = self._load_roadmap()
-        projects = self._task_projects(task)
-        accepted = tuple(
-            i for i in self._accepted_inbox()
-            if any(reaches_horizon(i, p) for p in projects)
-        )
         return HorizonContext(
             workspace=self.workspace,
             run=run,
             task=task,
-            roadmap=roadmap.slice_for_projects(set(projects)),
-            accepted_inbox=accepted,
-            memory=self._render_memory(accepted),
-            write_domain=domain.allow,
             log_dir=log_dir,
             resume_session_id=resume_session_id,
             cancel=cancel,
-            metadata={"ground_recommendation": self._latest_ground_recommendation(runlog)},
+            round_index=round_index,
+            rounds_total=rounds_total,
         )
 
-    def _dirty_files(self) -> frozenset[str]:
-        """Workspace-relative paths dirty in the working tree right now (or empty
-        when git is unavailable). Used to snapshot pre-existing changes so the
-        write-domain check attributes only what a session newly touched."""
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
-
-        if not git_available():
-            return frozenset()
-        return frozenset(WorkspaceGit(self.workspace.root).changed_files())
-
-    def _enforce_write_domain(
-        self, task: HorizonTask, domain: WriteDomain, before: frozenset[str] = frozenset()
-    ) -> None:
-        """Flag (don't revert) files the free Horizon agent wrote outside its lane.
-
-        Only files the session NEWLY changed are considered — ``before`` is the
-        set of paths already dirty when the session started, so pre-existing
-        working-tree changes (manual edits, prior sessions) are never
-        mis-attributed. Violations are logged as events for Ground/humans to inspect.
-        """
-        from archon_horizon.vcs.git import WorkspaceGit, git_available
-
-        if not git_available():
-            return
-        # The state dir is orchestrator-owned (events, runs, run-local reports);
-        # never attribute those writes to the agent.
-        state_prefix = self.workspace.state_dir.as_posix() + "/"
-        changed = tuple(
-            p for p in WorkspaceGit(self.workspace.root).changed_files()
-            if not p.startswith(state_prefix) and p not in before
-        )
-        violations = domain.violations(changed)
-        if not violations:
-            return
-        self._emit(
-            "write_domain.violation",
-            actor="orchestrator",
-            task_id=task.id,
-            paths=list(violations),
-        )
-
-
-    # ── applying a Ground update ────────────────────────────────────
+    # ── run bookkeeping ─────────────────────────────────────────────
 
     @staticmethod
     def _write_run_report(session: SessionLog | None, text: str) -> str | None:
@@ -693,89 +529,6 @@ class Orchestrator:
         path = session.path / "report.md"
         path.write_text(text.rstrip() + "\n", "utf-8")
         return path.as_posix()
-
-    @staticmethod
-    def _extract_recommendation(text: str) -> str:
-        """Return the recommendation section Ground left for the next Horizon.
-
-        Ground reports are intentionally prose, so this is a small Markdown
-        convention rather than a parser contract: prefer an explicit
-        recommendation/next section, otherwise keep the whole report.
-        """
-        lines = text.strip().splitlines()
-        if not lines:
-            return ""
-        section_starts = [
-            idx for idx, line in enumerate(lines)
-            if line.lstrip("# ").strip().lower() in {
-                "next",
-                "recommendation",
-                "recommendations",
-                "recommended focus",
-                "horizon recommendation",
-            }
-        ]
-        if not section_starts:
-            return text.strip()
-        start = section_starts[-1]
-        start_line = lines[start].lstrip()
-        level = len(start_line) - len(start_line.lstrip("#"))
-        end = len(lines)
-        for idx in range(start + 1, len(lines)):
-            line = lines[idx].lstrip()
-            if line.startswith("#"):
-                idx_level = len(line) - len(line.lstrip("#"))
-                if idx_level <= level:
-                    end = idx
-                    break
-        return "\n".join(lines[start:end]).strip()
-
-    @classmethod
-    def _write_recommendation(cls, session: SessionLog | None, text: str) -> str | None:
-        if session is None:
-            return None
-        path = session.path / "recommendation.md"
-        if path.is_file() and path.read_text("utf-8").strip():
-            return path.as_posix()
-        recommendation = cls._extract_recommendation(text)
-        if not recommendation:
-            return None
-        path.write_text(recommendation.rstrip() + "\n", "utf-8")
-        return path.as_posix()
-
-    @staticmethod
-    def _latest_ground_recommendation(runlog: RunLog | None) -> str:
-        if runlog is None:
-            return ""
-        for session in reversed(runlog.sessions()):
-            meta = session.read_meta()
-            if meta.get("role") != "ground" and not session.name.endswith("-ground"):
-                continue
-            path = session.path / "recommendation.md"
-            if path.exists():
-                return path.read_text("utf-8").strip()
-        return ""
-
-    def _after_ground(
-        self,
-        update: GroundUpdate,
-        *,
-        report_name: str = "ground",
-        session: SessionLog | None = None,
-    ) -> None:
-        """Persist the run-local report and reconcile state the agent wrote to disk.
-
-        Ground mutates roadmap and inbox state through the CLI during its run,
-        so we reload from disk rather than apply a parsed payload. The dashboard
-        reads the stores directly, so no markdown artifact is rendered.
-        """
-        ref = self._write_run_report(session, update.report)
-        if ref is not None:
-            self._emit("report.written", name=report_name, ref=ref)
-        recommendation_ref = self._write_recommendation(session, update.report)
-        if recommendation_ref is not None:
-            self._emit("report.written", name=f"{report_name}-recommendation", ref=recommendation_ref)
-        self._emit("roadmap.updated", actor="ground")
 
     def _queue_focus_for_round(self, run: RunRecord, *, initial: bool) -> None:
         """Queue explicitly focused tasks so a user-started run actually runs them.
@@ -844,26 +597,39 @@ class Orchestrator:
         return True
 
     def _task_terminal_watcher(
-        self, task_id: str, cancel: Cancellation
-    ) -> tuple[threading.Event, list[TaskStatus], threading.Thread]:
-        """Cancel a running Horizon harness if its task is explicitly closed."""
+        self, task_id: str, cancel: Cancellation, usage_path: Path | None = None
+    ) -> tuple[threading.Event, list[TaskStatus], list[int], threading.Thread]:
+        """Cancel a running Horizon harness if its task is explicitly closed —
+        or, when a session token budget is configured, if the session's live
+        ``usage.json`` crosses it (``budget_hit`` then carries the count)."""
         stop = threading.Event()
         observed: list[TaskStatus] = []
+        budget_hit: list[int] = []
+        limit = self.budget.session_tokens_out if self.budget is not None else None
 
         def watch() -> None:
             while not stop.wait(_TASK_CANCEL_POLL_S):
                 try:
                     current = self.task_store.get(task_id)
                 except Exception:
-                    continue
-                if has_recorded_terminal_status(current):
+                    current = None
+                if current is not None and has_recorded_terminal_status(current):
                     observed.append(current.status)
                     cancel.cancel()
                     return
+                if limit and usage_path is not None:
+                    try:
+                        tokens = int(json.loads(usage_path.read_text("utf-8")).get("tokens_out") or 0)
+                    except (OSError, ValueError):
+                        tokens = 0
+                    if tokens > limit:
+                        budget_hit.append(tokens)
+                        cancel.cancel()
+                        return
 
         thread = threading.Thread(target=watch, name=f"horizon-task-watch-{task_id}", daemon=True)
         thread.start()
-        return stop, observed, thread
+        return stop, observed, budget_hit, thread
 
     def ensure_roadmap_task(self, item_id: str) -> HorizonTask | None:
         """Infer a Horizon task from a roadmap item, on demand.
@@ -902,7 +668,12 @@ class Orchestrator:
             scope=item.scope,
             roadmap_refs=(item.id,),
             inbox_refs=item.inbox_refs,
-            metadata={**item.metadata, "roadmap_priority": item.priority, "from_roadmap": True},
+            # Link to the milestone by reference (roadmap_refs) — do NOT copy the
+            # item's metadata blob. That blob carries the roadmap item's own
+            # comments/history, and copying it duplicated the roadmap's comment
+            # thread into the task (the "same comments in both" problem). Keep only
+            # the task's own working hints.
+            metadata={"roadmap_priority": item.priority, "from_roadmap": True},
         )
         existing = {t.id: t for t in self.task_store.list()}
         if item.id in existing:
@@ -928,89 +699,18 @@ class Orchestrator:
 
     # ── one Ground / one Horizon step ───────────────────────────────
 
-    def _ground_step(
-        self,
-        run: RunRecord,
-        runlog: RunLog | None,
-        *,
-        round_index: int,
-        horizon_result: HorizonResult | None = None,
-        resume_session_id: str | None = None,
-    ) -> GroundUpdate | None:
-        """One Ground session in the flat alternation. With no ``horizon_result``
-        it is the opening plan (``run_round``); otherwise it reconciles the
-        Horizon step that just ran (``handle_horizon_result``)."""
-        self._finalize_system_session()  # close any open system session before an agent runs
-        self.sync.sync(SyncBoundary.BEFORE_GROUND)
-        if self._agent_frozen("ground"):
-            self._emit("agent.frozen", agent="ground", round=round_index)
-            self.sync.sync(SyncBoundary.AFTER_GROUND)
-            return None
-        session = self._session(runlog, "ground")
-        active_projects = self._active_projects(run)
-        if session is not None:
-            self._write_session_meta(session, {
-                "role": "ground",
-                "round": round_index,
-                "status": "running",
-                "projects": list(active_projects),
-                "dirty_at_start": sorted(self._dirty_files()),
-                **self._agent_harness_metadata(self.ground),
-            })
-        context = self._ground_context(
-            run, self._log_dir(session), resume_session_id, opening=horizon_result is None,
-        )
-        if horizon_result is None:
-            update = self.ground.run_round(context)
-        else:
-            update = self.ground.handle_horizon_result(context, horizon_result)
-        # Reload now so malformed human-readable roadmap shards are noticed
-        # immediately and the cached clean roadmap remains available.
-        self._load_roadmap()
-        # A Ground engine that exits non-zero (e.g. a hung MCP tool that blows the
-        # tool deadline and takes the process down) leaves a stub report the parser
-        # still turns into an "empty" update. Surface it as a failed session rather
-        # than recording the round as healthy — otherwise the run finishes silently
-        # with a truncated plan/reconcile and no visible cause.
-        ground_ok = update.metadata.get("ok")
-        if ground_ok is False:
-            self._emit(
-                "ground.failed",
-                round=round_index,
-                returncode=update.metadata.get("returncode"),
-                reason=update.metadata.get("failure_reason"),
-                timed_out=update.metadata.get("timed_out"),
-            )
-        if session is not None:
-            meta: dict[str, object] = {"role": "ground", "round": round_index, "projects": list(active_projects)}
-            meta["status"] = "failed" if ground_ok is False else "ok"
-            session_id = update.metadata.get("session_id")
-            if session_id:
-                meta["engine_session_id"] = session_id
-            for key in ("harness_name", "harness_kind", "model", "effort", "config_dir", "auth", "usage", "returncode", "failure_reason"):
-                value = update.metadata.get(key)
-                if value is not None:
-                    meta[key] = value
-            self._write_session_meta(session, meta)
-        self._after_ground(update, report_name=f"ground-{round_index}", session=session)
-        self._run_blueprint_checks()
-        # Ground is the workspace janitor: stage the active projects too, so its
-        # tidy-ups/blueprint edits land in this session's commit (attributed to
-        # ground) rather than leaking into the next Horizon's commit.
-        self._integrate_session(
-            run, session, role="ground", round_index=round_index,
-            projects=active_projects,
-        )
-        self.sync.sync(SyncBoundary.AFTER_GROUND)
-        return update
-
     def _horizon_step(
         self, run: RunRecord, task: HorizonTask, runlog: RunLog | None, *, round_index: int,
-        resume_session_id: str | None = None,
+        rounds_total: int, resume_session_id: str | None = None,
     ) -> HorizonResult | None:
         """One Horizon session: run a single task. Returns its result, or ``None``
         if it could not run (frozen / lock conflict) so the caller skips the
-        reconcile pairing for it."""
+        reconcile pairing for it.
+
+        ``rounds_total`` is the exclusive upper bound on ``round_index`` for this
+        invocation, so the agent's last round is the one where
+        ``round_index + 1 == rounds_total``. The caller owns that arithmetic —
+        it is the only place that knows how far a resume batch extends."""
         self.sync.sync(SyncBoundary.BEFORE_HORIZON)
 
         if self._agent_frozen("horizon"):
@@ -1024,17 +724,6 @@ class Orchestrator:
             self._emit("task.blocked", task_id=task.id, reason="freeze",
                        rules=[r.pattern for r in violations])
             return None
-
-        # The write lock is advisory: if a concurrent run holds an overlapping
-        # write set we warn the user but still run the Horizon, rather than
-        # deferring (which silently skipped the step and left the round with a
-        # pointless planning Ground). Real cross-run conflicts are the user's to
-        # avoid; within a single run the scheduler already keeps selected tasks
-        # non-overlapping. When we couldn't take the lock we proceed without
-        # holding it — the release in `finally` is a harmless no-op for a token we
-        # never stored, and never touches the other holder's lock.
-        if not self.locks.acquire(task.id, task.write_set):
-            self._emit("task.lock_warning", task_id=task.id, reason="lock-conflict")
 
         try:
             try:
@@ -1067,8 +756,6 @@ class Orchestrator:
             session = self._session(runlog, f"horizon-{task.id}")
             started = utc_now()
             task_projects = self._task_projects(task)
-            domain = horizon_write_domain(self.workspace, task_projects)
-            before = self._dirty_files()
             if session is not None:
                 self._write_session_meta(session, {
                     "role": "horizon",
@@ -1078,28 +765,41 @@ class Orchestrator:
                     "status": "running",
                     "started_at": started.isoformat(),
                     "projects": list(task_projects),
-                    "dirty_at_start": sorted(before),
                     # Stamp harness/model/effort now so a RUNNING session shows the
                     # real config (e.g. ultracode) live, not a stale/empty value until
                     # it finalizes. Finalize overwrites with the observed run metadata.
                     **self._agent_harness_metadata(self.horizon),
                 })
             cancel = Cancellation()
-            stop_watch, externally_terminal, watcher = self._task_terminal_watcher(task.id, cancel)
+            usage_path = (session.path / "usage.json") if session is not None else None
+            stop_watch, externally_terminal, budget_hit, watcher = self._task_terminal_watcher(
+                task.id, cancel, usage_path
+            )
             result = self.horizon.run_task(
                 self._horizon_context(
                     run,
                     task,
-                    domain,
-                    runlog,
                     self._log_dir(session),
                     resume_session_id,
                     cancel,
+                    round_index=round_index,
+                    rounds_total=rounds_total,
                 )
             )
             stop_watch.set()
             watcher.join(timeout=1.0)
-            self._enforce_write_domain(task, domain, before)
+            if budget_hit:
+                # The session crossed workspace.budget.session_tokens_out and was
+                # cancelled; label it so the run loop stops cleanly (like a usage
+                # limit) instead of respawning a session that would burn the same.
+                result.metadata["failure_reason"] = "session_budget"
+                self._emit(
+                    "task.budget_cancelled",
+                    actor="orchestrator",
+                    task_id=task.id,
+                    tokens_out=budget_hit[-1],
+                    limit=self.budget.session_tokens_out if self.budget else None,
+                )
             ref = self._write_run_report(session, result.report)
             if ref is not None:
                 self._emit("report.written", name=f"task-{task.id}", ref=ref)
@@ -1190,7 +890,6 @@ class Orchestrator:
                 stop_watch.set()
             if "watcher" in locals():
                 watcher.join(timeout=1.0)
-            self.locks.release(task.id)
 
     def _publish_silent(self, run: RunRecord) -> None:
         """Refresh human-facing artifacts at a boundary and pull external inboxes,
@@ -1290,57 +989,17 @@ class Orchestrator:
         """On-disk agent sessions in order, minus the interleaved system ones."""
         return [s for s in runlog.sessions() if not s.name.endswith("-system")]
 
-    @staticmethod
-    def _is_ground_session(session: SessionLog) -> bool:
-        return session.name.endswith("-ground")
+    def _resume_point(self, runlog: RunLog) -> int:
+        """The round to resume from: the number of completed Horizon rounds on disk.
 
-    def _opening_offset(self, sessions: list[SessionLog]) -> int:
-        """1 when an opening Ground occupies index 0, else 0.
-
-        The round-session layout is ``[opening_ground?, horizon_0, reconcile_0?,
-        horizon_1, …]``. When the opening Ground is absent — ``start_with ==
-        "horizon"``, or it was frozen so it wrote no session — the first on-disk
-        agent session is round-0's Horizon and every round index shifts down by
-        one. A system session is always flushed first in that case, so without
-        this offset the recovery math treats the Horizon as the opening Ground and
-        the interrupted agent is never resumed.
-        """
-        return 1 if (sessions and self._is_ground_session(sessions[0])) else 0
-
-    def _resume_point(self, runlog: RunLog) -> tuple[bool, int, bool]:
-        """Where the interrupted run should pick back up, read from on-disk sessions.
-
-        The flat layout is ``[opening_ground?, horizon_0, reconcile_0?, horizon_1,
-        …]``. With an opening Ground (``offset == 1``) round ``i`` owns sessions
-        ``2i+1`` (Horizon) and ``2i+2`` (reconcile Ground); without one
-        (``offset == 0``) they are ``2i`` and ``2i+1``. Returns ``(run_opening,
-        resume_round, reconcile_only)``: redo the opening Ground, the first round
-        to (re)run, and whether only that round's reconcile Ground remains (its
-        Horizon already finished, so just re-run the Ground with the recovered
-        Horizon result).
-        """
+        The horizon-only agent-session layout is ``[horizon_0, horizon_1, …]``, so a
+        resume continues after the last completed one; the first incomplete session
+        is the interrupted Horizon (re-queued by ``_requeue_interrupted_horizon``)."""
         sessions = self._agent_sessions(runlog)
-        offset = self._opening_offset(sessions)
-        expect_opening = self.start_with != "horizon"
-        if expect_opening and not sessions:
-            return True, 0, False  # nothing on disk yet → redo from the opening Ground
-        if offset == 1 and not self._session_complete(sessions[0]):
-            return True, 0, False  # opening Ground never finished → redo from the top
-        # Completed round sessions after the (optional) opening Ground.
-        t = offset
+        t = 0
         while t < len(sessions) and self._session_complete(sessions[t]):
             t += 1
-        completed = sessions[offset:t]
-        round_index = len(completed) // 2
-        # ``reconcile_only`` means the last thing that ran was a Horizon whose
-        # reconcile Ground never followed — so resume just replays that Ground.
-        # Decide it from the last completed session's ACTUAL role, not from
-        # session-count parity: a degenerate layout (e.g. a legacy run that
-        # skipped Horizon on a lock conflict and recorded only Grounds) would have
-        # an odd count yet end on a Ground, and must resume into a fresh Horizon,
-        # not a bare reconcile Ground.
-        reconcile_only = bool(completed) and not self._is_ground_session(completed[-1])
-        return False, round_index, reconcile_only
+        return t
 
     def _recover_engine_session_id(self, runlog: RunLog, session_index: int) -> str | None:
         """The native engine session id of an interrupted session, for a native
@@ -1370,9 +1029,7 @@ class Orchestrator:
                         return candidate
         return None
 
-    def _requeue_interrupted_horizon(
-        self, runlog: RunLog, resume_round: int, reconcile_only: bool, offset: int
-    ) -> None:
+    def _requeue_interrupted_horizon(self, runlog: RunLog, resume_round: int) -> None:
         """Re-queue the task whose Horizon session was interrupted, so a resume
         actually continues it.
 
@@ -1381,22 +1038,17 @@ class Orchestrator:
         once the engine returns, which a crash prevents. The scheduler picks only
         ``QUEUED`` tasks, and an unfocused run has no ``focus.tasks`` for
         ``_queue_focus_for_round`` to revive, so without this the resumed round
-        selects nothing and stops immediately (``no-runnable-tasks``) — never
-        re-running the interrupted work, let alone continuing its native session.
+        selects nothing and stops immediately (``no-runnable-tasks``).
 
         Re-queue it here so the resumed round dispatches it; ``_horizon_step``
         then continues the engine's native session (via the recovered
         ``resume_session_id``) or, for an engine without RESUME, relaunches it
-        with the original prompt. Skipped when only the reconcile Ground was lost
-        (``reconcile_only``): the Horizon already finished and its task carries
-        its real terminal status, so re-queuing would redo completed work.
+        with the original prompt.
         """
-        if reconcile_only:
-            return
         sessions = self._agent_sessions(runlog)
-        idx = 2 * resume_round + offset
+        idx = resume_round  # first incomplete agent session = the interrupted Horizon
         if idx >= len(sessions):
-            return  # the interruption predates any Horizon session (e.g. opening Ground)
+            return  # nothing was interrupted (a clean stop)
         task_id = str(sessions[idx].read_meta().get("task_id") or "")
         if not task_id:
             return
@@ -1416,43 +1068,7 @@ class Orchestrator:
         })
         self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
 
-    def _recover_horizon_result(self, runlog: RunLog, round_index: int, offset: int) -> HorizonResult | None:
-        """Rebuild a finished Horizon step's result from its session, so a resume
-        that only needs the reconcile Ground can feed it the prior Horizon output."""
-        # Index against the agent-session layout only — system sessions are
-        # interleaved on disk but excluded from the 2i+offset scheme (matching
-        # ``_resume_point`` and ``_recover_engine_session_id``).
-        sessions = self._agent_sessions(runlog)
-        idx = 2 * round_index + offset
-        if idx >= len(sessions):
-            return None
-        session = sessions[idx]
-        meta = session.read_meta()
-        # The 2i+offset math assumes a canonical [ground?, H, G, H, G, …] layout.
-        # A run recorded under a degenerate layout can land a non-Horizon session
-        # here — e.g. an older build that skipped Horizon on a lock conflict and
-        # wrote only Grounds, whose session-level status ("ok") is not a
-        # TaskStatus. Recover nothing rather than misreading it (or crashing).
-        if meta.get("role") != "horizon":
-            return None
-        report_path = session.path / "report.md"
-        report = report_path.read_text("utf-8") if report_path.exists() else ""
-        raw_status = meta.get("status")
-        try:
-            status = TaskStatus(raw_status) if raw_status else TaskStatus.DONE
-        except ValueError:
-            status = TaskStatus.DONE
-        return HorizonResult(task_id=str(meta.get("task_id", "")), status=status, report=report)
-
     # ── full run ─────────────────────────────────────────────────────
-
-    @property
-    def _ground_enabled(self) -> bool:
-        return "ground" in self.roles
-
-    @property
-    def _horizon_enabled(self) -> bool:
-        return "horizon" in self.roles
 
     def _run_scope_projects(self, run: RunRecord) -> tuple[str, ...]:
         projects: list[str] = list(run.focus.projects)
@@ -1473,41 +1089,26 @@ class Orchestrator:
         self, run: RunRecord, *, dry_run: bool = False, resume: bool = False,
         rounds_override: int | None = None,
     ) -> list[RoundReport]:
-        """Drive a flat ground/horizon alternation: G H G H … G.
+        """Drive a horizon-only run: one Horizon session per round for
+        ``rounds_requested`` rounds. There is no Ground role — the Horizon agent
+        cleans up the workspace itself by spawning a subagent when it judges it
+        useful (see the `horizon` skill). Publish is silent bookkeeping between
+        steps, not a session.
 
-        One Ground opens the run (plan), then each round runs one Horizon step
-        followed by a reconcile Ground, so the sequence is a clean single-G/single-H
-        alternation that opens and closes on Ground. ``start_with``/``end_with`` =
-        ``"horizon"`` drop the opening / final Ground. Publish is silent
-        bookkeeping between steps, not a session.
-
-        With ``resume`` the run id must already exist. If a round was interrupted,
-        it is re-launched (continuing the engine's native session where possible,
-        else the same prompt); if only that round's reconcile Ground was lost, its
-        Horizon result is recovered from disk and replayed into the Ground. Once
-        the run has cleanly consumed all its originally-planned rounds, resume does
-        not stop dead — it runs a *fresh batch* of forward rounds on the same focus
-        (so ``--resume`` means "keep pushing this run"). The batch size is
+        With ``resume`` the run id must already exist: a round interrupted mid-run
+        is re-launched (continuing the engine's native session where possible, else
+        the same prompt). Once the run has cleanly consumed its planned rounds,
+        resume runs a *fresh batch* of forward rounds on the same focus (so
+        ``--resume`` means "keep pushing this run"); the batch size is
         ``rounds_override`` (from ``--rounds``) when given, else the run's
-        configured round count; see ``_run_locked`` for the exact rule.
+        configured round count; see ``_run_locked``.
 
-        The workspace run lock is advisory: if another *live* orchestrator is
-        already driving this workspace we warn (``run.concurrent``) and proceed
-        anyway, since concurrent runs are tolerated — their shared
-        roadmap/blueprint writes may interleave, last-writer-wins. A crashed run
-        leaves a stale lock the next run reclaims.
+        Runs are sequential — one session at a time on the single workspace
+        ledger — so there is nothing to lock against.
         """
-        _lock = workspace_run_lock(
-            self.workspace.state_path / "run.lock", run_id=run.id or "", exclusive=False
+        return self._run_locked(
+            run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
         )
-        status = _lock.__enter__()
-        try:
-            return self._run_locked(
-                run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
-                concurrent_holder=status.concurrent,
-            )
-        finally:
-            _lock.__exit__(None, None, None)
 
     def _run_locked(
         self,
@@ -1516,7 +1117,6 @@ class Orchestrator:
         dry_run: bool = False,
         resume: bool = False,
         rounds_override: int | None = None,
-        concurrent_holder: dict | None = None,
     ) -> list[RoundReport]:
         runlog: RunLog | None = None
         if self.run_logs is not None:
@@ -1536,32 +1136,20 @@ class Orchestrator:
                 run = dataclasses.replace(run, created_at=existing.created_at)
             run = self.run_store.put(run)
 
-        run_opening, resume_round, reconcile_only = (True, 0, False)
-        # Session-index offset for resume recovery: 1 when an opening Ground sits at
-        # index 0, else 0 (start_with='horizon' or a frozen opening). Computed once
-        # from the pre-resume on-disk layout; new sessions append after it.
-        resume_offset = 1
-        # How many rounds this invocation drives, in the run's own round numbering.
-        # A normal run does its configured count; resume adjusts it below.
+        # How many Horizon rounds already completed on disk (0 for a fresh run);
+        # resume continues from there and drives a fresh batch on top.
+        resume_round = 0
         total_rounds = run.rounds_requested
-        # Fresh Horizon rounds this resume will drive (for the banner). Equals the
-        # batch — the reconcile-only recovery Ground is extra, not one of them.
         batch = run.rounds_requested
         if resume and runlog is not None:
-            resume_offset = self._opening_offset(self._agent_sessions(runlog))
-            run_opening, resume_round, reconcile_only = self._resume_point(runlog)
-            # Revive the task the interrupted Horizon step left stuck in RUNNING so
-            # the scheduler can pick it up again this round (and continue its native
-            # engine session); otherwise an unfocused resume finds nothing runnable.
-            self._requeue_interrupted_horizon(runlog, resume_round, reconcile_only, resume_offset)
-            # Resume always drives a *fresh batch* of `batch` Horizon rounds — the
-            # "keep pushing this run for its configured rounds" model — no matter how
-            # many rounds already ran. `--rounds N` overrides the batch size. A
-            # dangling reconcile Ground (reconcile_only: a Horizon finished but its
-            # Ground never ran) is replayed first as recovery and is NOT counted
-            # against the batch, so the run still gets `batch` full Horizon rounds.
+            resume_round = self._resume_point(runlog)
+            # Revive the task whose Horizon session was interrupted (left RUNNING) so
+            # the resumed round can pick it up again and continue its native session.
+            self._requeue_interrupted_horizon(runlog, resume_round)
+            # Resume drives a fresh batch of `batch` rounds on top of what already ran
+            # ("keep pushing this run"); `--rounds N` overrides the batch size.
             batch = rounds_override if rounds_override is not None else run.rounds_requested
-            total_rounds = resume_round + (1 if reconcile_only else 0) + batch
+            total_rounds = resume_round + batch
 
         # Tee orchestrator events into a buffer; each `_flush_system_session`
         # writes the buffered work as a "system" session in the Log.
@@ -1593,77 +1181,43 @@ class Orchestrator:
                     files=list(baseline.files),
                     projects=list(self._run_scope_projects(run)),
                 )
-        if concurrent_holder:
-            self._emit("run.concurrent", run_id=run.id, existing=concurrent_holder)
         reports: list[RoundReport] = []
 
         # Displayed round numbering is offset by ``start_round`` (0 for a normal
-        # run) so a human driving one role at a time into an existing run gets
-        # session meta / commit trailers consistent with the automatic loop. The
-        # loop counter ``i`` still drives resume recovery math (``2*i+…``).
+        # run) so a human appending sessions into an existing run gets consistent
+        # session meta / commit trailers. The horizon-only session layout is
+        # ``[horizon_0 (+system), horizon_1, …]``.
         base = run.start_round
-        fatal_opening = False
-        # The opening Ground is a feature of the alternation only (plan before the
-        # first Horizon). Single-role loops don't use it: a Ground-only loop already
-        # runs a Ground every round, and a Horizon-only loop has no Ground at all.
-        if self._ground_enabled and self._horizon_enabled and self.start_with != "horizon" and run_opening:
-            update = self._ground_step(run, runlog, round_index=base)
-            if update is not None and _is_fatal_failure(update.metadata):
-                self._publish_silent(run)
-                self._flush_system_session(runlog)
-                self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=base)
-                fatal_opening = True
+        self.last_paused = None
+        if runlog is not None:  # a fresh/resumed launch clears any stale pause marker
+            (runlog.path / "paused.json").unlink(missing_ok=True)
+        # Register this run's process (`runs/<id>/process.json`) so `horizon ps`
+        # can list live runs, spot zombies (marker present, pid dead), and kill a
+        # stuck one. Removed on clean exit; a crash leaves it for `ps` to reap.
+        self._write_process_marker(runlog)
+        # Skills are written only by `init` / `horizon skills install`, so a
+        # long-lived workspace keeps whatever it was initialized with while the
+        # package moves on — agents then follow guidance that no longer matches
+        # the tools they have. Surface the drift rather than silently rewriting:
+        # the `horizon` skill is advertised as per-workspace editable, so a
+        # difference may be an intentional local edit.
+        self._warn_stale_skills()
+        # Run-level spend, accumulated from each session's reported usage and
+        # checked between sessions against workspace.budget.
+        run_tokens_out = 0
+        run_cost_usd = 0.0
         self._publish_silent(run)
         self._flush_system_session(runlog)
 
         for i in range(total_rounds):
-            if fatal_opening:
-                break
             if resume and i < resume_round:
                 continue  # this round finished before the interruption
 
-            # Only the reconcile Ground was lost: replay the recovered Horizon
-            # result into it rather than re-running the Horizon step, and continue
-            # its native session if the engine can.
-            if resume and i == resume_round and reconcile_only:
-                is_last = i == total_rounds - 1
-                if self._ground_enabled and not (is_last and self.end_with == "horizon"):
-                    update = self._ground_step(
-                        run, runlog, round_index=base + i + 1,
-                        horizon_result=self._recover_horizon_result(runlog, i, resume_offset),
-                        resume_session_id=self._recover_engine_session_id(runlog, 2 * i + 1 + resume_offset),
-                    )
-                    if update is not None and _is_fatal_failure(update.metadata):
-                        self._publish_silent(run)
-                        self._flush_system_session(runlog)
-                        self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
-                        break
-                self._publish_silent(run)
-                self._flush_system_session(runlog)
-                continue
-
-            # Ground-only loop: no task selection, no Horizon — each round is a
-            # single standalone Ground session (planning/organizing/reconciling the
-            # workspace). Horizon-centric machinery below is skipped entirely.
-            if not self._horizon_enabled:
-                if dry_run:
-                    self._emit("run.dry-run", planned=[])
-                    reports.append(RoundReport(round_index=i))
-                    break
-                update = self._ground_step(run, runlog, round_index=base + i, horizon_result=None)
-                reports.append(RoundReport(round_index=i))
-                if update is not None and _is_fatal_failure(update.metadata):
-                    self._publish_silent(run)
-                    self._flush_system_session(runlog)
-                    self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
-                    break
-                self._publish_silent(run)
-                self._flush_system_session(runlog)
-                continue
-
             if not dry_run:
                 self._queue_focus_for_round(run, initial=(not resume and i == 0))
-            self._write_blueprint_dags(rich=False)  # leandag skill reads a fresh parser DAG during horizon
+            # The hgraph skill reads a fresh DAG during horizon; only
+            # the run's own projects need refreshing here.
+            self._write_blueprint_dags(projects=self._run_scope_projects(run))
             candidates = self.task_store.list()
             selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
             # A focus pinned to a task that is not runnable (e.g. it is frozen, or
@@ -1697,48 +1251,62 @@ class Orchestrator:
             # Continue the interrupted Horizon's native session (the first task of
             # the resumed round) if the engine can; later tasks always run fresh.
             h_resume = (
-                self._recover_engine_session_id(runlog, 2 * i + resume_offset)
+                self._recover_engine_session_id(runlog, i)
                 if resume and i == resume_round else None
             )
             ran: list[str] = []
             blocked: list[str] = []
             last_result: HorizonResult | None = None
             fatal_reason: str | None = None
+            retry_after: object = None
             for n, task in enumerate(selected):
                 result = self._horizon_step(
                     run, task, runlog, round_index=base + i,
+                    # Rounds run as ``base + i`` for ``i`` in ``range(total_rounds)``,
+                    # so the agent's last round is ``base + total_rounds - 1``. A
+                    # resume extends ``total_rounds`` past ``rounds_requested``
+                    # (it drives a fresh batch on top of what already ran), so this
+                    # must track ``total_rounds`` — deriving it from
+                    # ``rounds_requested`` would leave the agent's
+                    # ``ROUND + 1 == ROUNDS`` last-round check never true on a
+                    # resumed run, and it would never hand off cleanly.
+                    rounds_total=base + total_rounds,
                     resume_session_id=h_resume if n == 0 else None,
                 )
                 if result is None:
                     blocked.append(task.id)
-                else:
-                    ran.append(task.id)
-                    last_result = result
-                    if _is_fatal_failure(result.metadata):
-                        fatal_reason = str(result.metadata.get("failure_reason") or "task-failed")
-                        break
+                    continue
+                ran.append(task.id)
+                last_result = result
+                usage = result.metadata.get("usage")
+                if isinstance(usage, dict):
+                    run_tokens_out += int(usage.get("tokens_out") or 0)
+                    run_cost_usd += float(usage.get("cost_usd") or 0.0)
+                if _is_fatal_failure(result.metadata):
+                    fatal_reason = str(result.metadata.get("failure_reason") or "task-failed")
+                    retry_after = result.metadata.get("retry_after_s")
+                    break
+                if self.budget is not None and (
+                    (self.budget.run_tokens_out is not None and run_tokens_out > self.budget.run_tokens_out)
+                    or (self.budget.run_cost_usd is not None and run_cost_usd > self.budget.run_cost_usd)
+                ):
+                    fatal_reason = "budget"
+                    self._emit(
+                        "run.budget_exhausted",
+                        run_id=run.id,
+                        tokens_out=run_tokens_out,
+                        cost_usd=round(run_cost_usd, 4),
+                    )
+                    break
             reports.append(RoundReport(round_index=i, tasks_run=tuple(ran), tasks_blocked=tuple(blocked)))
 
-            # A system session after the Horizon step makes the alternation
-            # symmetric — [Ground, system, Horizon, system] — so the Horizon's
-            # deterministic aftermath (commits, integration) is its own row in the
-            # Log rather than being folded into the next Ground's system session.
+            # The Horizon's deterministic aftermath (commits, integration) is its
+            # own "system" session row in the Log.
             self._flush_system_session(runlog)
             if fatal_reason is not None:
                 self._emit("run.stopped", run_id=run.id, reason=fatal_reason, round=i)
+                self._write_pause_marker(runlog, run, fatal_reason, retry_after)
                 break
-
-            # Reconcile Ground after the Horizon step, closing the G/H/G pairing —
-            # unless this is the final round and the run is set to end on Horizon, or
-            # Ground is disabled entirely (a Horizon-only loop).
-            is_last = i == total_rounds - 1
-            if self._ground_enabled and not (is_last and self.end_with == "horizon"):
-                update = self._ground_step(run, runlog, round_index=base + i + 1, horizon_result=last_result)
-                if update is not None and _is_fatal_failure(update.metadata):
-                    self._publish_silent(run)
-                    self._flush_system_session(runlog)
-                    self._emit("run.stopped", run_id=run.id, reason=update.metadata.get("failure_reason") or "ground-failed", round=i)
-                    break
             self._publish_silent(run)
             self._flush_system_session(runlog)
 
@@ -1770,7 +1338,72 @@ class Orchestrator:
         self._flush_system_session(runlog)
         self._finalize_system_session()  # close the last system session
         self._collecting = False
+        self._clear_process_marker(runlog)
         return reports
+
+    def _warn_stale_skills(self) -> None:
+        """Emit a warning when the workspace's installed skills differ from the
+        bundled ones. Never fails a run — this is hygiene, not correctness."""
+        try:
+            from archon_horizon.skills.registry import stale_skills
+
+            names = stale_skills(self.workspace.root)
+        except Exception:
+            return
+        if names:
+            self._emit("skills.stale", skills=list(names))
+
+    @staticmethod
+    def _write_process_marker(runlog: RunLog | None) -> None:
+        if runlog is None:
+            return
+        import os
+        import socket
+
+        try:
+            (runlog.path / "process.json").write_text(json.dumps({
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "started_at": utc_now().isoformat(),
+            }), "utf-8")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _clear_process_marker(runlog: RunLog | None) -> None:
+        if runlog is None:
+            return
+        try:
+            (runlog.path / "process.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _write_pause_marker(
+        self, runlog: RunLog | None, run: RunRecord, reason: str, retry_after: object = None
+    ) -> None:
+        """Durable "why this run stopped early" marker: ``runs/<id>/paused.json``.
+
+        The supervisor never sleeps waiting for a reset — instead this marker
+        (reason + optional advertised retry window + the focus) makes an external
+        relaunch loop or a human `--resume` trivial. Cleared on the next launch.
+        """
+        payload: dict[str, object] = {
+            "run_id": run.id,
+            "reason": reason,
+            "at": utc_now().isoformat(),
+            "focus_tasks": list(run.focus.tasks),
+            "focus_projects": list(run.focus.projects),
+            "resume": f"horizon run --resume {run.id or 'latest'}",
+        }
+        if retry_after is not None:
+            payload["retry_after_s"] = retry_after
+        self.last_paused = payload
+        if runlog is None:
+            return
+        try:
+            (runlog.path / "paused.json").write_text(json.dumps(payload, indent=2), "utf-8")
+        except OSError:
+            pass
 
     def publish(self, run: RunRecord) -> None:
         """Refresh human-facing artifacts after a collaboration boundary.
@@ -1782,11 +1415,13 @@ class Orchestrator:
         provider.
 
         Publish runs once per collaboration boundary (not per Horizon step), so
-        here we pay for the *rich* leandag DAG: it captures Lean source, dep/rdep
-        counts, and effort, which the dashboard needs. The cheap per-step refresh
-        stays parser-only.
+        here we pay for the *rich* hgraph build: it syncs the per-node files and
+        captures Lean source and dep/rdep counts, which the dashboard needs. The
+        cheap per-step refresh stays parser-only. Both are scoped to the run's
+        own projects — an unscoped run still covers the whole workspace via
+        ``_run_scope_projects``'s fallback.
         """
-        blueprint_refs = self._write_blueprint_dags(rich=True)
+        blueprint_refs = self._write_blueprint_dags(projects=self._run_scope_projects(run))
 
         self._emit(
             "publish.completed",
@@ -1795,17 +1430,23 @@ class Orchestrator:
             blueprints=blueprint_refs,
         )
 
-    def _write_blueprint_dags(self, *, rich: bool = False) -> list[str]:
-        """(Re)generate ``.archon-horizon/blueprints/<project>.json`` for every project.
+    def _write_blueprint_dags(self, *, projects: tuple[str, ...] | None = None) -> list[str]:
+        """(Re)generate ``.archon-horizon/blueprints/<project>.json``.
 
-        Run before Horizon as well as at publish, so the leandag skill's DAG file
-        is fresh when the agent consults it mid-round. The mid-round refresh uses
-        the parser DAG because rich leandag scans can be very expensive on large
-        workspaces; publish passes ``rich=True`` once per boundary so the cached
-        DAG the dashboard serves carries Lean source and dep counts.
+        Run before every Horizon round as well as at publish, so the agent always
+        consults a DAG that reflects the blueprint and Lean as they stand. Always
+        a full hgraph sync: measured at ~4.5s for the largest project in use
+        (5113 nodes; ~2s of that is the sync itself, which parallelizes its Lean
+        parsing), against ~2.5s for a read-only build. Two seconds a round is not
+        worth a second engine, a staleness tier, or the bugs both cost — an
+        earlier note in this file put the sync at "200+ seconds", but that was
+        the cost of the since-removed per-node ``descendants()`` scan, not sync.
+
+        ``projects`` scopes the rebuild to the run's own projects (other
+        projects keep their cached JSON); ``None`` rebuilds every project.
         """
         refs: list[str] = []
-        dags = workspace_dags_rich(self.workspace) if rich else workspace_dags(self.workspace)
+        dags = workspace_dags(self.workspace, projects)
         if not dags:
             return refs
         out_dir = self.workspace.state_path / "blueprints"
@@ -1813,25 +1454,11 @@ class Orchestrator:
         counts: dict[str, dict[str, int]] = {}
         for project, dag in dags.items():
             path = out_dir / f"{project}.json"
-            # Never DOWNGRADE a rich (leandag, Lean-source-bearing) cache to the
-            # cheap parser DAG: the mid-round refresh (rich=False) would otherwise
-            # strip the Lean source the dashboard shows, forcing a manual
-            # "Synchronize". Only overwrite a rich cache with another rich build.
-            if not rich and path.exists():
-                try:
-                    existing = json.loads(path.read_text("utf-8"))
-                    if (existing.get("meta") or {}).get("engine") == "leandag":
-                        continue
-                except (OSError, ValueError):
-                    pass
             path.write_text(json.dumps(dag, indent=2, sort_keys=True), "utf-8")
             refs.append(path.relative_to(self.workspace.root).as_posix())
             counts[project] = {
                 "nodes": len(dag.get("nodes", ())),
                 "edges": len(dag.get("edges", ())),
             }
-        # Only announce the rich rebuild (once per boundary); the mid-round
-        # parser refresh is transient scaffolding for the leandag skill.
-        if rich:
-            self._emit("blueprint.dags", projects=counts)
+        self._emit("blueprint.dags", projects=counts)
         return refs

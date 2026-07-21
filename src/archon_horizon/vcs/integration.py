@@ -15,24 +15,20 @@ commit and read what it touched without parsing prose.
 
 from __future__ import annotations
 
-import json
 import os
-import socket
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
 from archon_horizon.core.workspace import Workspace
 
 from .git import GitError, WorkspaceGit, git_available, neutralize_nested_git
 
 
-# Commit author per acting agent, so `git log --author` / blame separate the two.
+# Commit author per acting role, so `git log --author` / blame separate them.
 # The committer identity stays the system one (see git._git_env).
 _ROLE_AUTHORS: dict[str, tuple[str, str]] = {
-    "ground": ("Archon Horizon (Ground)", "ground@archon-horizon.local"),
     "horizon": ("Archon Horizon (Horizon)", "horizon@archon-horizon.local"),
     "system": ("Archon Horizon (System)", "system@archon-horizon.local"),
 }
@@ -41,95 +37,49 @@ _ROLE_AUTHORS: dict[str, tuple[str, str]] = {
 def author_for(role: str | None) -> tuple[str, str] | None:
     return _ROLE_AUTHORS.get((role or "").strip().lower())
 
-# Serializes workspace commits across parallel sessions. The in-process lock
-# keeps threads ordered; the filesystem queue below keeps separate Horizon
-# processes from racing on Git's index.
+# Orders integration commits when the dashboard server thread and the run loop
+# commit from the same process.
 _WORKSPACE_COMMIT_LOCK = threading.Lock()
-_COMMIT_QUEUE_POLL_S = 0.25
-# A commit-queue holder older than this is treated as stale and reclaimed even
-# when it looks alive. Guards against an infinite wait when the holder is a
-# crashed process on another host (``_process_alive`` can't probe cross-host, so
-# it conservatively reports "alive"). A real commit takes well under a second;
-# an hour is far beyond any legitimate hold.
-_COMMIT_QUEUE_STALE_S = 3600.0
-
-
-def _process_alive(pid: int, host: str) -> bool:
-    if host != socket.gethostname():
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _read_lock(path: Path) -> dict | None:
-    try:
-        return json.loads(path.read_text("utf-8"))
-    except (FileNotFoundError, ValueError, OSError):
-        return None
-
-
-def _lock_is_stale(holder: dict) -> bool:
-    """True when the holder is older than ``_COMMIT_QUEUE_STALE_S``.
-
-    Backstops the pid/host liveness check for the cross-host case, where
-    ``_process_alive`` can't probe the remote pid and returns ``True`` — without
-    this a lock left by a crashed process on another host would never be
-    reclaimed and every subsequent committer would wait forever."""
-    try:
-        created = float(holder.get("created_at") or 0.0)
-    except (TypeError, ValueError):
-        return False
-    return created > 0.0 and (time.time() - created) > _COMMIT_QUEUE_STALE_S
 
 
 @contextmanager
-def _workspace_commit_queue(workspace: Workspace):
-    """Cross-process queue for workspace integration commits.
+def _cross_process_commit_lock(workspace: Workspace, timeout: float = 120.0):
+    """Serialize boundary commits across concurrent ``horizon run`` processes.
 
-    Git has its own ``index.lock``, but failing on that lock makes concurrent
-    sessions lose commits. This lock waits instead. A dead holder is reclaimed
-    using the same pid/host check as the run lock.
+    A workspace deliberately running several projects in parallel (one run per
+    project, possibly under different accounts) shares ONE ledger; without this,
+    two runs starting in the same second race the baseline commit and one fails
+    with ``cannot lock ref 'HEAD': is at X but expected Y``. An OS ``flock`` is
+    used because it dies with the holder — no stale-lock reclaim needed. On
+    platforms without ``fcntl`` (Windows) this degrades to no cross-process
+    lock; the retry in :meth:`WorkspaceGit.commit` still resolves races there.
     """
-    path = workspace.state_path / "locks" / "commit.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "pid": os.getpid(),
-        "host": socket.gethostname(),
-        "workspace": workspace.name,
-        "created_at": time.time(),
-    }
-    while True:
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            holder = _read_lock(path)
-            if holder is not None and not _lock_is_stale(holder) and _process_alive(
-                int(holder.get("pid") or 0), str(holder.get("host") or "")
-            ):
-                time.sleep(_COMMIT_QUEUE_POLL_S)
-                continue
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            continue
-        with os.fdopen(fd, "w") as handle:
-            json.dump(payload, handle)
-        break
     try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    lock_dir = workspace.state_path / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_dir / "workspace-commit.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise GitError(
+                        f"timed out after {timeout:.0f}s waiting for the workspace "
+                        "commit lock (another run is committing to the ledger)"
+                    )
+                time.sleep(0.2)
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
         yield
     finally:
-        holder = _read_lock(path)
-        if holder is not None and int(holder.get("pid") or 0) == os.getpid():
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
+        os.close(fd)  # closing the fd releases the flock
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,23 +173,22 @@ def integrate_workspace_run(
         for name in projects:
             if name in workspace.projects:
                 neutralize_nested_git(workspace.project_path(name))
-        with _WORKSPACE_COMMIT_LOCK:
-            with _workspace_commit_queue(workspace):
-                git = WorkspaceGit(workspace.root)
-                git.init()
-                # Drop any stale submodule gitlink left from before a project's nested
-                # .git was neutralized, so the commit below re-tracks its files.
-                for name in projects:
-                    if name in workspace.projects:
-                        git.unstage_gitlink(workspace.project_path(name).relative_to(workspace.root).as_posix())
-                sha = git.commit(
-                    message or f"workspace: integrate run {run_id}",
-                    paths=_workspace_commit_paths(workspace, projects),
-                    author=author,
-                    trailers=trailers,
-                    allow_empty=allow_empty,
-                )
-                files = git.files_in_commit(sha) if sha else ()
+        with _WORKSPACE_COMMIT_LOCK, _cross_process_commit_lock(workspace):
+            git = WorkspaceGit(workspace.root)
+            git.init()
+            # Drop any stale submodule gitlink left from before a project's nested
+            # .git was neutralized, so the commit below re-tracks its files.
+            for name in projects:
+                if name in workspace.projects:
+                    git.unstage_gitlink(workspace.project_path(name).relative_to(workspace.root).as_posix())
+            sha = git.commit(
+                message or f"workspace: integrate run {run_id}",
+                paths=_workspace_commit_paths(workspace, projects),
+                author=author,
+                trailers=trailers,
+                allow_empty=allow_empty,
+            )
+            files = git.files_in_commit(sha) if sha else ()
         return CommitOutcome(attempted=True, sha=sha, changed=sha is not None, files=files)
     except GitError as exc:
         return CommitOutcome(attempted=True, error=str(exc))
@@ -273,27 +222,6 @@ def integrate_workspace_baseline(
             commit_kind="baseline",
         ),
         allow_empty=True,
-    )
-
-
-def project_checkpoint(
-    workspace: Workspace,
-    project: str,
-    *,
-    message: str | None = None,
-    author: tuple[str, str] | None = None,
-) -> CommitOutcome:
-    """Compatibility wrapper for callers that still checkpoint one project.
-
-    The current VCS model has a single workspace ledger, so a "project
-    checkpoint" is just a workspace commit scoped to that project's worktree.
-    """
-    return integrate_workspace_run(
-        workspace,
-        run_id="checkpoint",
-        projects=(project,),
-        message=message or f"project[{project}]: checkpoint",
-        author=author,
     )
 
 

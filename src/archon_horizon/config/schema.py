@@ -13,13 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from archon_horizon.core.types import Metadata
-from archon_horizon.core.workspace import ProjectVcs
 
-
-# Symbolic model tiers, ordered cheapest → most capable. A subagent descriptor
-# names a tier (engine-agnostic); the harness's ``models`` map turns it into a
-# concrete model. ``big`` defaults to the harness's primary ``model``.
-TIER_ORDER: tuple[str, ...] = ("small", "medium", "big")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,43 +23,18 @@ class HarnessConfig:
     command: str | None = None
     args: tuple[str, ...] = ()
     model: str | None = None
-    # tier name → concrete model (e.g. {"small": "haiku", "medium": "sonnet"}).
-    # Must stay within this harness's own provider — native subagents inherit the
-    # parent process env, so a cross-provider tier would not route correctly.
-    models: dict[str, str] = field(default_factory=dict)
     options: Metadata = field(default_factory=dict)
 
     @classmethod
     def from_raw(cls, name: str, data: dict[str, Any]) -> "HarnessConfig":
-        raw_models = data.get("models") or {}
         return cls(
             name=name,
             kind=data["kind"],
             command=data.get("command"),
             args=tuple(data.get("args", ())),
             model=data.get("model"),
-            models={str(k): str(v) for k, v in raw_models.items()},
             options=dict(data.get("options", {})),
         )
-
-    def tier_model(self, tier: str | None) -> str | None:
-        """Resolve a tier name to a concrete model for this harness.
-
-        ``model`` is the primary/``big`` default. A requested tier that isn't
-        filled in falls *up* toward the next-more-capable tier, then to ``model``.
-        Returns ``None`` when nothing is configured, so callers omit the model and
-        let the subagent inherit the parent session's model.
-        """
-        if not tier:
-            return self.model
-        if tier not in TIER_ORDER:
-            return self.models.get(tier) or self.model
-        for t in TIER_ORDER[TIER_ORDER.index(tier):]:
-            if t == "big":
-                return self.models.get("big") or self.model
-            if self.models.get(t):
-                return self.models[t]
-        return self.model
 
     @property
     def config_dir(self) -> str | None:
@@ -85,29 +54,44 @@ class HarnessConfig:
 @dataclass(frozen=True, slots=True)
 class SchedulerConfig:
     max_parallel_sessions: int = 1
-    unknown_write_set_policy: str = "lock-project"
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "SchedulerConfig":
         return cls(
             max_parallel_sessions=int(data.get("max_parallel_sessions", 1)),
-            unknown_write_set_policy=data.get("unknown_write_set_policy", "lock-project"),
         )
 
 
 @dataclass(frozen=True, slots=True)
-class ReferenceTranscriptionConfig:
-    """Harness/model override for page-level reference transcription."""
+class BudgetConfig:
+    """Optional spend ceilings for automated runs (``workspace.budget``).
 
-    harness: str | None = None
-    model: str | None = None
+    All limits are opt-in (unset = unlimited). A crossed limit stops the run
+    cleanly — like a usage limit, state stays on disk and ``--resume`` picks it
+    back up. ``session_tokens_out`` additionally cancels a live session that
+    crosses it (checked from the session's live ``usage.json``).
+    """
+
+    session_tokens_out: int | None = None
+    run_tokens_out: int | None = None
+    run_cost_usd: float | None = None
 
     @classmethod
-    def from_raw(cls, data: dict[str, Any]) -> "ReferenceTranscriptionConfig":
+    def from_raw(cls, data: dict[str, Any]) -> "BudgetConfig":
+        def _int(key: str) -> int | None:
+            value = data.get(key)
+            return int(value) if value is not None else None
+
+        cost = data.get("run_cost_usd")
         return cls(
-            harness=str(data["harness"]) if data.get("harness") else None,
-            model=str(data["model"]) if data.get("model") else None,
+            session_tokens_out=_int("session_tokens_out"),
+            run_tokens_out=_int("run_tokens_out"),
+            run_cost_usd=float(cost) if cost is not None else None,
         )
+
+    @property
+    def configured(self) -> bool:
+        return any(v is not None for v in (self.session_tokens_out, self.run_tokens_out, self.run_cost_usd))
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +188,6 @@ class ProjectConfig:
     name: str
     path: str
     type: str = "lean"
-    vcs: ProjectVcs = field(default_factory=ProjectVcs)
     blueprint_path: str | None = None
     build_command: str | None = None
     depends_on: tuple[str, ...] = ()
@@ -214,19 +197,13 @@ class ProjectConfig:
 
     @classmethod
     def from_raw(cls, name: str, data: dict[str, Any]) -> "ProjectConfig":
-        vcs_raw = data.get("vcs", {})
-        git_dir = vcs_raw.get("git_dir")
+        # A `vcs:` block here is legacy and ignored: the workspace has ONE ledger and
+        # projects have no repositories of their own.
         freeze_raw = data.get("freeze", {})
         return cls(
             name=name,
             path=data["path"],
             type=data.get("type", "lean"),
-            vcs=ProjectVcs(
-                enabled=bool(vcs_raw.get("enabled", True)),
-                git_dir=Path(git_dir) if git_dir else None,
-                origin=vcs_raw.get("origin"),
-                branch=vcs_raw.get("branch"),
-            ),
             blueprint_path=data.get("blueprint", {}).get("path"),
             build_command=data.get("build", {}).get("command"),
             depends_on=tuple(data.get("depends_on", ())),
@@ -236,52 +213,15 @@ class ProjectConfig:
         )
 
 
-_VALID_ROLES = ("ground", "horizon")
-
-
-def _parse_roles(raw: Any) -> tuple[str, ...]:
-    """Normalize ``workspace.roles`` to an ordered, de-duplicated subset of
-    ``{ground, horizon}``. Accepts a list or a single string; anything empty or
-    unrecognized falls back to both roles (the default alternation)."""
-    if raw is None:
-        return _VALID_ROLES
-    values = [raw] if isinstance(raw, str) else list(raw)
-    seen: list[str] = []
-    for value in values:
-        role = str(value).strip().lower()
-        if role in _VALID_ROLES and role not in seen:
-            seen.append(role)
-    return tuple(seen) if seen else _VALID_ROLES
-
-
 @dataclass(frozen=True, slots=True)
 class WorkspaceConfig:
     name: str
     state_dir: str = ".archon-horizon"
     rounds: int = 1
-    # The run is a flat ground/horizon alternation. By default it opens on
-    # horizon and closes on ground — each round is one Horizon step followed by a
-    # reconcile Ground, giving H-G-H-G-…-G with no upfront planning Ground. Set
-    # ``start_with: ground`` to prepend an opening planning Ground (useful for
-    # unfocused runs that need work selected first), or ``end_with: horizon`` to
-    # drop the final reconcile Ground.
-    start_with: str = "horizon"
-    end_with: str = "ground"
-    # Which agent roles the run loop drives. Default is both, giving the normal
-    # ground/horizon alternation. ``roles: [horizon]`` runs a Horizon-only loop
-    # (every round is a Horizon step, no Ground); ``roles: [ground]`` runs a
-    # Ground-only loop (every round is one Ground session, no Horizon). An empty or
-    # unrecognized value falls back to both.
-    roles: tuple[str, ...] = ("ground", "horizon")
-    ground_harness: str | None = None
     horizon_harness: str | None = None
-    ground_subagents: tuple[str, ...] | None = None
-    # Harness (and thus model) used to run Ground's subagents. Defaults to the
-    # Ground harness when unset; set to point subagents at a cheaper/larger model.
-    subagent_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
     external_libraries: tuple[ExternalLibrary, ...] = ()
-    reference_transcription: ReferenceTranscriptionConfig = field(default_factory=ReferenceTranscriptionConfig)
     harnesses: dict[str, HarnessConfig] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
     github: GithubConfig = field(default_factory=GithubConfig)
@@ -294,25 +234,16 @@ class WorkspaceConfig:
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "WorkspaceConfig":
         ws = data.get("workspace", {})
-        subagents = ws.get("ground_agent", {}).get("subagents")
         freeze = data.get("freeze", {})
         return cls(
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
-            start_with=str(ws.get("start_with", "horizon")).lower(),
-            end_with=str(ws.get("end_with", "ground")).lower(),
-            roles=_parse_roles(ws.get("roles")),
-            ground_harness=ws.get("ground_agent", {}).get("harness"),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
-            ground_subagents=tuple(subagents) if subagents is not None else None,
-            subagent_harness=ws.get("ground_agent", {}).get("subagent_harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
+            budget=BudgetConfig.from_raw(ws.get("budget", {}) or {}),
             external_libraries=tuple(
                 ExternalLibrary.from_raw(e) for e in (data.get("external_libraries") or ())
-            ),
-            reference_transcription=ReferenceTranscriptionConfig.from_raw(
-                (data.get("references", {}) or {}).get("transcription", {}) or {}
             ),
             harnesses={
                 name: HarnessConfig.from_raw(name, h)
@@ -329,24 +260,3 @@ class WorkspaceConfig:
             freeze_declarations=tuple(freeze.get("declarations", ())),
             freeze_blueprint_nodes=tuple(freeze.get("blueprint_nodes", ())),
         )
-
-    @property
-    def reference_transcription_harness_name(self) -> str | None:
-        """Harness used for page transcription after applying defaults.
-
-        Reference transcription defaults to the same harness used for descriptor
-        subagents, which itself defaults to Ground. A config override under
-        ``references.transcription.harness`` wins.
-        """
-        return self.reference_transcription.harness or self.subagent_harness or self.ground_harness
-
-    @property
-    def reference_transcription_model_name(self) -> str | None:
-        """Model used for page transcription after applying defaults."""
-        if self.reference_transcription.model:
-            return self.reference_transcription.model
-        harness_name = self.reference_transcription_harness_name
-        if harness_name is None:
-            return None
-        harness = self.harnesses.get(harness_name)
-        return harness.model if harness is not None else None

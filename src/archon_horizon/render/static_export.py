@@ -9,8 +9,8 @@ writes exactly those files — the hash MUST match the browser's
 
 With a built SPA (``dist_dir``) it lays the app down and injects the
 ``window.__ARCHON_STATIC__`` marker that flips it into static mode. Without
-one, it falls back to the single-file Python-rendered dashboard so a static
-page exists even before anyone runs a frontend build.
+one, the data files are still exported and the index page explains how to
+build the SPA (there is no server-rendered fallback view).
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from pathlib import Path
 
 from archon_horizon.server.service import WorkspaceService
 
-from .dashboard import render_dashboard
 
 
 # The exported dashboard is committed to the workspace repo; this Action just
@@ -162,16 +161,16 @@ def export_static(service: WorkspaceService, out_dir: Path, *, dist_dir: Path | 
         index = out_dir / "index.html"
         index.write_text(_inject_static_marker(index.read_text("utf-8"), marker), "utf-8")
     else:
-        # Fallback: the single-file Python dashboard (no live API, read-only).
+        # No built SPA to copy: the data files above are still exported, but
+        # there is nothing to render them. Say how to fix it rather than
+        # shipping a second, drift-prone server-rendered view.
         (out_dir / "index.html").write_text(
-            render_dashboard(
-                workspace_name=service.workspace.name,
-                roadmap=service.stores.roadmap.load(),
-                local_items=service.local.list_items(),
-                github_items=service.github.list_items() if service.github else (),
-                memory=service.stores.memory.load(),
-                reports=service.stores.reports.list(),
-            ),
+            "<!doctype html><meta charset='utf-8'><title>Archon Horizon</title>"
+            "<body style='font-family:system-ui;max-width:640px;margin:80px auto'>"
+            "<h1>Static export incomplete</h1>"
+            "<p>No built <code>frontend/dist</code> was available when this export ran. "
+            "Build it (<code>cd src/archon_horizon/frontend && npm install && npm run build</code>) "
+            "and re-run <code>horizon dashboard --static</code>.</p></body>",
             "utf-8",
         )
     return out_dir

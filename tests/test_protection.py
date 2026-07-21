@@ -4,14 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archon_horizon.agents.base import HorizonContext
-from archon_horizon.agents.prompts import compose_horizon_prompt
 from archon_horizon.cli import main
 from archon_horizon.core.inbox import InboxItem, InboxKind, InboxScope
-from archon_horizon.core.roadmap import Roadmap
-from archon_horizon.core.sessions import RunRecord
-from archon_horizon.core.tasks import HorizonTask
-from archon_horizon.core.workspace import Project, Workspace
 from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 
 _CONFIG = """
@@ -45,22 +39,17 @@ def test_protect_creates_persistent_protection_item(tmp_path: Path) -> None:
     assert item.audience == "horizon"
 
 
-def test_horizon_prompt_renders_protected_section(tmp_path: Path) -> None:
+def test_protection_reaches_horizon_via_inbox_pull(tmp_path: Path) -> None:
+    # Protections are no longer pushed through the prompt: the agent pulls them
+    # with `horizon inbox list` (the skill says to). This pins the pull path —
+    # the item is open, agent-ready, and addressed so it reaches horizon.
+    from archon_horizon.core.inbox import reaches_horizon
+    from archon_horizon.core.labels import is_agent_ready
+
     protection = InboxItem(
         id="I-1", provider="local", kind=InboxKind.PROTECTION,
-        body="do not change the signature of Foo.bar", labels=(),
+        body="do not change the signature of Foo.bar", labels=("agent-ready",),
         scope=InboxScope(declarations=("Foo.bar",)), audience="horizon",
     )
-    ctx = HorizonContext(
-        workspace=Workspace(name="w", root=tmp_path, projects={"p": Project(name="p", path=Path("projects/p"))}),
-        run=RunRecord(id="S", rounds_requested=1),
-        task=HorizonTask(id="T", project="p", objective="do x"),
-        roadmap=Roadmap(),
-        accepted_inbox=(protection,),
-    )
-    prompt = compose_horizon_prompt(ctx)
-    assert "# Protected" in prompt
-    assert "do not change the signature of Foo.bar" in prompt
-    assert "decls=Foo.bar" in prompt
-    # The protection item is not duplicated in the general opened-inbox list.
-    assert prompt.count("do not change the signature of Foo.bar") == 1
+    assert is_agent_ready(protection.labels)
+    assert reaches_horizon(protection, "p")

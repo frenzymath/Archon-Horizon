@@ -6,7 +6,7 @@ import json
 
 import typer
 
-from archon_horizon.blueprint.workspace import workspace_dags_rich
+from archon_horizon.blueprint.workspace import workspace_dags
 from archon_horizon.log import log
 
 from .shared import emit_json, load_workspace
@@ -19,7 +19,7 @@ class BlueprintCommand:
 
     def run(self) -> None:
         _, workspace = load_workspace(self.root)
-        dags = workspace_dags_rich(workspace)
+        dags = workspace_dags(workspace)
         if not dags:
             if self.as_json:
                 emit_json({"projects": []})

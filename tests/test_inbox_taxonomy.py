@@ -53,12 +53,12 @@ def test_add_uses_agent_role_env_as_default_author(tmp_path: Path, monkeypatch) 
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "config.yaml").write_text(_CONFIG, "utf-8")
-    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "ground")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
 
     assert main(["--root", str(ws), "inbox", "add", "--body", "x\n\nbody"]) == 0
 
     item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
-    assert item.author == "ground"
+    assert item.author == "horizon"
 
 
 def test_subagent_author_is_canonicalized_to_role(tmp_path: Path, monkeypatch) -> None:
@@ -68,14 +68,14 @@ def test_subagent_author_is_canonicalized_to_role(tmp_path: Path, monkeypatch) -
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "config.yaml").write_text(_CONFIG, "utf-8")
-    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "ground")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
 
     assert main([
         "--root", str(ws), "inbox", "add", "--body", "x\n\nbody", "--author", "blueprint-reviewer",
     ]) == 0
 
     item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
-    assert item.author == "ground"
+    assert item.author == "horizon"
     assert item.metadata.get("agent") == "blueprint-reviewer"
 
 
@@ -98,14 +98,14 @@ def test_agent_detail_strips_redundant_role_prefix(tmp_path: Path, monkeypatch) 
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "config.yaml").write_text(_CONFIG, "utf-8")
-    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "ground")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
 
     assert main([
-        "--root", str(ws), "inbox", "add", "--body", "x\n\nbody", "--author", "ground-diff-auditor",
+        "--root", str(ws), "inbox", "add", "--body", "x\n\nbody", "--author", "horizon-diff-auditor",
     ]) == 0
 
     item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
-    assert item.author == "ground"
+    assert item.author == "horizon"
     assert item.metadata.get("agent") == "diff-auditor"
 
 

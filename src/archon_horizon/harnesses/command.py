@@ -70,6 +70,90 @@ def _classify_failure(text: str) -> str | None:
     return None
 
 
+# "Retry after 12s" / "try again in 3 seconds" / "retry-after: 30" — engines and
+# gateways often advertise the wait; honor it instead of guessing a backoff.
+_RETRY_AFTER_RE = re.compile(
+    r"(?:retry[- ]?after[:\s]+|try again in\s+|retry in\s+)(\d+(?:\.\d+)?)\s*(?:s\b|sec|second|$|\D)",
+    re.I,
+)
+_MAX_ADVERTISED_RETRY_S = 15 * 60.0
+
+
+def _advertised_retry_s(text: str) -> float | None:
+    """The wait the engine's error text advertises, in seconds (capped), or None."""
+    match = _RETRY_AFTER_RE.search(text)
+    if not match:
+        return None
+    try:
+        return min(float(match.group(1)), _MAX_ADVERTISED_RETRY_S)
+    except ValueError:
+        return None
+
+
+class _UsageFile:
+    """Live per-session usage telemetry: ``<session_dir>/usage.json``.
+
+    Folds USAGE events into a running total as the engine streams, and rewrites
+    the file (atomically) at most every couple of seconds — cheap enough for the
+    agent to poll via ``horizon usage`` mid-session on any engine.
+    """
+
+    _WRITE_INTERVAL_S = 2.0
+
+    def __init__(self, path: Path | None) -> None:
+        self._path = path
+        self._totals = {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cached_tokens_in": 0,
+            "reasoning_tokens_out": 0,
+            "cost_usd": None,
+            "usage_events": 0,
+            "started_at": time.time(),
+            "updated_at": None,
+        }
+        self._dirty = False
+        self._written_at = 0.0
+
+    def add(self, event: TranscriptEvent) -> None:
+        if self._path is None or event.usage is None:
+            return
+        usage = event.usage
+        # Engines report per-turn usage; totals are the sum of turns.
+        self._totals["tokens_in"] += int(usage.tokens_in or 0)
+        self._totals["tokens_out"] += int(usage.tokens_out or 0)
+        self._totals["cached_tokens_in"] += int(getattr(usage, "cached_tokens_in", 0) or 0)
+        self._totals["reasoning_tokens_out"] += int(getattr(usage, "reasoning_tokens_out", 0) or 0)
+        cost = getattr(usage, "cost_usd", None)
+        if cost is not None:
+            self._totals["cost_usd"] = (self._totals["cost_usd"] or 0.0) + float(cost)
+        self._totals["usage_events"] += 1
+        self._dirty = True
+        self.flush()
+
+    def flush(self, *, force: bool = False) -> None:
+        if self._path is None or not self._dirty:
+            return
+        now = time.monotonic()
+        if not force and now - self._written_at < self._WRITE_INTERVAL_S:
+            return
+        self._totals["updated_at"] = time.time()
+        try:
+            import json as _json
+
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(_json.dumps(self._totals), "utf-8")
+            os.replace(tmp, self._path)
+            self._written_at = now
+            self._dirty = False
+        except OSError:
+            pass  # telemetry must never break the run
+
+    @property
+    def tokens_out(self) -> int:
+        return int(self._totals["tokens_out"])
+
+
 def _interruptible_sleep(seconds: float, cancel) -> bool:
     """Sleep in small slices so a cancel during retry backoff is honored quickly.
     Returns ``False`` if cancelled mid-sleep, ``True`` if it slept the full time."""
@@ -199,6 +283,10 @@ class CommandHarness(Harness):
     def run(self, request: HarnessRequest) -> HarnessResult:
         ref: str | None = None
         sink: TranscriptSink = NullTranscriptSink()
+        usage_file = _UsageFile(
+            request.artifact_dir / "usage.json" if request.artifact_dir is not None else None
+        )
+        self._usage_file = usage_file
         if request.artifact_dir is not None:
             path = request.artifact_dir / "transcript.jsonl"
             sink = JsonlTranscriptSink(path)
@@ -224,6 +312,11 @@ class CommandHarness(Harness):
             if request.cancel is not None and request.cancel.is_cancelled():
                 break
             delay = self.retry_base_seconds * (2 ** (attempt - 1))
+            # Honor an advertised wait ("retry after 30s") over the guessed
+            # backoff — waiting less just burns an attempt on the same wall.
+            advertised = _advertised_retry_s(result.text or "")
+            if advertised is not None:
+                delay = max(delay, advertised)
             # A NOTICE, not an ERROR: this is a transient wait-and-retry, so a run
             # that is merely backing off must not be rendered as failed.
             sink.emit(TranscriptEvent(
@@ -246,6 +339,12 @@ class CommandHarness(Harness):
             # apart from a genuine task failure (and note if retries ran out).
             end_data["failure_reason"] = reason
             result.metadata["failure_reason"] = reason
+            retry_hint = _advertised_retry_s(result.text or "")
+            if retry_hint is not None:
+                # Surfaced so a pause marker / relaunch loop knows when a retry
+                # is worthwhile (the supervisor itself never sleeps on it).
+                end_data["retry_after_s"] = retry_hint
+                result.metadata["retry_after_s"] = retry_hint
             if reason in _RETRYABLE_REASONS and attempt > self.retry_max:
                 # Stamp BOTH the transcript event and the result metadata: the run
                 # loop's fatal-failure check reads ``result.metadata`` (not the
@@ -300,6 +399,9 @@ class CommandHarness(Harness):
 
         events, stderr_lines, engine_session_id, threads = self._stream(proc, request, sink)
         elapsed = time.monotonic() - started_at
+        usage_file = getattr(self, "_usage_file", None)
+        if usage_file is not None:
+            usage_file.flush(force=True)
 
         timed_out = events is None
         cancelled = request.cancel is not None and request.cancel.is_cancelled()
@@ -352,8 +454,20 @@ class CommandHarness(Harness):
             # records in the session meta for a later native --resume.
             result_meta["session_id"] = engine_session_id
         # Classify a failure from the engine's own output (never our synthetic
-        # cancel/timeout text) so `run` can retry transient ones and label the rest.
-        reason = _classify_failure(f"{stderr_text}\n{text}") if (not ok and not cancelled) else None
+        # cancel/timeout text) so `run` can retry transient ones and label the
+        # rest. Structured engine error events (e.g. Claude's typed `result`
+        # subtype) are included alongside stderr, so classification prefers the
+        # engine's own verdict over grepping free text.
+        error_text = "\n".join(
+            f"{event.data.get('subtype', '')} {event.text}".strip()
+            for event in (events or [])
+            if event.kind is TranscriptKind.ERROR
+        )
+        reason = (
+            _classify_failure(f"{error_text}\n{stderr_text}\n{text}")
+            if (not ok and not cancelled)
+            else None
+        )
         # Backstop for a limit/refusal whose exact wording we don't match: an
         # instant, output-less, non-zero exit is a hard stop, not a retry.
         if reason is None and not ok and not timed_out and not cancelled and not had_output and elapsed < _EARLY_ABORT_S:
@@ -425,3 +539,6 @@ class CommandHarness(Harness):
                 if self._sink_stdout:
                     sink.emit(event)
                 events.append(event)
+                usage_file = getattr(self, "_usage_file", None)
+                if usage_file is not None:
+                    usage_file.add(event)

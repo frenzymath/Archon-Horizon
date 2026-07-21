@@ -15,25 +15,18 @@ from archon_horizon.subagents.compile import (
     install_subagents,
     render_claude_agent,
     render_codex_agent,
-    resolve_model,
 )
 
 _FM = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
-CLAUDE = HarnessConfig.from_raw("g", {"kind": "claude-code", "model": "opus", "models": {"small": "haiku"}})
-CODEX = HarnessConfig.from_raw("c", {"kind": "codex", "model": "gpt-5", "models": {"small": "gpt-5-mini"}})
+CLAUDE = HarnessConfig.from_raw("g", {"kind": "claude-code", "model": "opus"})
+CODEX = HarnessConfig.from_raw("c", {"kind": "codex", "model": "gpt-5"})
 
 
 def _desc(**kw) -> SubagentDescriptor:
     base = dict(name="rev", description="Review the diff for \\uses errors.", prompt_body="Body with \\lean{Foo}.")
     base.update(kw)
     return SubagentDescriptor(**base)
-
-
-def test_model_precedence_explicit_then_tier_then_inherit() -> None:
-    assert resolve_model(_desc(model="sonnet", tier="small"), CLAUDE) == "sonnet"  # explicit wins
-    assert resolve_model(_desc(tier="small"), CLAUDE) == "haiku"                   # tier resolved
-    assert resolve_model(_desc(), CLAUDE) is None                                  # neither → inherit
 
 
 def test_claude_agent_is_valid_frontmatter_and_omits_model_to_inherit() -> None:
@@ -45,10 +38,10 @@ def test_claude_agent_is_valid_frontmatter_and_omits_model_to_inherit() -> None:
 
 
 def test_codex_agent_is_valid_toml_with_latex_backslashes() -> None:
-    toml = render_codex_agent(_desc(tier="small"), CODEX)
+    toml = render_codex_agent(_desc(), CODEX)
     data = tomllib.loads(toml)
     assert data["name"] == "rev"
-    assert data["model"] == "gpt-5-mini"                      # tier resolved for codex
+    assert "model" not in data                                # inherit unless dispatcher overrides
     assert "\\lean{Foo}" in data["developer_instructions"]    # not mangled by TOML escaping
     assert "\\uses" in data["description"]
 
@@ -100,3 +93,5 @@ def test_install_targets_workspace_local_dirs_per_engine(tmp_path: Path) -> None
     assert out["claude"] and out["codex"]
     assert (tmp_path / ".claude" / "agents" / "work-reviewer.md").exists()
     assert (tmp_path / ".codex" / "agents" / "work-reviewer.toml").exists()
+    assert (tmp_path / ".claude" / "agents" / "ground.md").exists()
+    assert (tmp_path / ".codex" / "agents" / "ground.toml").exists()

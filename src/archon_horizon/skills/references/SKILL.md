@@ -67,19 +67,9 @@ to an image and **vision-transcribes** it into one self-contained
   reading the rendered page image with a vision model preserves it. This is a hard
   rule of the transcription flow.
 - **A small vision model is usually enough.** Faithful page transcription doesn't
-  need a frontier model — a cheap vision-capable model (e.g. Haiku) running in the
-  background typically suffices, which is what the config is for:
-
-  ```yaml
-  references:
-    transcription:
-      harness: <optional harness>
-      model: <cheap vision-capable model, e.g. a Haiku-class model>
-  ```
-
-  Don't pick the model inside the prompt; pin it in config so every transcription
-  uses the same cheap vision model. When unset it falls back to the subagent/Ground
-  harness.
+  need a frontier model — a cheap vision-capable model typically suffices. The
+  Horizon agent chooses the model and effort at dispatch time; do not encode that
+  spend policy in `config.yaml` or the descriptor.
 - **Keep each call ≤5 pages.** Longer ranges lose accuracy; split a big range
   across several `page-transcriber` calls.
 
@@ -112,4 +102,4 @@ If a source can't be found and verified, it's recorded `status: not_found` — t
 that as "no citation available," and write no math attributed to it.
 
 Related skills: `blueprint-conventions` for where `\source{...}` sits among the
-other blueprint annotations, and `leandag` for how a node's `sources` feed the DAG.
+other blueprint annotations, and `hgraph` for how a node's `sources` feed the DAG.

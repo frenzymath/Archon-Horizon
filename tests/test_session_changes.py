@@ -129,42 +129,6 @@ def test_first_session_falls_back_to_git_parent(tmp_path: Path) -> None:
     assert summary["sorry_delta"] == -1
 
 
-def test_worktree_summary_shows_uncommitted_changes(tmp_path: Path) -> None:
-    # A running session hasn't committed: the live view diffs the working tree
-    # against the last committed session, including brand-new untracked files.
-    _identity()
-    ws = _workspace(tmp_path)
-    proj = tmp_path / "projects" / "p"
-    proj.mkdir(parents=True)
-    lean = proj / "Foo.lean"
-    projpath = proj.relative_to(tmp_path).as_posix()
-
-    lean.write_text("theorem a : True := by sorry\n", "utf-8")
-    s1 = integrate_workspace_session(ws, run_id="0001", session="0001-horizon", role="horizon",
-                                     round_index=0, project="p", projects=("p",))
-
-    # Now (uncommitted) discharge the sorry and add a new file.
-    lean.write_text("theorem a : True := trivial\n", "utf-8")
-    (proj / "Bar.lean").write_text("theorem b : True := by sorry\n", "utf-8")
-
-    summary = session_change_summary(tmp_path, None, (projpath,), base=s1.workspace_commit, worktree=True)
-    assert summary["available"] and summary["worktree"] is True
-    assert summary["base_source"] == "working-tree"
-    paths = {r["path"]: r for r in summary["files"]}
-    assert paths[f"{projpath}/Foo.lean"]["sorry_delta"] == -1
-    # The untracked new file is included as an addition with its sorry.
-    assert paths[f"{projpath}/Bar.lean"]["added"] is True
-    assert paths[f"{projpath}/Bar.lean"]["sorry_after"] == 1
-
-
-def test_session_change_summary_degrades_without_git(tmp_path: Path) -> None:
-    ws = _workspace(tmp_path)
-    # No sha → unavailable, but still lists fallback files (from the event).
-    summary = session_change_summary(tmp_path, None, ("projects/p",), fallback_files=("projects/p/Foo.lean",))
-    assert summary["available"] is False
-    assert summary["files"] == [{"path": "projects/p/Foo.lean", "category": "lean"}]
-
-
 def test_diffs_against_git_parent_not_far_same_run_ancestor(tmp_path: Path) -> None:
     # The shared ledger interleaves runs: a session's commit parent may belong to
     # another run. The change summary (base=None) must diff against that git

@@ -29,12 +29,6 @@ class SubagentDescriptor:
     write_domain: str | None = None
     read_only: bool = False
     default_enabled: bool = True
-    # Engine-agnostic model selection for the compiled native subagent.
-    # ``model`` is an explicit override (passed through literally); ``tier`` is a
-    # symbolic size (small/medium/big) resolved per-harness. Neither set → the
-    # native subagent omits ``model`` and inherits the parent session.
-    tier: str | None = None
-    model: str | None = None
     source_path: Path | None = None
 
 
@@ -108,7 +102,7 @@ class DescriptorSubagent(Subagent):
             for all projects), indexed by `references/manifest.yaml`. The
             blueprint dependency DAG for a project is the generated JSON
             at `.archon-horizon/blueprints/<project>.json`. Tool and format know-how
-            is documented as skills under `.claude/skills/` (e.g. `leandag`,
+            is documented as skills under `.claude/skills/` (e.g. `hgraph`,
             `blueprint-conventions`, `lean-check`, `leansearch`, `horizon-inbox`,
             `project-git`, `references`); read the relevant skill instead of guessing how a tool
             or format works. In particular, a project has NO `.git` at its root —
@@ -121,9 +115,9 @@ class DescriptorSubagent(Subagent):
             {directive.strip()}
 
             Report back concisely in whatever structure best fits — lead with the
-            outcome, keep it short, and file inbox items for anything the Ground
-            agent must act on. Write the report to the report path if one is
-            provided, and also return it as your final response.
+            outcome, keep it short, and file inbox items for anything a future
+            session or a human must act on. Write the report to the report path
+            if one is provided, and also return it as your final response.
         """)
 
     def run(self, context: SubagentContext) -> SubagentResult:

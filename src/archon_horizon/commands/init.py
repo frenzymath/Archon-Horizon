@@ -15,15 +15,20 @@ _CONFIG_TEMPLATE = """\
 workspace:
   name: {name}
   state_dir: .archon-horizon
-  # Maximum number of collaboration rounds the orchestrator will allow before halting.
+  # Maximum number of Horizon sessions (rounds) a run drives before halting.
   rounds: {rounds}
-  ground_agent:
-    harness: ground-default
   horizon_agent:
     harness: horizon-default
   scheduler:
     # How many horizon agents can run simultaneously.
     max_parallel_sessions: {parallel}
+  # Optional spend ceilings; a crossed limit stops the run cleanly (resume with
+  # `horizon run --resume latest`). Unset = unlimited. Agents can check their
+  # headroom with `horizon usage`.
+  # budget:
+  #   session_tokens_out: 400000   # cancel a session that emits more than this
+  #   run_tokens_out: 2000000      # stop the run past this many output tokens
+  #   run_cost_usd: 50             # stop the run past this estimated cost
 
 # Lean libraries the agents and the `horizon search` index should know about.
 # mathlib is included by default. Add more with a GitHub shorthand or a full git
@@ -38,17 +43,7 @@ external_libraries:
   #   path: vendor/vendored
   #   git: https://example.com/vendored.git
 
-references:
-  transcription:
-    # Page-level PDF transcription defaults to the Ground subagent harness.
-    # Override both fields to pin a cheap vision-capable model.
-    # harness: ground-default
-    # model: <vision-capable-model>
-
 harnesses:
-  ground-default:
-    kind: "{ground_kind}"
-    model: {ground_model}{ground_options}
   horizon-default:
     kind: "{horizon_kind}"
     model: {horizon_model}{horizon_options}
@@ -71,11 +66,6 @@ projects: {{}}
 # you hand-authored your own descriptor under one of these names, rename it
 # before ``horizon init --update`` or it will be deleted.
 _LEGACY_SEEDED_SUBAGENTS: tuple[str, ...] = ("blueprint-reviewer", "diff-auditor")
-
-
-def _default_model(kind: str) -> str:
-    # We return empty strings to defer to the harness's own config.
-    return ""
 
 
 def _options_block(kind: str) -> str:
@@ -222,10 +212,7 @@ def _print_config_summary(data: dict) -> None:
     table.add_column("Value", style="#8b5cf6")
     table.add_row("Workspace Name", str(data.get("name", "")))
     
-    ground_model = data.get("ground_model") or _default_model(str(data.get("ground_kind", "")))
-    table.add_row("Ground Agent", f"{data.get('ground_kind', '')} ({ground_model})")
-    
-    horizon_model = data.get("horizon_model") or _default_model(str(data.get("horizon_kind", "")))
+    horizon_model = data.get("horizon_model")
     table.add_row("Horizon Agent", f"{data.get('horizon_kind', '')} ({horizon_model})")
     
     table.add_row("Mathlib Version", str(data.get("mathlib_version", "")))
@@ -243,74 +230,28 @@ def _print_config_summary(data: dict) -> None:
 def _post_init_advisor_prompt(root: Path) -> str:
     return dedent(
         f"""\
-        You are the Archon Horizon post-init interactive workspace advisor.
+        You are the Archon Horizon post-init workspace advisor — an interactive,
+        human-driven session (not an autonomous run).
 
-        Workspace root:
-        {root}
+        You are in the freshly initialized workspace at `{root}`.
 
-        Your role is to help the user understand Archon Horizon, choose a good configuration for their
-        actual workflow, and clean up the workspace created by `horizon init`. This is an interactive
-        advisory session, not an autonomous maintenance run.
+        Load the **`horizon`** skill first (`.claude/skills/horizon/SKILL.md`) —
+        it explains the workspace layout, the `horizon` CLI, and the conventions.
+        For anything deeper, read the installed package source and its `docs/`
+        (locate it with `python -c "import archon_horizon, inspect, pathlib;
+        print(pathlib.Path(inspect.getfile(archon_horizon)).parent)"`), preferring
+        the current code over any prose.
 
-        Hard rule: ask for the user's explicit agreement before changing files, renaming anything,
-        enabling/disabling features, adding tasks, rewriting dependencies, or running commands that
-        mutate the workspace or remote services. Explain what each proposed change does and why.
+        Help the user review and finish the setup: `config.yaml` (projects,
+        harness/model/effort, external_libraries, budget, GitHub), the Lean/
+        mathlib toolchain consistency, blueprint paths, `.env` keys, and useful
+        first tasks/roadmap items. Summarize findings in priority order with
+        exact paths, then propose small batches of edits.
 
-        Do not rely on this prompt as the full specification. First infer the current ideal workspace
-        from the installed Archon Horizon package and the local workspace files.
-
-        Start by discovering the package source and reading the relevant implementation:
-
-        ```bash
-        python - <<'PY'
-        import inspect
-        import pathlib
-        import archon_horizon
-        print(pathlib.Path(inspect.getfile(archon_horizon)).resolve().parent)
-        PY
-        ```
-
-        Prefer the current source code over any stale advice in this prompt. In particular, inspect
-        the config schema/loader, init/setup/project/run commands, orchestrator wiring, harness
-        configuration, permissions/freeze handling, subagent descriptors, skills/tool installation,
-        dashboard/export expectations, and any README or docs shipped with the package.
-
-        Help the user with at least these areas:
-
-        - `config.yaml`: workspace name, state dir, Ground/Horizon harness references, scheduler,
-          external_libraries (mathlib + any other Lean deps to index/search), GitHub settings,
-          freeze rules, project declarations, project dependencies,
-          write paths, build commands, blueprint paths, harness options, and any disabled feature that
-          might have been accidental.
-        - `.archon-horizon/`: expected stores and directories, inbox/tasks/runs/blueprints,
-          subagent wrappers, tools, skills, VCS state, and volatile files that should stay run-local.
-        - Lean/mathlib setup: `lean-toolchain`, `lakefile.lean`, `lake-manifest.json`, Mathlib revision
-          consistency, root package sharing, project imports, build commands, and dependency layout.
-        - Blueprint setup: blueprint files, links between blueprint nodes, Lean declarations and graph
-          nodes, paths configured per project, and obvious stale or missing references.
-        - Git/workspace hygiene: repository status, `.gitignore`, nested project VCS settings,
-          remotes/branches where relevant, generated files, and files that should or should not be tracked.
-        - Environment/tooling: `.env`, `.env.example`, `.mcp.json`, required external binaries,
-          provider keys, command harnesses, MCP servers, `gh` availability/authentication/repo access,
-          and setup steps required before `horizon run`.
-        - Model and backend choices: explain tradeoffs, flag weak or mismatched model choices, and propose
-          smaller/cheaper models for simple Horizon or Ground tasks when appropriate.
-        - Operational state: useful initial inbox items, tasks, concise roadmap recommendations, project metadata,
-          and concrete next commands the user should run.
-
-        Explain Archon Horizon in practical terms when useful: what the Ground agent does, what Horizon
-        agents do, how inbox/tasks/run-local reports fit together, how projects and blueprints are wired,
-        and how the user should work with the system day to day.
-
-        Suggested flow:
-
-        1. Briefly explain what you will inspect and ask what the user wants Archon Horizon to manage.
-        2. Inspect the package source and workspace configuration.
-        3. Summarize findings in priority order with exact paths.
-        4. Ask targeted questions about ambiguous choices, especially disabled features, naming, GitHub,
-           model/backend choices, project layout, and Lean/mathlib expectations.
-        5. Propose a small batch of safe edits. Wait for approval before applying them.
-        6. For risky changes, explain tradeoffs and leave the decision to the user.
+        Hard rule: ask for explicit agreement before changing any file or
+        running any mutating command; explain what each change does and why.
+        Start by greeting the user, briefly saying what you will inspect, and
+        asking what they want Archon Horizon to manage.
         """
     ).strip()
 
@@ -338,7 +279,7 @@ def _launch_post_init_advisor(root: Path) -> None:
     log.header("Post-init workspace advisor")
     prompt = _post_init_advisor_prompt(root.resolve())
     try:
-        launch = interactive_launch_for_role(root, "ground", prompt)
+        launch = interactive_launch_for_role(root, "horizon", prompt)
     except Exception as exc:
         prompt_path = _write_post_init_advisor_prompt(root, prompt)
         log.warn(f"Could not launch the interactive advisor: {exc}")
@@ -347,10 +288,10 @@ def _launch_post_init_advisor(root: Path) -> None:
 
     if launch is None:
         prompt_path = _write_post_init_advisor_prompt(root, prompt)
-        log.info(f"Ground harness is 'null'; advisor prompt saved to {prompt_path}.")
+        log.info(f"Horizon harness is 'null'; advisor prompt saved to {prompt_path}.")
         return
 
-    # The prompt is passed directly to the Ground agent — no file is written
+    # The prompt is passed directly to the Horizon session; no file is written
     # in the normal path.
     log.info(f"Launching an interactive workspace advisor using {launch.description}.")
     run_interactive(launch, root)
@@ -401,6 +342,27 @@ class InitCommand:
         if executable:
             dest.chmod(0o755)
         log.success(f"Wrote {label}.")
+
+    _ORIENTATION_BODY = dedent("""\
+        This is an **Archon Horizon** workspace: AI agents formalize mathematics in
+        Lean 4 here, across one or more projects.
+
+        Before doing anything else, load the **`horizon`** skill — read
+        `.claude/skills/horizon/SKILL.md`. It explains the workspace layout, the
+        `horizon` CLI, the git/commit conventions, and the session discipline
+        (one-shot: run work in the foreground and block on it).
+        """)
+
+    def _install_orientation_files(self) -> None:
+        """Write CLAUDE.md and AGENTS.md pointers at the workspace root.
+
+        Claude Code auto-loads ``CLAUDE.md`` and Codex auto-loads ``AGENTS.md``,
+        so these three lines are the whole engine-native harness: any engine
+        launched in the workspace orients itself from the `horizon` skill. Local
+        edits are preserved (same keep-vs-overwrite policy as skills).
+        """
+        for name in ("CLAUDE.md", "AGENTS.md"):
+            self._sync_managed_file(self.root / name, self._ORIENTATION_BODY, name)
 
     def _interactive_workspace_setup(self) -> None:
         """Pedagogical, optional loops to populate projects, tasks, and hints."""
@@ -515,10 +477,8 @@ class InitCommand:
         # Defaults
         data = {
             "name": self.root.resolve().name,
-            "ground_kind": "claude-code",
-            "ground_model": None,
             "horizon_kind": "claude-code",
-            "horizon_model": None,
+            "horizon_model": "",  # blank defers to the engine's own default
             "mathlib_version": _detect_mathlib_version(self.root),
             "rounds": 5,
             "parallel": 1,
@@ -547,12 +507,10 @@ class InitCommand:
                     # Migrate the removed key so re-init preserves the pinned rev.
                     data["mathlib_version"] = old_conf["lean"].get("mathlib_version", data["mathlib_version"])
                 if "harnesses" in old_conf:
-                    inf = old_conf["harnesses"].get("ground-default", {})
                     hor = old_conf["harnesses"].get("horizon-default", {})
-                    data["ground_kind"] = inf.get("kind", data["ground_kind"])
-                    data["ground_model"] = inf.get("model", data["ground_model"])
                     data["horizon_kind"] = hor.get("kind", data["horizon_kind"])
-                    data["horizon_model"] = hor.get("model", data["horizon_model"])
+                    # `model:` with no value parses as None — keep the template blank.
+                    data["horizon_model"] = hor.get("model") or data["horizon_model"]
                 if "github" in old_conf:
                     data["github_enabled"] = str(old_conf["github"].get("enabled", "false")).lower()
                     data["github_repo"] = old_conf["github"].get("repo", data["github_repo"])
@@ -608,27 +566,16 @@ class InitCommand:
                                 log.warn(f"Warning: binary '{binary}' not found in PATH for harness '{kind}'. You may need to run `horizon setup` later.")
                         return kind
 
-                data["ground_kind"] = prompt_harness("Ground agent harness", data["ground_kind"])
                 data["horizon_kind"] = prompt_harness("Horizon agent harness", data["horizon_kind"])
 
-                for line in _model_help(data["ground_kind"]):
+                for line in _model_help(data["horizon_kind"]):
                     log.step(line)
-                data["ground_model"] = Prompt.ask(
-                    "Ground agent model",
-                    default=data["ground_model"] or _default_model(data["ground_kind"])
-                )
-                if data["horizon_kind"] != data["ground_kind"]:
-                    for line in _model_help(data["horizon_kind"]):
-                        log.step(line)
                 data["horizon_model"] = Prompt.ask(
                     "Horizon agent model",
-                    default=data["horizon_model"] or _default_model(data["horizon_kind"])
+                    default=data["horizon_model"]
                 )
-
-                for key, label in [("ground_model", "Ground"), ("horizon_model", "Horizon")]:
-                    val = data[key]
-                    if val and val != "default-model":
-                        log.step(f"Note: Horizon does not verify if '{val}' is a valid {label} model. Typos will cause runtime API errors.")
+                if data["horizon_model"]:
+                    log.step(f"Note: Horizon does not verify if '{data['horizon_model']}' is a valid model. Typos will cause runtime API errors.")
 
                 log.step("Mathlib rev: detected from your projects, or the latest master if none — keep projects in sync.")
                 data["mathlib_version"] = Prompt.ask("Mathlib version/rev", default=data["mathlib_version"])
@@ -650,15 +597,8 @@ class InitCommand:
                 
                 data["goal"] = Prompt.ask("Initial project goal (optional)", default=data.get("goal", ""))
             
-            # Finalize models if not explicitly provided (e.g. from JSON)
-            if not data["ground_model"]:
-                data["ground_model"] = _default_model(data["ground_kind"])
-            if not data["horizon_model"]:
-                data["horizon_model"] = _default_model(data["horizon_kind"])
-
             # Only emit engine-specific harness options for the matching kind, so
             # Codex's `effort` never leaks onto a claude-code harness (or vice-versa).
-            data["ground_options"] = _options_block(str(data["ground_kind"]))
             data["horizon_options"] = _options_block(str(data["horizon_kind"]))
 
             self.root.mkdir(parents=True, exist_ok=True)
@@ -715,7 +655,7 @@ class InitCommand:
         added_ignores = False
         # `.claude/agents` and `.codex/agents` are compiled from the tracked
         # subagent descriptors at run start — derived, so don't commit them.
-        for entry in (".env", ".archon-horizon/vcs/", ".archon-horizon/locks/", ".claude/agents/", ".codex/agents/"):
+        for entry in (".env", ".archon-horizon/vcs/", ".archon-horizon/locks/", ".archon-horizon/cache/", ".claude/agents/", ".codex/agents/"):
             if entry not in ignores:
                 kept.append(entry)
                 ignores.add(entry)
@@ -778,23 +718,19 @@ class InitCommand:
             verb = "Updated" if self.update else "Installed"
             log.success(f"{verb} {len(installed)} skill(s) under .claude/skills/.")
 
-        # Install the editable agent prompt bodies (ground.md/horizon.md). Same
-        # keep-vs-overwrite policy as skills: update mode force-refreshes to the
-        # bundled versions; a fresh/interactive init keeps local edits unless the
-        # user confirms overwrite.
-        from archon_horizon.agents.prompts import install_prompts
-
-        def _prompt_overwrite(name: str, dest: Path, new_text: str) -> bool:
-            if not self.interactive:
-                return False
-            from rich.prompt import Confirm
-
-            return Confirm.ask(f"Prompt '{name}' has local changes. Overwrite with the bundled version?", default=False)
-
-        installed_prompts = install_prompts(self.root, overwrite=None if self.update else _prompt_overwrite)
-        if installed_prompts:
-            verb = "Updated" if self.update else "Installed"
-            log.success(f"{verb} {len(installed_prompts)} agent prompt(s) under .archon-horizon/prompts/.")
+        # Engine-native orientation: Claude Code auto-loads CLAUDE.md and Codex
+        # auto-loads AGENTS.md, so ANY engine launched in the workspace is
+        # pointed at the `horizon` skill without pushed prompt prose. The old
+        # editable prompt bodies under .archon-horizon/prompts/ are no longer
+        # consumed — the skill is the (editable) contract now.
+        self._install_orientation_files()
+        legacy_prompts = self.root / ".archon-horizon" / "prompts"
+        if self.update and legacy_prompts.is_dir() and any(legacy_prompts.iterdir()):
+            log.warn(
+                "Note: .archon-horizon/prompts/ overrides are no longer used; the "
+                "editable contract is .claude/skills/horizon/SKILL.md. The old files "
+                "were left in place."
+            )
 
         from archon_horizon.config.mcp import install_mcp_for_harnesses, write_mcp_config
 
@@ -866,7 +802,7 @@ def init(
         False,
         "--advisor",
         "--audit",
-        help="After init, launch an interactive workspace advisor using the Ground agent config.",
+        help="After init, launch an interactive workspace advisor using the Horizon harness.",
     ),
     update: bool = typer.Option(
         False,

@@ -1,0 +1,15 @@
+{
+  "role": "horizon",
+  "task_id": "DEMO.2",
+  "project": "MiniTopology",
+  "round": 0,
+  "rounds": 1,
+  "harness": "codex-demo",
+  "harness_kind": "codex",
+  "model": "gpt-5-codex",
+  "effort": "high",
+  "status": "completed",
+  "started_at": "2026-07-19T09:01:00+00:00",
+  "ended_at": "2026-07-19T09:22:00+00:00",
+  "workspace_sha": "46d8feb7413e3fc5fa3495f65d64360446f0b351"
+}
