@@ -44,12 +44,13 @@ Every command supports `--json` for machine-readable output on `stdout`.
 | `horizon roadmap` | Manage milestones and the overarching roadmap. |
 | `horizon task` | Create and manage formalization tasks. |
 | `horizon project` | Add and manage member Lean projects. |
-| `horizon inbox` | Manage local hints, issues, and standing protections. |
+| `horizon inbox` | Manage local hints, issues, protections, per-team ownership, read-state, and cross-team messages. |
 | `horizon sync` | Shadow-sync GitHub issues and pull requests via the `gh` CLI. |
 | `horizon blueprint` | Extract and inspect LaTeX blueprints. |
 | `horizon graph` | Synchronize, query, and annotate a project's semantic graph. |
 | `horizon search <query>` | Offline search for lemmas/definitions in Mathlib and local projects. |
 | `horizon dashboard` | Run the live web server or export static HTML (`--static`). |
 | `horizon skills` | Manage workspace-local skill files. |
+| `horizon permissions` | Show the workspace's delegation permissions — whether an agent may launch tasks/runs for other teams (default: deny). |
 
 See the [CLI Reference](./cli-reference/README.md) for flags and advanced options.

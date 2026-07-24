@@ -66,7 +66,13 @@ Horizon journals its own work **without ever creating a `.git` at the workspace 
 
 - **Default branch is `main`** (`git init --bare --initial-branch=main`, with a `symbolic-ref` fallback for git < 2.28). It's set **only at creation** — if you manually switch a repo to another branch, autogit keeps committing onto *your* branch; nothing checks out, resets, or pushes.
 - **Excludes live in the git dir's `info/exclude`, not a `.gitignore`** (refreshed on every init, so existing workspaces self-heal). They keep Lean/build artifacts (`.lake/`, `*.olean`, `lake-packages/`), caches, and secrets out; project files are added *without* `-f`, so binaries never sneak in.
-- **Commits carry rich metadata**: `Run/Round/Role/Session/Task` plus per-project SHAs, authored as the acting agent (`Archon Horizon (Ground|Horizon)`) but committed by the system identity. A `pre-commit` hook blocks obvious secrets (`ARCHON_HORIZON_ALLOW_SECRETS=1` to override).
+- **Commits carry rich metadata**: `Run/Round/Role/Session/Task` plus per-project SHAs, authored as the acting agent (`Archon Horizon (Ground|Horizon)`) but committed by the system identity. Provenance is stamped as git trailers by a `prepare-commit-msg` hook.
+
+#### Secret guard (redacts, never blocks)
+
+The `pre-commit` hook installed into every out-of-tree git (`_SECRET_HOOK` in [`vcs/git.py`](../../src/archon_horizon/vcs/git.py)) **redacts** obvious credentials rather than blocking the commit. On a high-confidence, key-prefixed, **case-sensitive** match (e.g. `ghp_…`, `github_pat_…`, `sk-ant-…`, `AKIA…`, `AIza…`, `-----BEGIN … PRIVATE KEY-----`) it replaces the secret with `XXXX` in the staged content, re-stages the file, and warns you to **rotate the real credential** — the commit still proceeds. The case-sensitive, prefixed matching keeps ordinary content (long camelCase identifiers, lowercase base64) untouched. The redaction is best-effort and **fails open**: any error simply warns and lets the commit through, so a guard bug can never wedge your history. Set `ARCHON_HORIZON_ALLOW_SECRETS=1` to skip the scan entirely.
+
+The same hook also carries a separate **silent-clobber guard** that is unchanged and still **blocks**: a commit whose index was seeded from a stale HEAD (or committed through a polluted shared index) would stage deletions the committer never asked for, silently reverting a concurrent session's files — so the hook rejects any commit that stages unexplained tracked-file deletions (override with `ARCHON_HORIZON_ALLOW_DELETIONS=1`).
 
 ### Common Project Commands
 

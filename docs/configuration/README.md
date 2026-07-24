@@ -10,6 +10,7 @@ Every workspace is driven by a single `config.yaml` at its root. It holds only *
 
 - [1. Minimal example](#1-minimal-example)
 - [2. `workspace`](#2-workspace)
+  - [`workspace.delegation`](#workspacedelegation)
 - [3. `harnesses`](#3-harnesses)
 - [4. `projects`](#4-projects)
 - [5. `external_libraries`](#5-external_libraries)
@@ -65,11 +66,55 @@ Global defaults for the workspace and the collaboration loop (see [`WorkspaceCon
 | `scheduler.max_parallel_sessions` | `1` | How many Horizon sessions run concurrently. |
 | `scheduler.unknown_write_set_policy` | `lock-project` | What to do when a task's write set is unknown (see [`orchestration/scheduler.py`](../../src/archon_horizon/orchestration/scheduler.py)). |
 
+### `workspace.delegation`
+
+The standing **delegation consent** a running agent reads before it delegates
+work it cannot do inline — creating new tasks, or launching a whole new
+`horizon run` session (see [`DelegationConfig`](../../src/archon_horizon/config/schema.py)).
+**The default is deny**: an agent may not create tasks or launch runs. This
+block is the user's consent *record*; reading it authorizes nothing on its own —
+any actuator that acts on it (spawning a run, selecting an account) is a
+separate, deliberately-gated capability.
+
+```yaml
+workspace:
+  delegation:
+    allow_launch_tasks: true         # agent may create new tasks in the store
+    allow_launch_runs: false         # agent may spawn a new `horizon run`
+    max_parallel_sessions: 2         # cap on agent-launched concurrent runs (0 = none)
+    accounts:                        # free-form descriptors to choose among
+      - name: primary
+        config_dir: ~/.claude-primary # per-harness account/home (see below)
+        notes: "default; resets 00:00 UTC"
+      - name: overflow
+        config_dir: ~/.claude-overflow
+    # any other keys you write are preserved verbatim for the agent to read
+    api_notes: "use overflow only after primary hits its limit"
+```
+
+| Key | Default | Purpose |
+| :--- | :--- | :--- |
+| `allow_launch_tasks` | `false` | Whether the agent may create new tasks in the store. |
+| `allow_launch_runs` | `false` | Whether the agent may spawn a new `horizon run`. |
+| `max_parallel_sessions` | `0` | Cap on agent-launched concurrent runs (`0` = none). |
+| `accounts` | `[]` | Free-form list of account/api descriptors — e.g. per-harness `config_dir` account homes plus notes — for the agent to choose among. |
+| *(other keys)* | — | Any additional keys are preserved verbatim under `raw`, so the agent can read and reason about account notes, limit-reset times, or api-key hints. |
+
+Agents read this block via **`horizon permissions`** (add `--json` for the
+machine-readable form; see [`commands/permissions.py`](../../src/archon_horizon/commands/permissions.py)),
+which prints the typed fields, any free-form notes, and — when delegation is off
+— an explicit reminder not to create tasks or launch runs.
+
+The `accounts` descriptors compose with the per-harness `config_dir` option
+([section 3](#3-harnesses)): `config_dir` pins one harness to a single auth/session
+home (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), while `accounts` records the set of
+account homes an agent may pick among when it launches further work.
+
 ---
 
 ## 3. `harnesses`
 
-A harness is a named execution engine. The workspace selects one for its Horizon sessions; native helpers inherit that session by default, and Horizon may choose a per-dispatch override when the engine supports one (see [`config/harnesses.py`](../../src/archon_horizon/config/harnesses.py) and the [Architecture guide](../architecture/README.md#3-harness-seam--provider-routing)).
+A harness is a named execution engine. The workspace selects one for its Horizon sessions; native helpers inherit that session by default, and Horizon may choose a per-dispatch override when the engine supports one (see [`config/harnesses.py`](../../src/archon_horizon/config/harnesses.py) and the [Architecture guide](../architecture/README.md#4-harness-seam--provider-routing)).
 
 ```yaml
 harnesses:

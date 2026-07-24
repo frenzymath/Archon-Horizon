@@ -9,6 +9,11 @@ Communication between humans, orchestration agents, and individual member projec
 - [1. Local Filesystem Inbox](#1-local-filesystem-inbox)
   - [Inbox Kinds](#inbox-kinds)
   - [Common Local Inbox Commands](#common-local-inbox-commands)
+  - [Audiences and Direct Messages](#audiences-and-direct-messages)
+  - [Ownership Tiers: Shared vs. a Task's Inbox](#ownership-tiers-shared-vs-a-tasks-inbox)
+  - [Per-Team Read-State](#per-team-read-state)
+  - [Provenance Defaults Inside a Run](#provenance-defaults-inside-a-run)
+  - [Concurrent-Safe IDs and One-Shot Items](#concurrent-safe-ids-and-one-shot-items)
 - [2. Standing Protections (Soft Freeze)](#2-standing-protections-soft-freeze)
 - [3. GitHub Inbox Integration](#3-github-inbox-integration)
   - [Label Gating](#label-gating)
@@ -45,6 +50,105 @@ horizon inbox show <id>
 # Add a progress comment to an existing item
 horizon inbox comment <id> --body "Investigating dependency failure..."
 ```
+
+### Audiences and Direct Messages
+
+Where a `scope` says what an item is *about*, its **audience** (`--to`) says who
+it is *for*. The recognized audiences are `horizon`, `human`, `project:<name>`,
+and — for a private hand-off — `task:<id>` or `run:<id>`. The general audiences
+broadcast (any Horizon session on a matching project sees the item); the
+`task:`/`run:` audiences are **direct messages** that reach only that one
+recipient. Delivery is decided by `reaches_horizon` in
+[`core/inbox.py`](../../src/archon_horizon/core/inbox.py): a session reading its
+own inbox never sees a direct message meant for a different task or run, while a
+see-all context (e.g. a Ground audit, where task/run are unknown) bypasses the
+gating and sees everything.
+
+```bash
+# Message another project's Horizon agent
+horizon inbox add --kind info --to project:mathlib-port --body $'Renamed lemma\n\nFoo.bar is now Foo.baz.'
+
+# Direct message to one task (a private hand-off)
+horizon inbox add --kind hint --to task:T-0042 --body $'Try induction\n\nInduct on the recursion depth.'
+```
+
+### Ownership Tiers: Shared vs. a Task's Inbox
+
+Every item sits in one of two ownership tiers. By default it is **shared** —
+visible to every team. Alternatively it can be **owned by a single task**, which
+gives that task a private per-team inbox (e.g. a memory note only that team
+keeps). Ownership is stored as `metadata.owner_task` (empty/absent means "owned
+by everyone"), read via `item_owner`, and enforced in `reaches_horizon`: an owned
+item reaches only its owning task.
+
+```bash
+# Create an item owned by a task (its private inbox)
+horizon inbox add --kind memory --owner T-0042 --body $'Local convention\n\nUse `simp` sets, not ad-hoc rewrites.'
+
+# ...or owned by my own task, inferred from the session
+horizon inbox add --kind memory --mine --body $'Note to self\n\n...'
+
+# Move an existing item between tiers
+horizon inbox own <id> --owner T-0042   # into that task's inbox
+horizon inbox own <id> --mine           # into my task's inbox
+horizon inbox own <id> --shared         # back to everyone
+```
+
+A **task's inbox** is the union of the items it owns *plus* all shared items:
+
+```bash
+horizon inbox list --task T-0042   # T-0042's owned items + shared items
+horizon inbox list --mine          # same, for my task (from the session)
+```
+
+The union is what `InboxFilter.owner_task` computes — it keeps an item when it is
+shared *or* owned by the requested task. Ownership lives in
+[`core/inbox.py`](../../src/archon_horizon/core/inbox.py) (`item_owner`,
+`InboxFilter.owner_task`) and is set on the store by `set_owner` in
+[`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py).
+
+### Per-Team Read-State
+
+Read/unread is tracked **per reader**, not globally, so a shared item several
+teams see records who has already read it. Each reader — a task, a run, or a
+human — is stored in `metadata.read_by`, and "unread for me" is computed from
+that list. The reader id is inferred from the session by `reader_id` (task id,
+else run id, else agent role, else `human`).
+
+```bash
+horizon inbox read <id>      # mark read by me
+horizon inbox unread <id>    # revert (e.g. still relevant / unactioned)
+horizon inbox list --unread  # only what I have not read
+```
+
+The primitives are `item_readers` / `is_read_by` and `InboxFilter.unread_for` in
+[`core/inbox.py`](../../src/archon_horizon/core/inbox.py), with `set_read` in
+[`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py).
+
+### Provenance Defaults Inside a Run
+
+Inside a run the orchestrator exports `ARCHON_HORIZON_*` environment variables, so
+an agent rarely needs to pass the author, owner, reader, or project explicitly —
+they default from the session. `provenance_task` supplies `--mine`/`--task`,
+`reader_id` supplies the read-state identity, and `provenance_project` supplies
+`--project` (the session's primary project); see
+[`commands/shared.py`](../../src/archon_horizon/commands/shared.py). A human at the
+CLI with no run environment simply passes the flags as needed.
+
+### Concurrent-Safe IDs and One-Shot Items
+
+`create_item` allocates the next `I-NNNN` id under an OS `flock` (`_create_lock`
+in [`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py)), so
+parallel `horizon inbox add` calls get distinct ids instead of colliding on the
+same slot. The guard fails *open* — on a platform without `fcntl` or after a lock
+timeout it proceeds unlocked rather than refuse the write.
+
+Items tagged `[temporary]` (via `horizon inbox add --temporary`) are one-shot
+notes meant to be consumed within a single run. Any that remain open from *before*
+the current run are soft-archived when the run finishes, by
+`_archive_consumed_temporaries` in
+[`orchestration/orchestrator.py`](../../src/archon_horizon/orchestration/orchestrator.py);
+items the agent created during the run are kept for the next one.
 
 ---
 

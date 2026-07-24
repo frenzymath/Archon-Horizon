@@ -29,6 +29,18 @@ authored comments/reviews, and reports unresolved references. Workspace publish
 boundaries also synchronize the graph and cache the dashboard shape under
 `.archon-horizon/blueprints/<project>.json`.
 
+When it scans Lean sources, `sync` keys one node per declaration by its
+fully-qualified name. The parser
+([`hgraph/sync.py`](../../src/archon_horizon/hgraph/sync.py)) recognises
+`theorem`, `lemma`, `def`, `abbrev`, and `instance` declarations, and also
+`structure`, `inductive`, and `class` — so a `structure` (or `class`) becomes a
+first-class node instead of going unmatched and leaving its `\lean{}` reference
+stale. Declaration names may contain Unicode letters and subscripts (`foo₁`),
+not just ASCII, and an anonymous `instance : C` (no name) is skipped. A `_root_.`
+prefix escapes the enclosing namespace: `theorem _root_.Foo.bar` resolves to the
+absolute name `Foo.bar`, so a `\lean{Foo.bar}` reference matches it instead of
+resolving to `Namespace._root_.Foo.bar`.
+
 ## Querying and editing
 
 The vendored implementation is available through the Horizon CLI:
