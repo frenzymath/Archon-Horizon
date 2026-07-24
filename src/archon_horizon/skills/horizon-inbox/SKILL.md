@@ -27,15 +27,39 @@ fields.
   duplicate reports. Use `not-ready`, `rejected`, or no labels only when there is
   a concrete reason agents should not see or act on the item yet.
 - Audience says who should read the item: empty/general, `horizon`, `human`,
-  or `project:<name>` (older items may carry the legacy `ground` audience).
+  `project:<name>`, or a **direct message** to another team: `task:<id>` /
+  `run:<id>` (older items may carry the legacy `ground` audience).
   Scope/project says what the item is about.
-- Horizon reads general items, items addressed to `horizon`, and items addressed
-  to its project. It should ignore other projects' addressed items.
+- Horizon reads general items, items addressed to `horizon`, items addressed
+  to its project, and DMs addressed to its own task/run. It should ignore other
+  projects' and other teams' addressed items.
 - Kinds: `hint` (normal guidance), `issue` (problem to fix/report),
   `protection` (standing constraint / soft freeze), `info` (a notice for the
   human — something you did or noticed they should know, e.g. a renamed project
   or an important change; purely informational, never affects what runs),
   `memory` (durable agent note or dead end).
+
+## Ownership & read-state (your team's inbox)
+
+Each running session is a **team**, and the inbox is shared across teams. Two
+lightweight overlays keep it navigable:
+
+- **Ownership** — an item is either *shared with everyone* (the default) or
+  *owned by one task* (that team's private inbox — e.g. its own memory). Read your
+  team's inbox with `horizon inbox list --mine` (owned-by-you **plus** shared);
+  another team's private items don't appear. Own an item to your task with
+  `horizon inbox add --mine …` (or `--owner <task-id>`), and `horizon inbox own
+  <id> --mine|--owner <task>|--shared` to move an existing one. Owning your
+  `--kind memory` notes keeps another team's memory out of your working set.
+- **Read-state** — read/unread is **per team**, so a shared item several teams see
+  tracks who has read it. `horizon inbox list --unread` is what *you* have not read
+  yet; `horizon inbox read <id>` marks it read, and `horizon inbox unread <id>`
+  puts it back (e.g. you read it but it still needs action). Combine:
+  `horizon inbox list --mine --unread` is your team's fresh queue — the same signal
+  the pre-command synchronizer counts for you.
+
+The reader/owner id is inferred from your session (your task), so you rarely pass
+it explicitly.
 
 ## Act
 
@@ -98,9 +122,13 @@ obvious and then run `horizon inbox archive <id>`.
   grasp the result and how it was concluded without opening the logs.
 - `horizon inbox add --body "Short title\n\nDescription with details and next action." [--to R] [--project P] [--persistent|--temporary] [--agent <name> if a subagent]`
   — open a new item.
-  - `--to` is the recipient: `horizon`, `human`, or `project:<name>`.
+  - `--to` is the recipient: `horizon`, `human`, `project:<name>`, or a direct
+    message to another team `task:<id>` / `run:<id>`.
     Use `--to project:<name>` to message another project (e.g. "I rewrote your
-    `foo` declaration more cleanly, you may want it").
+    `foo` declaration more cleanly, you may want it"); use `--to task:<id>` to
+    message a specific running team.
+  - `--owner <task-id>` / `--mine` keeps the item in one team's inbox instead of
+    the shared default.
   - `--project` says what the item is ABOUT (its subject).
   - `--persistent` / `--temporary` just prepend a `[persistent]` / `[temporary]`
     tag to the body.

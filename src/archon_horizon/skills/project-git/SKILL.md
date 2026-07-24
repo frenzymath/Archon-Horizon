@@ -34,13 +34,15 @@ would redirect `lake` and other tooling. Two equivalent ways to commit:
 ```bash
 # 1) The `hgit` wrapper (on the session env as $HORIZON_GIT) — plain git, ledger-scoped:
 "$HORIZON_GIT" add path/to/File.lean
-"$HORIZON_GIT" commit -m "feat(chapter): prove foo_lemma"
+"$HORIZON_GIT" commit -m "feat(chapter): prove foo_lemma" \
+  --trailer 'Summary=**Proof.** Closed the compactness step using $K \subseteq X$.'
 
 # 2) The explicit form (identical effect):
 git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" \
     add path/to/File.lean
 git --git-dir="$HORIZON_LEDGER_GIT_DIR" --work-tree="$HORIZON_LEDGER_WORK_TREE" \
-    commit -m "feat(chapter): prove foo_lemma"
+    commit -m "feat(chapter): prove foo_lemma" \
+    --trailer 'Summary=**Proof.** Closed the compactness step using $K \subseteq X$.'
 ```
 
 Ordinary git: the ledger's index tracks HEAD, so `add` then `commit` records your
@@ -48,10 +50,16 @@ files on top of it. Horizon's own commits stage in a private index and never lea
 anything staged in your way.
 
 - **Prefer the pathspec commit** — name the paths on the commit itself:
-  `"$HORIZON_GIT" commit -m "…" -- path/to/File.lean`
+  `"$HORIZON_GIT" commit -m "…" --trailer 'Summary=…' -- path/to/File.lean`
   It records exactly those files, ignores whatever else may be staged, and git
   builds its tree from the **current** HEAD — so it cannot silently revert a
   concurrent session's files the way a commit built on a stale index can.
+- Add at least one **`Summary` trailer** explaining the important change, not
+  merely repeating the subject. Use one trailer per distinct explanation when
+  useful. Its value supports Markdown and LaTeX, so concise mathematical context
+  such as `--trailer 'Summary=**Invariant.** Preserves $f(x)=x$ on $A$.'` renders
+  directly in the dashboard commit item. Keep each trailer on one line; repeat
+  `--trailer 'Summary=…'` for a few separate points.
 - Stage **explicit paths** you changed rather than `add -A` — the work tree is the
   whole workspace, so `-A` can sweep in unrelated files.
 - `Archon-Run`/`Session`/`Role`/`Task`/`Projects` trailers are stamped for you by a

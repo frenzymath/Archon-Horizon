@@ -3,6 +3,28 @@ name: lean-check
 description: Build and check Lean in this workspace and read the errors — use Lean LSP MCP for fast proof-writing feedback, then run faithful kernel verification with `lake build` / `lake env lean`.
 ---
 
+## Required proof loop
+
+Load this skill before editing a Lean file. Before the first proof edit, invoke
+at least one Lean LSP MCP query for the target (`lean_diagnostic_messages` or
+`lean_goal`). After every proof edit, invoke diagnostics or the goal query again
+before starting another tactic attempt. Use `lean_multi_attempt`, hover, and
+search to investigate candidates instead of repeatedly launching a build.
+
+Do not start iterative proof work with `lake build`: it is a slow, final-boundary
+check. Use LSP for the edit loop and reserve `lake build` for the final session
+validation (or when a kernel check is specifically needed). When LSP is
+unavailable or crashes, record that in the report and use the narrowest fallback,
+usually `lake env lean <file>` or a single module, rather than silently skipping
+the check.
+
+LSP is sufficient between edits and between separate obligations. Do not run a
+module build after every proof or repeat a narrow build immediately before a
+configured final build that covers the same files. At the final boundary, run
+the configured build once and wait for it. Add an earlier narrow kernel check
+only when LSP failed, the change crosses an interface LSP cannot validate, or a
+specific elaboration/kernel question must be settled before continuing.
+
 - During proof writing, prefer the Lean LSP MCP server for fast local feedback:
   inspect goals/diagnostics at the edited location before running a full build.
   This is the fastest loop for filling proofs.

@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from archon_horizon.cli import main
+from archon_horizon.orchestration.orchestrator import _event_summary
 from archon_horizon.skills.registry import install_skills, stale_skills
 
 
@@ -51,3 +52,34 @@ def test_drift_detection_never_writes(tmp_path: Path) -> None:
     edited.write_text("mine\n", "utf-8")
     stale_skills(ws)
     assert edited.read_text("utf-8") == "mine\n"
+
+
+def test_retired_leandag_skill_is_reported_and_pruned(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    install_skills(ws)
+    retired = ws / ".claude" / "skills" / "leandag"
+    retired.mkdir(parents=True)
+    (retired / "SKILL.md").write_text("legacy DAG instructions\n", "utf-8")
+
+    assert "leandag" in stale_skills(ws)
+    install_skills(ws)
+    assert not retired.exists()
+
+
+def test_retired_skill_warning_keeps_other_drift_visible() -> None:
+    summary = _event_summary(
+        "skills.stale",
+        {"skills": ["horizon", "leandag"], "retired": ["leandag"]},
+    )
+
+    assert "retired skills (leandag)" in summary
+    assert "also differ (horizon)" in summary
+
+
+def test_system_graph_events_name_hgraph_cache() -> None:
+    summary = _event_summary(
+        "blueprint.dags",
+        {"projects": {"P": {"nodes": 12, "edges": 23}}},
+    )
+
+    assert summary == "Synced hgraph JSON cache(s): P (12 nodes, 23 edges)."

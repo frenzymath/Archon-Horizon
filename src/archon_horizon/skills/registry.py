@@ -57,8 +57,16 @@ def available_skills() -> list[Skill]:
     return skills
 
 
+def retired_skills(root: Path) -> list[str]:
+    """Return explicitly retired skill directories still installed in ``root``."""
+    return [
+        name for name in _RETIRED_SKILLS
+        if (root / ".claude" / "skills" / name).is_dir()
+    ]
+
+
 def stale_skills(root: Path) -> list[str]:
-    """Bundled skills whose installed copy is missing or out of date.
+    """Bundled skills whose copy is stale, plus installed retired skills.
 
     Skills are written to a workspace only by ``init`` / ``horizon skills
     install``, so a workspace freezes its guidance at install time while the
@@ -76,6 +84,9 @@ def stale_skills(root: Path) -> list[str]:
         except OSError:
             pass  # missing (or unreadable) counts as stale
         out.append(directory.name)
+    # A retired skill is stale by definition. Keep this explicit allow-list so
+    # user-authored skills are never treated as obsolete by accident.
+    out.extend(retired_skills(root))
     return out
 
 

@@ -9,6 +9,30 @@ map. It is deliberately short and **you can edit it** (it lives at
 `.claude/skills/horizon/SKILL.md` in this workspace) — tune it to how you want to
 work. It points to focused skills; load those on demand rather than up front.
 
+## You are a team; the workspace is where teams collaborate
+
+Think of your session as **one team**: you (the lead) plus the subagents you
+spawn as your **workers**, with the tools and skills available to you. A
+`horizon run` is your team working through its task. Other runs are **other
+teams** working in parallel on the *same shared workspace* — one Lean project set,
+one roadmap/board, one ledger, one inbox.
+
+You do not manage other teams and they do not manage you. You coordinate through
+**shared state**, not meetings:
+
+- **The board (roadmap)** is the shared plan. Keep your items' status/owner/
+  milestone current so other teams see what you hold and where it's going.
+- **The inbox** is asynchronous messaging + memory across teams (skill:
+  `horizon-inbox`): shared notes, per-task private items, and direct messages to
+  another team.
+- **Commits** are the durable record; reading recent ledger history tells you what
+  other teams just produced (skill: `project-git`).
+
+Before you start, be aware of who else is live (see "Is another run live" below).
+A short **synchronizer** digest is printed to stderr at the start of your CLI
+commands (unread inbox for your task, your session's runtime/tokens, other live
+runs) — read it; it is how you stay aware without asking anyone.
+
 ## Orient (pull state, don't assume it)
 
 **Start here:** your prompt says nothing about who ran before you. Usually
@@ -28,7 +52,10 @@ project rather than at that root. The absolute path to this skill is
   outline. `"$HORIZON_BIN" roadmap list` renders the indented tree with per-parent
   progress (`active · 3/7 done`); `--focus <id>` shows one subtree, `--max-depth 0`
   the top level only. Structure it: nest sub-goals with `--parent`, keep your
-  item's status/strategy current as you work. Roadmap commands print a **warning**
+  item's status/strategy current as you work. It doubles as the **project board**:
+  set `--owner <team>` (who holds it), `--milestone <label>` (a free grouping tag,
+  filter with `roadmap list --milestone <label>`), and pin concrete deliverables
+  with `--pin-commit <sha>`. Roadmap commands print a **warning**
   when parent/child statuses disagree (all sub-items done but parent open, or a
   done parent with open children) — nothing is auto-corrected; you decide whether
   to fix it or leave it (it may be intentional). They also warn when too many
@@ -36,10 +63,13 @@ project rather than at that root. The absolute path to this skill is
 - **Tasks** — a specific piece of work, usually the one a human launched and is
   watching. `"$HORIZON_BIN" task …`. Task commands warn when the open queue grows
   beyond the advisory limit or a `running` status looks orphaned.
-- **Inbox** — how agents talk across sessions (and projects). Leave a note for the
+- **Inbox** — how teams talk across sessions and projects. Leave a note for the
   next session; read what past ones left. `"$HORIZON_BIN" inbox …` (skill:
-  `horizon-inbox`). Inbox commands warn when the open working set—especially
-  `memory` and `info`—needs review.
+  `horizon-inbox`). Items can be **owned by your task** (private, e.g. your team's
+  memory) or **shared with everyone** (the default); read-state is per-team, so
+  `inbox list --mine --unread` is your team's fresh queue, and you can
+  direct-message another team with `--to task:<id>`. Inbox commands warn when the
+  open working set—especially `memory` and `info`—needs review.
 - **Blueprint graph** — declaration dependencies and what's proved. `"$HORIZON_BIN" graph -p <project> …` (skill: `hgraph`).
   Each node is also an **hgraph** file with attached comments/reviews —
   `"$HORIZON_BIN" graph -p <project> frontier` ranks what to prove next, and node-scoped failure memory
@@ -125,6 +155,14 @@ when the main concern is workspace hygiene. A one-session task may skip the
 periodic checkpoint, but must still obtain a fresh-context review before a
 terminal `done` claim.
 
+Schedule upkeep even when the last command did not print a warning. On a
+multi-session run, dispatch **`janitor` at the start of every second Horizon
+session** and before the final report; on a one-session task, dispatch it once
+before claiming completion if the run touched roadmap, task, or inbox state.
+Record the checkpoint in the report and wait for the helper before continuing.
+If `janitor` is unavailable, ask **`ground`** for the same hygiene inspection;
+Ground is read-only, so apply or explicitly record its findings yourself.
+
 ## Warnings are work
 
 Commands report problems for a reason — never scroll past them. `lake build`
@@ -136,7 +174,23 @@ address it `--to human` when a human decision is needed. A warning that
 survives your session should be one you *chose* to leave, with a trace saying
 why.
 
+Collection-health warnings are a dispatch trigger, not background noise. When
+`inbox`, `roadmap`, or `task` reports an overloaded queue, stale running item,
+or status mismatch, pause the proof loop and spawn **`janitor`** with the
+workspace scope. Wait for it, reconcile its report, rerun the command, and
+record any warning that remains intentionally. Do this at most once for the
+same warning in a session; a persistent warning still needs a report or inbox
+issue rather than repeated no-op calls.
+
 ## Do the work (Lean)
+
+For any Lean edit, load `lean-check` before touching the file and follow its
+required LSP loop: query the target with `lean_diagnostic_messages` or
+`lean_goal` before the first edit and after each subsequent edit. Keep `lake
+build` for the final session boundary or a specifically required kernel check;
+LSP is enough between edits and proof obligations. Use the narrowest `lake env
+lean` fallback when LSP is unavailable, and do not duplicate that check when the
+configured final build covers the same files.
 
 **Do not `grep` for a lemma.** Grep matches names you already guessed; it cannot
 find the lemma whose name you don't know, and that is the one that costs you an
@@ -182,6 +236,23 @@ import it, copy the approach, or read its blueprint. `references/` holds the
 original sources (skill: `references`). Staying inside your own project because
 the task named it is how the workspace re-derives the same thing three times.
 
+## Delegating beyond your team (ask permission first)
+
+Your normal way to parallelize is **within** your team: spawn subagents/workers
+(skill: `subagents`) and dispatch scoped work to them in the foreground. That
+needs no permission.
+
+Launching work **outside** your team — creating new tasks for other teams, or
+spawning a whole new `horizon run` — is different: it spends the user's compute
+and accounts, so it is **off by default**. Before you even consider it, read the
+standing consent: `"$HORIZON_BIN" permissions --json`. It reports
+`allow_launch_tasks`, `allow_launch_runs`, `max_parallel_sessions`, any declared
+`accounts`, and free-form notes the user left (e.g. which account to prefer, when
+limits reset). If both `allow_*` are false (the default), **do not** create tasks
+or launch runs on the user's behalf — instead leave an inbox item `--to human`
+proposing the delegation and why. Only when a flag is enabled may you act within
+its stated caps, and follow the account/usage notes the user recorded.
+
 ## Record progress = commit (this is how progress is read)
 
 Your commits — message + diff — are the durable record of what you did; the
@@ -221,7 +292,12 @@ the `horizon-start` skill — load it at the start of the session. The essential
   directory with **no `report.md`** is one that was killed mid-flight.
 - **Is another run live on this workspace?** `"$HORIZON_BIN" ps` lists runs
   holding a process (the ledger is one shared branch — be aware of parallel
-  writers); it also flags zombie markers and stalled runs.
+  writers); it also flags zombie markers and stalled runs. A run registers a
+  `runs/<id>/process.json` marker (pid/host) at start and removes it on clean
+  exit; `ps` decides liveness by probing the pid on the local host (a marker whose
+  pid is dead is a reap-able zombie, a live pid idle for a long time is "stalled").
+  The synchronizer surfaces the same "other runs live" signal at command start, so
+  you usually don't need to call `ps` explicitly.
 
 ## Final report (your last message)
 

@@ -3,21 +3,28 @@ name: subagents
 description: How the Horizon agent delegates to native subagents for review and upkeep — spawning by name, read-only enforcement, dispatch-time model choice, and the dynamic descriptor roster.
 ---
 
-Subagents are **your toolkit for delegation**: focused helpers you spawn to
-divide up review and upkeep while you keep proving. The `ground` helper is the
-fresh-context checkpoint for workspace-wide strategy and hygiene; it is a
-subagent, not a second orchestrator role.
+Subagents are **your team's workers**: focused helpers you (the team lead) spawn
+to divide up review and upkeep while you keep proving. This is delegation
+*within* your team and needs no permission — distinct from launching new tasks or
+runs for *other* teams, which is off by default (see the `horizon` skill,
+"Delegating beyond your team"). The `ground` helper is the fresh-context
+checkpoint for workspace-wide strategy and hygiene; it is a subagent, not a
+second orchestrator role.
 
-Each subagent is a single Markdown descriptor in
-`.archon-horizon/subagents/<name>.md`. At the start of every `horizon run` those
-descriptors are compiled into your engine's **native** subagent format,
+Bundled descriptors and any workspace overrides under
+`.archon-horizon/subagents/<name>.md` are merged at the start of every `horizon
+run`, then compiled into your engine's **native** subagent format,
 workspace-local:
 
 - Claude Code → `.claude/agents/<name>.md`
 - Codex → `.codex/agents/<name>.toml`
 
-List the descriptors under `.archon-horizon/subagents/` to see the current
-roster; pick the right subagent and scope from their descriptions.
+Use the engine's native roster, or list `.codex/agents/*.toml` for Codex and
+`.claude/agents/*.md` for Claude, to see every runnable helper. Do not treat an
+empty `.archon-horizon/subagents/` directory as an empty roster: that directory
+holds workspace overrides/custom helpers only; built-ins such as `ground`,
+`janitor`, and `work-reviewer` still appear in the compiled native directory.
+Pick the right helper and scope from those generated descriptions.
 
 ## Dispatch
 
@@ -26,6 +33,15 @@ mechanism, with a focused directive: the slice/scope (a chapter, a task, a
 project) and the project it applies to. Spawn several in parallel when the work
 divides cleanly, then wait for and reconcile their reports. Give one subagent
 one scoped slice so the workspace scales to many projects.
+
+Delegation is part of the normal workflow, not an exceptional recovery path.
+For a session that touches more than one file, more than one proof obligation,
+or is expected to run longer than ten minutes, dispatch at least one bounded
+review/helper before the final report. On a multi-session task, dispatch
+`ground` before the terminal completion claim and `janitor` at the scheduled
+hygiene checkpoints. Use the engine's native `spawn_agent`/Task mechanism,
+wait for the helper to finish, and reconcile its report in your own result. If
+no suitable helper is available, state why delegation was skipped in the report.
 
 ## Read-only and write scope
 
