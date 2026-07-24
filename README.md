@@ -6,7 +6,7 @@
 
 *Workspace-first orchestration for long-horizon Lean 4 formalization agents*
 
-![Version](https://img.shields.io/badge/version-0.1.1-blue)
+![Version](https://img.shields.io/badge/version-0.1.2-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Lean](https://img.shields.io/badge/domain-Lean%204-1f6feb)

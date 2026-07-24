@@ -9,8 +9,10 @@ minor releases; `horizon init --update` migrates a workspace's managed files.
 
 ## [Unreleased]
 
-v0.1.2 work-in-progress — the "lightweight harness, finished" release. Full
-rationale and measurements in
+## [0.1.2] — 2026-07
+
+The "lightweight harness, finished" release, extended with multi-team
+collaboration on a shared workspace. Full rationale and measurements in
 [`docs/design/v0.1.2-architecture-review.md`](./design/v0.1.2-architecture-review.md).
 
 ### Added
