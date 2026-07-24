@@ -64,12 +64,15 @@ anything staged in your way.
   whole workspace, so `-A` can sweep in unrelated files.
 - `Archon-Run`/`Session`/`Role`/`Task`/`Projects` trailers are stamped for you by a
   hook from the session env; your message stays clean.
-- Build artifacts (`.lake`, `*.olean`, …) and secrets are excluded/blocked
-  automatically, so a broad add still won't commit them.
-- If the `pre-commit` guard ever reports *"possible secret in staged changes"* and
-  your own diff is clean, you have staged more than you meant to — commit with
-  `-- <paths>` rather than setting `ARCHON_HORIZON_ALLOW_SECRETS=1`, which only
-  silences the guard and still commits everything staged.
+- Build artifacts (`.lake`, `*.olean`, …) are excluded automatically, and any
+  high-confidence credential is **redacted to `XXXX`** in the staged content (not
+  blocked), so a broad add still won't leak a secret into the ledger.
+- If the guard reports *"redacted possible secret(s) to XXXX"*, it scrubbed a
+  matched credential and let the commit through — **rotate the real credential**,
+  and check you didn't stage more than you meant to (`ARCHON_HORIZON_ALLOW_SECRETS=1`
+  skips the scan entirely). A *separate* guard still **blocks** a commit that would
+  silently delete tracked files you didn't change (a stale-index clobber); re-seed
+  the index (`git read-tree HEAD && git add -- <your files>`) rather than forcing it.
 
 Then verify **in the ledger**, and verify the **paths**, not just the SHA — a bare
 `git cat-file` runs against `<root>/.git`, which has not seen your commit yet and will

@@ -1,6 +1,6 @@
 ---
 name: horizon-inbox
-description: Read and act on the Archon Horizon inbox — list/filter agent-ready items, understand labels/kinds, comment, archive, create, and message other projects via the `horizon inbox` CLI.
+description: Read and act on the Archon Horizon inbox — list/filter items, understand labels/kinds, comment, archive, create; per-team ownership and read-state; and message other projects or teams via the `horizon inbox` CLI.
 ---
 
 The inbox is the durable channel between the human, agent sessions (present and
