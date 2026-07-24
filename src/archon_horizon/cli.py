@@ -23,6 +23,7 @@ from archon_horizon.commands import freeze as freeze_cmd
 from archon_horizon.commands import inbox as inbox_cmd
 from archon_horizon.commands import init as init_cmd
 from archon_horizon.commands import graph as graph_cmd
+from archon_horizon.commands import permissions as permissions_cmd
 from archon_horizon.commands import project as project_cmd
 from archon_horizon.commands import ps as ps_cmd
 from archon_horizon.commands import roadmap as roadmap_cmd
@@ -118,6 +119,12 @@ def callback(
         from archon_horizon.core.version import warn_if_newer_available
 
         warn_if_newer_available(json_mode=json_mode)
+    # The pre-command synchronizer: a short, stderr-only digest (unread inbox,
+    # session runtime/tokens, other live runs) so an agent is aware of anything it
+    # should react to. Best-effort and agent-session-gated; never touches stdout.
+    from archon_horizon.core.synchronizer import synchronize
+
+    synchronize(root)
 
 
 # ── register commands ────────────────────────────────────────────────
@@ -147,6 +154,7 @@ app.command(
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
 app.command("usage")(usage_cmd.usage)
+app.command("permissions")(permissions_cmd.permissions)
 app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)
 app.command("subagent", hidden=True)(subagent_cmd.subagent)

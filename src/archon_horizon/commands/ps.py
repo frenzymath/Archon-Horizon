@@ -51,6 +51,36 @@ def _last_activity(run_dir: Path) -> float:
     return latest
 
 
+def live_runs(runs_dir: Path, *, exclude_run: str | None = None) -> list[dict]:
+    """Runs that currently hold a live (or unprobeable cross-host) process marker.
+
+    A cheap probe for the synchronizer: reads each ``process.json`` and checks the
+    pid, but skips the full run-dir walk ``_rows`` does for idle time. Local dead
+    markers (zombies) are omitted; cross-host markers are included (can't probe).
+    """
+    out: list[dict] = []
+    if not runs_dir.is_dir():
+        return out
+    here = socket.gethostname()
+    for run_dir in sorted(p for p in runs_dir.iterdir() if p.is_dir()):
+        if exclude_run and run_dir.name == exclude_run:
+            continue
+        marker = run_dir / "process.json"
+        if not marker.exists():
+            continue
+        try:
+            info = json.loads(marker.read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        pid = int(info.get("pid") or 0)
+        host = str(info.get("host") or "")
+        local = host == here
+        if local and pid and not _pid_alive(pid):
+            continue  # zombie marker — the run is dead
+        out.append({"run": run_dir.name, "pid": pid, "host": host, "local": local})
+    return out
+
+
 def _rows(runs_dir: Path) -> list[dict]:
     rows: list[dict] = []
     if not runs_dir.is_dir():

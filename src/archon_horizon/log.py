@@ -66,6 +66,11 @@ class HorizonLog:
         """Emit a human-facing warning on stderr without changing the route."""
         _err_console.print(f"{_PREFIX} [#fcd34d]⚠ {msg}[/#fcd34d]")
 
+    def note_stderr(self, msg: str) -> None:
+        """Emit a neutral note on stderr (used by the pre-command synchronizer),
+        so stdout stays clean even for non-JSON commands."""
+        _err_console.print(f"{_PREFIX} [dim]◈ {msg}[/dim]")
+
     def error(self, msg: str) -> None:
         self._out.print(f"{_PREFIX} [bold #fda4af]✗ {msg}[/bold #fda4af]")
 
