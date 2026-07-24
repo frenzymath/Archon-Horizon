@@ -13,6 +13,7 @@ from archon_horizon.core.inbox import (
     InboxKind,
     InboxScope,
     InboxStatus,
+    is_read_by,
     matches_filter,
 )
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
@@ -20,7 +21,14 @@ from archon_horizon.log import log
 from archon_horizon.store import serde
 
 from .shared import agent_author as _agent_author
-from .shared import emit_json, load_workspace, local_inbox, with_provenance
+from .shared import (
+    emit_json,
+    load_workspace,
+    local_inbox,
+    provenance_task,
+    reader_id,
+    with_provenance,
+)
 
 app = typer.Typer(help="Manage the local inbox.", no_args_is_help=True)
 
@@ -106,6 +114,8 @@ def _item_dict(item) -> dict:
         "scope": serde.to_jsonable(item.scope),
         "audience": getattr(item, "audience", "") or "",
         "author": getattr(item, "author", "") or "",
+        "owner_task": str(item.metadata.get("owner_task", "") or ""),
+        "read_by": list(item.metadata.get("read_by", []) or []),
         "source_ref": item.source_ref,
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat(),
@@ -137,18 +147,25 @@ def list_items(
     label: list[str] = typer.Option((), "--label", help="Require this label. Repeat to require several labels."),
     project: str | None = typer.Option(None, "--project", help="Only show items scoped to this project."),
     to: str | None = typer.Option(None, "--to", help="Only show items addressed to this audience; use '' for general items."),
+    task: str | None = typer.Option(None, "--task", help="A task's inbox: items owned by this task PLUS shared (unowned) items."),
+    mine: bool = typer.Option(False, "--mine", help="Shortcut for --task <my task>, from the session environment."),
+    unread: bool = typer.Option(False, "--unread", help="Only items you (this task/run/human) have not marked read."),
     query: str = typer.Option("", "--query", "-q", help="Case-insensitive search across ids, body, labels, audience, author, and scope."),
     limit: int | None = typer.Option(None, "--limit", "-n", min=1, help="Show only the N most recently updated matching items."),
     comments: int | None = typer.Option(None, "--comments", min=0, help="Include only the N latest comments per item; 0 hides comments."),
     as_json: bool = _JSON,
 ) -> None:
     """List local inbox items, optionally narrowed for triage."""
+    if mine and task is None:
+        task = provenance_task()
     filters = InboxFilter(
         status=status,
         kinds=tuple(kind),
         labels=tuple(label),
         project=project,
         audience=to if to is not None else None,
+        owner_task=task,
+        unread_for=reader_id() if unread else None,
         query=query,
     )
     inbox = _inbox(ctx)
@@ -168,13 +185,17 @@ def list_items(
         log.info("(empty)")
         _warn_inbox(all_items)
         return
+    me = reader_id()
     rows = []
     for item in items:
         labels = ",".join(item.labels) or "unlabeled"
         audience_text = f" to:{item.audience}" if item.audience else ""
+        owner = str(item.metadata.get("owner_task", "") or "")
+        owner_text = f" owner:{owner}" if owner else ""
+        unread_mark = "" if is_read_by(item, me) else "● "
         scope_projects = item.scope.targets("projects")
         scope_text = f" project:{','.join(scope_projects)}" if scope_projects else ""
-        summary = f"{item.kind.value} [{labels}]{audience_text}{scope_text} {item.body[:80]}"
+        summary = f"{unread_mark}{item.kind.value} [{labels}]{audience_text}{owner_text}{scope_text} {item.body[:80]}"
         capped_comments = _latest_comments(item, comments)
         if capped_comments:
             comment_bits = []
@@ -195,8 +216,15 @@ def add(
     kind: InboxKind = typer.Option(InboxKind.HINT, "--kind", help="Item kind."),
     project: str | None = typer.Option(None, "--project", help="Scope the item to a project (what it is ABOUT)."),
     to: str | None = typer.Option(
-        None, "--to", help="Recipient the item is FOR: horizon | human | project:<name>."
+        None, "--to",
+        help="Recipient the item is FOR: horizon | human | project:<name> | task:<id> | run:<id>. "
+             "task:/run: is a direct message that reaches only that recipient.",
     ),
+    owner: str | None = typer.Option(
+        None, "--owner",
+        help="Own the item to a task's inbox (its id). Omit for shared/everyone.",
+    ),
+    mine: bool = typer.Option(False, "--mine", help="Own the item to my task, from the session environment."),
     author: str | None = typer.Option(None, "--author", help="Who is writing it (human / horizon)."),
     agent: str | None = typer.Option(
         None, "--agent",
@@ -229,6 +257,10 @@ def add(
     metadata = with_provenance()
     if agent_val:
         metadata["agent"] = agent_val
+    if mine and owner is None:
+        owner = provenance_task()
+    if owner:
+        metadata["owner_task"] = owner
     inbox = _inbox(ctx)
     created = inbox.create_item(
         InboxDraft(kind=kind, body=body, labels=labels, scope=scope, audience=(to or ""),
@@ -402,6 +434,71 @@ def reject(ctx: typer.Context, id: str, as_json: bool = _JSON) -> None:
         emit_json(_with_inbox_warnings({"id": id, "rejected": True}, items))
         return
     log.success(f"rejected {id}")
+    _warn_inbox(items)
+
+
+@app.command()
+def read(
+    ctx: typer.Context,
+    id: str,
+    reader: str | None = typer.Option(None, "--reader", help="Reader id (defaults to my task / run / human)."),
+    as_json: bool = _JSON,
+) -> None:
+    """Mark an inbox item read by you (a task, run, or human).
+
+    Read-state is per-reader: a shared item several teams see tracks who has read
+    it, so each team can find what is still unread for them (`inbox list --unread`).
+    """
+    who = (reader or reader_id())
+    inbox = _inbox(ctx)
+    inbox.set_read(id, who, read=True, actor=_agent_author())
+    items = inbox.list_items()
+    if as_json:
+        emit_json(_with_inbox_warnings({"id": id, "read": True, "reader": who}, items))
+        return
+    log.success(f"marked {id} read by {who}")
+    _warn_inbox(items)
+
+
+@app.command()
+def unread(
+    ctx: typer.Context,
+    id: str,
+    reader: str | None = typer.Option(None, "--reader", help="Reader id (defaults to my task / run / human)."),
+    as_json: bool = _JSON,
+) -> None:
+    """Mark an item unread again — e.g. you read it but it is still relevant/unactioned."""
+    who = (reader or reader_id())
+    inbox = _inbox(ctx)
+    inbox.set_read(id, who, read=False, actor=_agent_author())
+    items = inbox.list_items()
+    if as_json:
+        emit_json(_with_inbox_warnings({"id": id, "read": False, "reader": who}, items))
+        return
+    log.success(f"marked {id} unread for {who}")
+    _warn_inbox(items)
+
+
+@app.command()
+def own(
+    ctx: typer.Context,
+    id: str,
+    owner: str | None = typer.Option(None, "--owner", help="Owning task id; omit (or --shared) for everyone."),
+    mine: bool = typer.Option(False, "--mine", help="Own to my task, from the session environment."),
+    shared: bool = typer.Option(False, "--shared", help="Share with everyone (clear ownership)."),
+    as_json: bool = _JSON,
+) -> None:
+    """Move an item into a task's inbox, or share it with everyone."""
+    target = "" if shared else (owner or (provenance_task() if mine else None))
+    if target is None:
+        raise typer.BadParameter("pass --owner <task>, --mine, or --shared")
+    inbox = _inbox(ctx)
+    inbox.set_owner(id, target, actor=_agent_author())
+    items = inbox.list_items()
+    if as_json:
+        emit_json(_with_inbox_warnings({"id": id, "owner_task": target}, items))
+        return
+    log.success(f"{id} now owned by {target or 'everyone'}")
     _warn_inbox(items)
 
 

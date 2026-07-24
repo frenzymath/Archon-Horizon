@@ -51,6 +51,12 @@ class InboxProvider(ABC):
     def delete_item(self, item_id: str) -> None:
         raise NotImplementedError(f"{self.name} does not support deletion")
 
+    def set_read(self, item_id: str, reader: str, *, read: bool = True, actor: str | None = None) -> None:
+        raise NotImplementedError(f"{self.name} does not support read-state")
+
+    def set_owner(self, item_id: str, owner_task: str, actor: str | None = None) -> None:
+        raise NotImplementedError(f"{self.name} does not support ownership")
+
     @abstractmethod
     def sync(self) -> SyncResult:
         """Synchronize provider state and return an import/update summary."""

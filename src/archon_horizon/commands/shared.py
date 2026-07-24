@@ -93,6 +93,39 @@ def with_provenance(metadata: dict | None = None) -> dict:
     return merged
 
 
+def provenance_task(default: str | None = None) -> str | None:
+    """The task id of the running session, if any (``ARCHON_HORIZON_TASK``)."""
+    return os.environ.get("ARCHON_HORIZON_TASK", "").strip() or default
+
+
+def provenance_project(default: str | None = None) -> str | None:
+    """The first project of the running session (``ARCHON_HORIZON_PROJECTS``).
+
+    Used to default ``--project`` so an agent rarely needs to pass it. A comma or
+    space separated list keeps only the first — the session's primary project.
+    """
+    raw = os.environ.get("ARCHON_HORIZON_PROJECTS", "").strip()
+    if not raw:
+        return default
+    first = raw.replace(",", " ").split()
+    return first[0] if first else default
+
+
+def reader_id() -> str:
+    """Stable identity of who is reading, for inbox read-state.
+
+    A team is a task, so prefer the task id; fall back to the run, then the agent
+    role, then ``"human"`` for a person at the CLI. This is the id recorded in an
+    item's ``read_by`` list and used to compute "unread for me".
+    """
+    for var in ("ARCHON_HORIZON_TASK", "ARCHON_HORIZON_RUN"):
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val
+    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
+    return role or "human"
+
+
 def history_entry(actor: str | None, field: str, *, before: str = "", after: str = "", note: str = "") -> dict:
     """Build one append-only history transition for roadmap/task/inbox items."""
     from archon_horizon.core.clock import utc_now

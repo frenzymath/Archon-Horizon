@@ -10,18 +10,23 @@ comments live under ``comments/<item-id>/*.md``. Local items default to
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 import shutil
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.inbox import (
+    READ_BY_KEY,
     InboxDraft,
     InboxFilter,
     InboxItem,
     InboxKind,
     InboxStatus,
     SyncResult,
+    item_readers,
     matches_filter,
 )
 from archon_horizon.store import serde
@@ -41,7 +46,7 @@ _ID_RE = re.compile(r"I-(\d+)")
 
 
 class FilesystemInboxProvider(InboxProvider):
-    capabilities = frozenset({"read", "create", "edit", "delete", "label", "comment", "status", "sync"})
+    capabilities = frozenset({"read", "create", "edit", "delete", "label", "comment", "status", "sync", "read_state"})
 
     def __init__(self, root: Path, name: str = "local", codec: Codec | None = None) -> None:
         self.name = name
@@ -122,6 +127,38 @@ class FilesystemInboxProvider(InboxProvider):
         highest = max((int(m.group(1)) for k in items if (m := _ID_RE.fullmatch(k))), default=0)
         return f"I-{highest + 1:04d}"
 
+    @contextmanager
+    def _create_lock(self, timeout: float = 30.0):
+        """Serialize id allocation across concurrent ``inbox add`` writers.
+
+        ``create_item`` reads the highest existing id and writes the next one; two
+        processes doing that at once both pick the same ``I-NNNN`` and one body is
+        lost. An OS ``flock`` (dies with the holder, no stale reclaim) serializes
+        the read-allocate-write. Fails OPEN — on a platform without ``fcntl`` or a
+        lock timeout it proceeds unlocked rather than refusing the add, so the
+        guard can never block writing an item.
+        """
+        try:
+            import fcntl
+        except ImportError:
+            yield
+            return
+        self._path.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self._path / ".create.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        break  # fail open: allocate unlocked rather than error out
+                    time.sleep(0.05)
+            yield
+        finally:
+            os.close(fd)  # closing the fd releases the flock
+
     def _replace(self, item_id: str, **changes: object) -> None:
         items = self._load()
         items[item_id] = dataclasses.replace(items[item_id], updated_at=utc_now(), **changes)
@@ -138,21 +175,24 @@ class FilesystemInboxProvider(InboxProvider):
     # ── write ───────────────────────────────────────────────────────
 
     def create_item(self, item: InboxDraft) -> InboxItem:
-        items = self._load()
-        created = InboxItem(
-            id=self._next_id(items),
-            provider=self.name,
-            kind=item.kind,
-            body=item.body,
-            labels=item.labels,
-            scope=item.scope,
-            audience=item.audience,
-            author=item.author,
-            source_ref=item.source_ref,
-            metadata=item.metadata,
-        )
-        items[created.id] = created
-        self._save(items)
+        # Serialize id allocation + write so concurrent adds don't collide on the
+        # same I-NNNN (I-0388). The lock spans only the read-allocate-save.
+        with self._create_lock():
+            items = self._load()
+            created = InboxItem(
+                id=self._next_id(items),
+                provider=self.name,
+                kind=item.kind,
+                body=item.body,
+                labels=item.labels,
+                scope=item.scope,
+                audience=item.audience,
+                author=item.author,
+                source_ref=item.source_ref,
+                metadata=item.metadata,
+            )
+            items[created.id] = created
+            self._save(items)
         self._record(created.id, created.author, "created", after=created.status.value, note="opened")
         return created
 
@@ -217,6 +257,38 @@ class FilesystemInboxProvider(InboxProvider):
         comment_id = str(current.get("id") or f"C-{index + 1:04d}")
         write_comment(self._comment_dir(item_id) / f"{comment_id}.md", current)
         self._save_item(dataclasses.replace(item, updated_at=utc_now()))
+
+    def set_read(self, item_id: str, reader: str, *, read: bool = True, actor: str | None = None) -> None:
+        reader = (reader or "").strip()
+        if not reader:
+            return
+        item = self._load()[item_id]
+        readers = list(item_readers(item))
+        if read and reader not in readers:
+            readers.append(reader)
+        elif not read and reader in readers:
+            readers = [r for r in readers if r != reader]
+        else:
+            return  # no change
+        self._replace(item_id, metadata={**item.metadata, READ_BY_KEY: readers})
+        self._record(item_id, actor or reader, "read_by", after=("read" if read else "unread"))
+
+    def set_owner(self, item_id: str, owner_task: str, actor: str | None = None) -> None:
+        """Move an item into a task's inbox (empty ``owner_task`` shares it with all)."""
+        from archon_horizon.core.inbox import OWNER_KEY, item_owner
+
+        item = self._load()[item_id]
+        owner = (owner_task or "").strip()
+        before = item_owner(item)
+        if before == owner:
+            return
+        metadata = {**item.metadata}
+        if owner:
+            metadata[OWNER_KEY] = owner
+        else:
+            metadata.pop(OWNER_KEY, None)
+        self._replace(item_id, metadata=metadata)
+        self._record(item_id, actor, "owner", before=before or "everyone", after=owner or "everyone")
 
     def delete_item(self, item_id: str) -> None:
         items = self._load()

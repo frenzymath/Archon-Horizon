@@ -91,6 +91,7 @@ class RunCommand:
 
             cfg, workspace = load_workspace(self.root)
             self._install_native_subagents(cfg, workspace)
+            self._refresh_mcp_config(cfg, workspace)
             _, providers = inbox_providers(cfg, workspace)
             orch = build_orchestrator(self.root, registry=HarnessRegistry(), inbox_providers=providers)
 
@@ -277,6 +278,7 @@ class RunCommand:
         focus = tuple(t for t in self.targets if t not in ROLE_TARGETS)
         cfg, workspace = load_workspace(self.root)
         self._install_native_subagents(cfg, workspace)
+        self._refresh_mcp_config(cfg, workspace)
         # Prefer the role picked by config routing (`_config_interactive_role`); the
         # plain `--backend interactive` CLI path falls back to the target shape.
         # Only one role exists now (horizon); interactive always drives it.
@@ -478,6 +480,22 @@ class RunCommand:
             install_subagents(workspace.root, workspace.state_path / "subagents", cfg.harnesses)
         except Exception as exc:  # never block a run on optional subagent compile
             log.warn(f"Skipped subagent compilation: {exc}")
+
+    def _refresh_mcp_config(self, cfg, workspace) -> None:
+        """Refresh managed Lean MCP entries before an engine session starts.
+
+        Workspaces can outlive the package version that initialized them. Doing
+        this at run start keeps Codex's project-local config and Claude's
+        ``.mcp.json`` aligned without requiring a separate upgrade command.
+        Hand-added servers remain untouched by the merge helpers.
+        """
+        try:
+            from archon_horizon.config.mcp import install_mcp_for_harnesses, write_mcp_config
+
+            write_mcp_config(workspace.root / ".mcp.json")
+            install_mcp_for_harnesses(cfg.harnesses, workspace.root)
+        except Exception as exc:  # optional tooling must not block a run
+            log.warn(f"Skipped MCP setup refresh: {exc}")
 
     def _resume_run(self, orch) -> RunRecord:
         """Reconstruct the run to resume: the named run id, else the latest one."""
