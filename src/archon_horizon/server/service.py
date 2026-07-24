@@ -27,7 +27,7 @@ from archon_horizon.blueprint.workspace import published_dag, published_dags, wo
 from archon_horizon.config.loader import build_stores, build_workspace, load_config
 from archon_horizon.core.inbox import InboxDraft, InboxKind, InboxStatus
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
-from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus, apply_hierarchy, hierarchy_status_warnings
+from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus, apply_hierarchy, hierarchy_status_warnings, item_pinned_commits
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.status_sync import roadmap_status_for_task_status
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
@@ -430,6 +430,31 @@ class WorkspaceService:
         if self.workspace.root.resolve() in candidate.parents and name in self._discover_projects():
             return candidate
         raise KeyError(f"unknown project {name!r}")
+
+    def _resolve_commit(self, sha: str) -> dict[str, Any] | None:
+        """Find a commit by (possibly abbreviated) SHA across projects.
+
+        Reuses the per-project ``get_git_log`` so a bare SHA in an inbox body,
+        report, or roadmap ``pinned_commits`` entry can become a linked chip.
+        Returns the first match's ``{sha, short_sha, subject, project}`` or None.
+        """
+        needle = sha.lower()
+        for name in self._discover_projects():
+            try:
+                commits = get_git_log(self._project_path(name)).get("commits", [])
+            except Exception:
+                continue
+            for c in commits:
+                full = str(c.get("sha", "")).lower()
+                short = str(c.get("shortSha", "")).lower()
+                if full == needle or (short and short == needle) or full.startswith(needle) or (short and needle.startswith(short)):
+                    return {
+                        "sha": c.get("sha", ""),
+                        "short_sha": c.get("shortSha", ""),
+                        "subject": c.get("subject", ""),
+                        "project": name,
+                    }
+        return None
 
     def _project_rel_path(self, name: str) -> str:
         project_path = self._project_path(name).resolve()
@@ -867,7 +892,7 @@ class WorkspaceService:
             if row["sha"] not in known:
                 rows.append(row)
                 known.add(row["sha"])
-        rows.sort(key=lambda row: row.get("date", ""))
+        rows.sort(key=lambda row: row.get("date", ""), reverse=True)  # latest commit first (GH #6)
         total = len(rows)
         start = max(0, offset)
         if limit is not None:
@@ -880,6 +905,7 @@ class WorkspaceService:
                 "sha": sha,
                 "short_sha": sha[:10],
                 "subject": r.get("subject", ""),
+                "summary": r.get("summary", ""),
                 "created_at": r.get("date", ""),
                 "role": r.get("role") or info.get("role"),
                 "kind": r.get("kind", ""),  # "agent" | "integration" | …
@@ -1191,6 +1217,16 @@ class WorkspaceService:
                                 )
                 except Exception:
                     pass
+        # Pinned roadmap commits, so their linked chips resolve on the static page.
+        seen_shas: set[str] = set()
+        try:
+            for it in self.stores.roadmap.load().items:
+                for sha in item_pinned_commits(it):
+                    if sha and sha not in seen_shas:
+                        seen_shas.add(sha)
+                        eps.append(f"/api/commit?sha={quote(sha, safe='')}")
+        except Exception:
+            pass
         for name in self._discover_projects():
             encoded_name = quote(name, safe='')
             eps.append(f"/api/blueprint/chapters?project={encoded_name}")
@@ -1256,6 +1292,15 @@ class WorkspaceService:
             if proj and commit:
                 return {"diff": get_git_diff(self._project_path(proj), commit)}
             return {"diff": ""}
+        if parsed.path == "/api/commit":
+            # Resolve a bare (possibly abbreviated) commit SHA to its subject and
+            # owning project so the dashboard can render it as a linked chip. 404
+            # when nothing matches so the client can leave the reference plain.
+            sha = (query.get("sha") or [""])[0].strip()
+            hit = self._resolve_commit(sha) if sha else None
+            if hit:
+                return hit
+            raise KeyError(path)
         if parsed.path == "/api/session/commits":
             try:
                 offset = max(0, int((query.get("offset") or ["0"])[0]))

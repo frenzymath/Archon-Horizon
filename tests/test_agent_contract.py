@@ -50,10 +50,13 @@ def test_horizon_prompt_is_directive_plus_skill(tmp_path: Path) -> None:
     assert "roadmap=R-1" in prompt
     assert "ag-main" in prompt
     assert "one-shot" in prompt
-    # No pushed policy/state: those moved to the skill / the CLI (pull).
+    # No full policy/state dump: those remain in the skill / CLI. A stale
+    # workspace does receive a compact current-version safety guard.
     assert "# Roadmap" not in prompt
     assert "# Memory" not in prompt
     assert "# Subagents" not in prompt
+    assert "installed workspace skills are stale" in prompt
+    assert "lean-check" in prompt and "janitor" in prompt
     assert len(prompt) < 2000
 
 
@@ -69,6 +72,17 @@ def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
     assert "ground" in skill and "before marking" in skill          # fresh-context convergence gate
     assert "boundary-maintenance" in skill and "archive or complete" in skill
     assert "Formalization note" in skill and "graph add comment" in skill
+    assert "dispatch **`janitor`" in skill and "Collection-health warnings are a dispatch trigger" in skill
+    assert "lean_diagnostic_messages" in skill and "after each subsequent edit" in skill
+    assert "more than one file" in subagents and "dispatch at least one" in subagents
+
+    lean_check = (_SKILLS_DIR / "lean-check" / "SKILL.md").read_text("utf-8")
+    assert "Before the first proof edit" in lean_check
+    assert "reserve `lake build` for the final session" in lean_check
+    assert "LSP is sufficient between edits" in lean_check
+    assert "module build after every proof" in lean_check
+    assert ".codex/agents/*.toml" in subagents
+    assert "empty roster" in subagents
 
 
 class _RecordingHarness:

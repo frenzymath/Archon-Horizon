@@ -83,16 +83,22 @@ _OPT_TITLE = r"\[((?:[^\[\]]|\[[^\[\]]*\])*)\]"
 LEAN_KINDS = {
     "theorem": "theorem", "lemma": "lemma", "def": "definition",
     "abbrev": "definition", "instance": "instance",
+    "structure": "structure", "inductive": "inductive", "class": "class",
 }
 # when several edges land on one ordered pair, the strongest type wins
 # (the hard `uses` edge subsumes the soft `formalizes` one); higher rank wins.
 _EDGE_RANK = {"uses": 2, "formalizes": 1}
+# The declaration name is matched as "everything up to whitespace or a binder/
+# type delimiter", so Unicode letters, subscripts (foo₁), and primes (foo') are
+# captured — not just ASCII. An anonymous `instance : C` has no name (the next
+# token is `:`), so it correctly fails to match.
 _DECL_RE = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)?"                      # optional attribute
     r"(?:private\s+|protected\s+|noncomputable\s+)*"
-    r"(theorem|lemma|def|abbrev|instance)\s+"
-    r"([A-Za-z0-9_'.]+)"
+    r"(theorem|lemma|def|abbrev|instance|structure|inductive|class)\s+"
+    r"([^\s:(){}\[\],]+)"
 )
+_ROOT_PREFIX = "_root_."
 
 
 # --------------------------------------------------------------------------- #
@@ -369,7 +375,14 @@ def parse_lean(text: str) -> list[dict]:
         m = _DECL_RE.match(line)
         if m:
             kind, name = m.group(1), m.group(2)
-            decls.append((i, ".".join(ns + [name]), kind))
+            # `_root_.foo` escapes the enclosing namespace: the name is absolute,
+            # so drop the prefix AND ignore the namespace stack (otherwise it
+            # would resolve to `Ns._root_.foo` and never match `\lean{foo}`).
+            if name.startswith(_ROOT_PREFIX):
+                fq = name[len(_ROOT_PREFIX):]
+            else:
+                fq = ".".join(ns + [name])
+            decls.append((i, fq, kind))
 
     # for each decl, find the top of a /-- … -/ doc comment sitting above it
     tops: list[int] = []

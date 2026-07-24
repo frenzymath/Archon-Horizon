@@ -29,7 +29,9 @@ from archon_horizon.vcs.integration import integrate_workspace_baseline, integra
 pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
 
 
-def _ledger_commit(ws: Path, message: str, *files: str) -> None:
+def _ledger_commit(
+    ws: Path, message: str, *files: str, summaries: tuple[str, ...] = ()
+) -> None:
     """Agent-style commit into the workspace ledger with plain git (the raw-git
     path that replaced `horizon commit`). Provenance trailers are stamped by the
     ledger's prepare-commit-msg hook from the ARCHON_HORIZON_* env the test sets."""
@@ -37,7 +39,8 @@ def _ledger_commit(ws: Path, message: str, *files: str) -> None:
     base = ["git", f"--git-dir={gd}", f"--work-tree={ws}"]
     for f in files:
         subprocess.run([*base, "add", f], cwd=str(ws), check=True)
-    subprocess.run([*base, "commit", "-m", message], cwd=str(ws), check=True)
+    trailers = [arg for summary in summaries for arg in ("--trailer", f"Summary={summary}")]
+    subprocess.run([*base, "commit", "-m", message, *trailers], cwd=str(ws), check=True)
 
 
 def _identity() -> None:
@@ -104,7 +107,15 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     s1 = run.new_session("horizon-T")
     monkeypatch.setenv("ARCHON_HORIZON_SESSION", s1.name)
     lean.write_text("theorem a : True := by sorry\n", "utf-8")
-    _ledger_commit(ws, "Introduce a", str(lean))
+    _ledger_commit(
+        ws,
+        "Introduce a",
+        str(lean),
+        summaries=(
+            "**Scaffold.** Added the temporary goal $a : \\mathrm{True}$.",
+            "**Next.** Replace `sorry` with the canonical constructor.",
+        ),
+    )
     lean.write_text("theorem a : True := trivial\n", "utf-8")
     _ledger_commit(ws, "Discharge a", str(lean))
     i1 = integrate_workspace_session(service.workspace, run_id=run.id, session=s1.name,
@@ -117,6 +128,11 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     # Each commit reports ONLY its own change (not a session-wide sum).
     assert by_subject["Introduce a"]["sorry_delta"] == 1
     assert by_subject["Discharge a"]["sorry_delta"] == -1
+    assert by_subject["Introduce a"]["summary"] == (
+        "**Scaffold.** Added the temporary goal $a : \\mathrm{True}$.\n\n"
+        "**Next.** Replace `sorry` with the canonical constructor."
+    )
+    assert by_subject["Discharge a"]["summary"] == ""
     # The two semantic commits are tagged as agent work…
     assert by_subject["Introduce a"]["kind"] == "agent"
     assert by_subject["Discharge a"]["kind"] == "agent"

@@ -331,6 +331,55 @@ def test_running_horizon_is_cancelled_when_task_is_externally_closed(tmp_path: P
     )
 
 
+def test_running_horizon_finishes_after_agent_records_done(tmp_path: Path, monkeypatch) -> None:
+    """Agent completion stops later rounds, but never cuts off its final report."""
+    import archon_horizon.orchestration.orchestrator as orchestration
+
+    monkeypatch.setattr(orchestration, "_TASK_CANCEL_POLL_S", 0.01)
+    orch, task_store = _build(tmp_path)
+    started = threading.Event()
+    cancelled = threading.Event()
+
+    def finish_after_agent_status(req: HarnessRequest) -> HarnessResult:
+        started.set()
+        deadline = time.monotonic() + 0.4
+        while time.monotonic() < deadline:
+            if req.cancel is not None and req.cancel.is_cancelled():
+                cancelled.set()
+                return HarnessResult(ok=False, text="cancelled unexpectedly", metadata={"cancelled": True})
+            time.sleep(0.01)
+        return HarnessResult(ok=True, text="final report after task completion")
+
+    orch.horizon = HarnessHorizonAgent(NullHarness(finish_after_agent_status))
+
+    def mark_done() -> None:
+        assert started.wait(timeout=2.0)
+        task = task_store.get("R-1")
+        task_store.put(dataclasses.replace(task, status=TaskStatus.DONE))
+        task_store.append_history(
+            "R-1",
+            {
+                "at": "2026-07-02T00:00:00+00:00",
+                "actor": "horizon",
+                "field": "status",
+                "from": "running",
+                "to": "done",
+                "note": "agent recorded status via `horizon task set`",
+            },
+        )
+
+    marker = threading.Thread(target=mark_done)
+    marker.start()
+    reports = orch.run(RunRecord(id="S-0015", focus=Focus(tasks=("R-1",)), rounds_requested=3))
+    marker.join(timeout=1.0)
+
+    assert not cancelled.is_set()
+    assert reports[0].tasks_run == ("R-1",)
+    assert task_store.get("R-1").status is TaskStatus.DONE
+    stops = [e for e in orch.event_log.read_all() if e.type == "run.stopped"]
+    assert stops and stops[-1].data.get("reason") == "focus-complete"
+
+
 def test_unfocused_queued_task_runs_once_then_rests(tmp_path: Path) -> None:
     # Without an explicit focus, a queued task runs once and is not re-queued, so
     # later rounds find nothing runnable (the roadmap no longer re-feeds the queue).

@@ -27,7 +27,7 @@ from archon_horizon.core.freeze import FreezeSet, frozen_violations
 from archon_horizon.core.roadmap import Roadmap, RoadmapStatus
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.sessions import RunRecord, SyncBoundary
-from archon_horizon.core.status_sync import has_recorded_terminal_status
+from archon_horizon.core.status_sync import has_recorded_terminal_status, terminal_status_actor
 from archon_horizon.core.tasks import HorizonResult, HorizonTask, TaskStatus, WriteSet
 from archon_horizon.core.workspace import Workspace
 from archon_horizon.harnesses.base import Cancellation
@@ -52,8 +52,9 @@ from .sync import SyncCoordinator
 
 
 # How often the terminal-status watcher re-reads a running task. It is the only
-# external kill switch for a live session (`horizon task set <id> --status …`),
-# so it stays — but a human close is not latency-critical, so poll gently.
+# external kill switch for a live session (a human/other external actor using
+# `horizon task set <id> --status …`), so it stays — but a human close is not
+# latency-critical, so poll gently.
 _TASK_CANCEL_POLL_S = 2.0
 
 
@@ -125,6 +126,24 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
     if event_type == "run.dry-run":
         return f"Dry run planned tasks: {_csv(data.get('planned'))}."
     if event_type == "skills.stale":
+        retired = data.get("retired")
+        if isinstance(retired, list) and retired:
+            skills = data.get("skills")
+            current = (
+                [name for name in skills if name not in retired]
+                if isinstance(skills, list)
+                else []
+            )
+            drift = (
+                f" Other workspace skill copies also differ ({_csv(current)})."
+                if current
+                else ""
+            )
+            return (
+                f"Workspace still contains retired skills ({_csv(retired)}).{drift} "
+                "Run `horizon skills install` to remove/refresh them (it overwrites "
+                "local edits)."
+            )
         return (
             f"Workspace skills differ from the bundled ones ({_csv(data.get('skills'))}); "
             "agents will follow this workspace's copy. Run `horizon skills install` to "
@@ -159,8 +178,8 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
                 f"{project} ({c.get('nodes', 0)} nodes, {c.get('edges', 0)} edges)"
                 for project, c in projects.items()
             )
-            return f"Rebuilt blueprint DAG(s): {detail}."
-        return "Rebuilt blueprint DAG(s)."
+            return f"Synced hgraph JSON cache(s): {detail}."
+        return "Synced hgraph JSON cache(s)."
     if event_type == "task.created":
         return f"Created task {data.get('task_id')} for project {data.get('project')}."
     if event_type == "task.started":
@@ -251,7 +270,11 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
     if event_type == "publish.completed":
         blueprints = data.get("blueprints")
         n = len(blueprints) if isinstance(blueprints, (list, tuple)) else 0
-        return f"Published deterministic artifacts ({n} blueprint DAG(s))."
+        return f"Published deterministic artifacts ({n} hgraph JSON cache(s))."
+    if event_type == "inbox.temporary_archived":
+        items = data.get("items")
+        n = len(items) if isinstance(items, (list, tuple)) else 0
+        return f"Auto-archived {n} consumed [temporary] inbox item(s)."
     return _event_label(event_type) + "."
 
 
@@ -599,9 +622,13 @@ class Orchestrator:
     def _task_terminal_watcher(
         self, task_id: str, cancel: Cancellation, usage_path: Path | None = None
     ) -> tuple[threading.Event, list[TaskStatus], list[int], threading.Thread]:
-        """Cancel a running Horizon harness if its task is explicitly closed —
-        or, when a session token budget is configured, if the session's live
-        ``usage.json`` crosses it (``budget_hit`` then carries the count)."""
+        """Cancel on an external terminal close, not the agent's own completion.
+
+        An agent records ``done`` before it writes its final report, so its
+        harness must be allowed to exit normally. Human/other external terminal
+        transitions remain a cooperative kill switch. A configured session token
+        budget is the other cancellation path (``budget_hit`` carries the count).
+        """
         stop = threading.Event()
         observed: list[TaskStatus] = []
         budget_hit: list[int] = []
@@ -614,6 +641,12 @@ class Orchestrator:
                 except Exception:
                     current = None
                 if current is not None and has_recorded_terminal_status(current):
+                    # The running Horizon agent normally records its own terminal
+                    # status as the final action of the session. Let the harness
+                    # finish its report/transcript; only an external actor is a
+                    # live kill signal.
+                    if terminal_status_actor(current) == "horizon":
+                        continue
                     observed.append(current.status)
                     cancel.cancel()
                     return
@@ -906,6 +939,39 @@ class Orchestrator:
                     errors=list(result.errors),
                 )
         self.publish(run)
+
+    def _archive_consumed_temporaries(self, before) -> None:
+        """Auto-archive `[temporary]` inbox items left open from before this run.
+
+        A `[temporary]` item is a one-shot note ("closed once used"); once a run
+        has had it visible for the whole session, an open leftover is consumed, so
+        it is soft-archived (recoverable, not deleted). Items the agent created
+        DURING this run (updated at/after ``before``) are kept for the next one.
+        Best-effort: never raises, so it cannot disrupt a run's finish.
+        """
+        from archon_horizon.core.inbox import InboxStatus
+
+        archived: list[str] = []
+        for provider in self.inbox_providers:
+            if "status" not in getattr(provider, "capabilities", frozenset()):
+                continue
+            try:
+                items = provider.list_items()
+            except Exception:
+                continue
+            for item in items:
+                try:
+                    if item.status is not InboxStatus.OPEN or item.updated_at >= before:
+                        continue
+                    first_line = item.body.splitlines()[0] if item.body else ""
+                    if "[temporary]" not in first_line:
+                        continue
+                    provider.update_status(item.id, InboxStatus.ARCHIVED, "system")
+                    archived.append(item.id)
+                except Exception:
+                    continue
+        if archived:
+            self._emit("inbox.temporary_archived", actor="orchestrator", items=archived)
 
     def _flush_system_session(self, runlog: RunLog | None, label: str = "system") -> None:
         """Append the buffered orchestrator events (commits, sync, integration,
@@ -1206,6 +1272,9 @@ class Orchestrator:
         # checked between sessions against workspace.budget.
         run_tokens_out = 0
         run_cost_usd = 0.0
+        # When this run began: `[temporary]` inbox items older than this are
+        # consumed leftovers and auto-archived when the run finishes (below).
+        run_started = utc_now()
         self._publish_silent(run)
         self._flush_system_session(runlog)
 
@@ -1318,6 +1387,8 @@ class Orchestrator:
                 self._emit("run.stopped", run_id=run.id, reason="focus-complete", round=i)
                 break
 
+        if not dry_run:
+            self._archive_consumed_temporaries(run_started)
         self._emit("run.finished", run_id=run.id)
         if not dry_run:
             outcome = integrate_workspace_run(
@@ -1345,13 +1416,14 @@ class Orchestrator:
         """Emit a warning when the workspace's installed skills differ from the
         bundled ones. Never fails a run — this is hygiene, not correctness."""
         try:
-            from archon_horizon.skills.registry import stale_skills
+            from archon_horizon.skills.registry import retired_skills, stale_skills
 
             names = stale_skills(self.workspace.root)
+            retired = retired_skills(self.workspace.root)
         except Exception:
             return
         if names:
-            self._emit("skills.stale", skills=list(names))
+            self._emit("skills.stale", skills=list(names), retired=retired)
 
     @staticmethod
     def _write_process_marker(runlog: RunLog | None) -> None:
@@ -1409,8 +1481,8 @@ class Orchestrator:
         """Refresh human-facing artifacts after a collaboration boundary.
 
         The live dashboard reads stores directly, so the only durable file
-        regenerated here is the per-project blueprint DAG
-        JSON. GitHub publishing is intentionally not implicit; the GitHub inbox
+        regenerated here is the per-project hgraph JSON cache. GitHub publishing
+        is intentionally not implicit; the GitHub inbox
         remains a shadow provider and explicit ``gh`` operations live on that
         provider.
 
@@ -1431,7 +1503,11 @@ class Orchestrator:
         )
 
     def _write_blueprint_dags(self, *, projects: tuple[str, ...] | None = None) -> list[str]:
-        """(Re)generate ``.archon-horizon/blueprints/<project>.json``.
+        """(Re)generate the dashboard's hgraph-backed JSON cache.
+
+        The compatibility path remains
+        ``.archon-horizon/blueprints/<project>.json``; this is a serialization of
+        hgraph state for the dashboard, not a second graph engine.
 
         Run before every Horizon round as well as at publish, so the agent always
         consults a DAG that reflects the blueprint and Lean as they stand. Always
