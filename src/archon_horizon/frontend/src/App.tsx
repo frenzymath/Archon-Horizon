@@ -10,6 +10,8 @@ import { useProgressiveCount } from './hooks/useProgressiveCount';
 import BlueprintPage from './BlueprintPage';
 import DagPage from './DagPage';
 import LeanPage from './LeanPage';
+import BoardPage from './BoardPage';
+import { RefLinkProvider, useRefResolver, useRefLinks, refChipClickHandler } from './refs';
 
 const STATIC = isStaticDashboard();
 // Triage labels (must match core/labels.py). The UI gate vocabulary stays
@@ -120,7 +122,15 @@ export function App() {
     );
   }
 
+  return <AppShell state={state} reload={reload} isError={isError} />;
+}
+
+// Split out so the ref-link resolver (and its react-router `navigate`) can live
+// inside a component that always has a non-null state.
+function AppShell({ state, reload, isError }: { state: HorizonState; reload: () => void; isError: boolean }) {
+  const resolve = useRefResolver(state);
   return (
+    <RefLinkProvider resolve={resolve}>
     <div className="app">
       <ConnectionBanner isError={isError} />
       <header className="header">
@@ -133,6 +143,7 @@ export function App() {
           <NavLink to="/inbox" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Inbox</NavLink>
           <NavLink to="/roadmap" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Roadmap</NavLink>
           <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Tasks</NavLink>
+          <NavLink to="/board" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Board</NavLink>
           <NavLink to="/search" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Search</NavLink>
           <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
@@ -147,6 +158,7 @@ export function App() {
           <Route path="/inbox" element={<InboxPage state={state} reload={reload} />} />
           <Route path="/roadmap" element={<RoadmapPage state={state} reload={reload} />} />
           <Route path="/tasks" element={<TasksPage state={state} reload={reload} />} />
+          <Route path="/board" element={<BoardPage state={state} reload={reload} />} />
           <Route path="/search" element={<SearchPage state={state} />} />
           <Route path="/blueprint" element={<BlueprintPage state={state} />} />
           <Route path="/dag" element={<DagPage state={state} reload={reload} />} />
@@ -159,6 +171,7 @@ export function App() {
         </ErrorBoundary>
       </main>
     </div>
+    </RefLinkProvider>
   );
 }
 
@@ -404,7 +417,7 @@ function BlueprintProgress({ ok, total }: { ok: number; total: number }) {
   );
 }
 
-function chipTone(value: string) {
+export function chipTone(value: string) {
   const normalized = filterToken(value);
   if (INBOX_KIND_OPTIONS.includes(value)) return `kind-${normalized}`;
   if (SEARCH_KINDS.includes(value)) return `kind-${normalized}`;
@@ -1828,12 +1841,23 @@ function ActivityTimeline({
   // the inbox, so description + comments + history read as one thread.
   description?: { body: string; author?: string; at?: string };
 }) {
+  const [visibleCommentCount, setVisibleCommentCount] = useState(2);
   const commentTime = (c: any) => String(c.at ?? c.created_at ?? c.createdAt ?? '');
+  useEffect(() => {
+    setVisibleCommentCount(2);
+  }, [itemId, comments.length]);
+  const commentStart = Math.max(0, comments.length - visibleCommentCount);
+  const visibleComments = comments.slice(commentStart);
   const allComments = description && description.body
-    ? [{ author: description.author, at: description.at, body: description.body, _description: true }, ...comments]
-    : comments;
+    ? [{ author: description.author, at: description.at, body: description.body, _description: true }, ...visibleComments]
+    : visibleComments;
   const entries = [
-    ...allComments.map((c, i) => ({ kind: 'comment' as const, at: commentTime(c), c, i })),
+    ...allComments.map((c, i) => ({
+      kind: 'comment' as const,
+      at: commentTime(c),
+      c,
+      i: c._description ? -1 : i - (description?.body ? 1 : 0) + commentStart,
+    })),
     ...history.map((h, i) => ({ kind: 'event' as const, at: String(h.at ?? ''), h, i })),
   ].sort((a, b) => a.at.localeCompare(b.at));
   if (!entries.length) return null;
@@ -1841,6 +1865,15 @@ function ActivityTimeline({
     <div className="issue-details">
       <div className="comment-thread">
         <div className="comment-thread-title">{title}</div>
+        {commentStart > 0 && (
+          <button
+            className="timeline-load-more"
+            type="button"
+            onClick={() => setVisibleCommentCount((count) => Math.min(comments.length, count + 5))}
+          >
+            Load older comments ({commentStart} remaining)
+          </button>
+        )}
         {entries.map((e) => e.kind === 'comment' ? (
           <EditableComment
             comment={e.c}
@@ -2273,6 +2306,11 @@ function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: s
         )}
         <span className="commit-sha">{commit.short_sha}</span>
       </button>
+      {commit.summary?.trim() && (
+        <div className="commit-summary">
+          <MarkdownBlock content={commit.summary} />
+        </div>
+      )}
       {open && (
         files.length === 0 ? (
           <p className="empty commit-empty">No Lean/blueprint files in this commit{commit.other_count ? ` (+${commit.other_count} shared-state file${commit.other_count === 1 ? '' : 's'})` : ''}.</p>
@@ -3706,15 +3744,18 @@ function ReportList({ reports }: { reports: string[] }) {
   );
 }
 
-function Badge({ children }: { children: React.ReactNode }) {
+export function Badge({ children }: { children: React.ReactNode }) {
   return <span className="badge">{children}</span>;
 }
 
 // Render a single line of markdown (bold/italic/code/math/links) without the
-// block <p> wrapper — for titles in lists and cards.
-function InlineMarkdown({ content }: { content: string }) {
-  const html = markdownToHtml(content ?? '').replace(/^\s*<p>/, '').replace(/<\/p>\s*$/, '');
-  return <span className="inline-md" dangerouslySetInnerHTML={{ __html: html }} />;
+// block <p> wrapper — for titles in lists and cards. Also linkifies local
+// references (roadmap/task/inbox/node/commit) via the ref-link context.
+export function InlineMarkdown({ content }: { content: string }) {
+  const links = useRefLinks();
+  const html = markdownToHtml(content ?? '', links?.resolve).replace(/^\s*<p>/, '').replace(/<\/p>\s*$/, '');
+  const onClick = links ? refChipClickHandler(links.go) : undefined;
+  return <span className="inline-md" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // Compact status as a glyph: ✓ done, ✕ failed, ◌ running (spins),
@@ -3859,7 +3900,7 @@ function formatDateTime(value: string | undefined): string {
   return Number.isNaN(d.valueOf()) ? value : d.toLocaleString([], { hour12: false });
 }
 
-function Status({ value, label }: { value: string; label?: string }) {
+export function Status({ value, label }: { value: string; label?: string }) {
   return <span className={`status status-${value}`}>{label ?? value}</span>;
 }
 

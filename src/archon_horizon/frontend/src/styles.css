@@ -1559,6 +1559,27 @@ button.danger { color: var(--red); }
 .commit-empty { padding: 4px 14px 10px; }
 .commit-loading { padding: 10px 16px; }
 .commit-card .change-table { margin: 0 6px 8px; }
+.commit-summary {
+  padding: 0 14px 10px 38px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+.commit-summary > div > :first-child { margin-top: 8px; }
+.commit-summary > div > :last-child { margin-bottom: 0; }
+.timeline-load-more {
+  align-self: flex-start;
+  margin: 4px 0 6px 24px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+}
+.timeline-load-more:hover { text-decoration: underline; }
 .change-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .change-tabs { display: inline-flex; gap: 4px; }
 .change-tabs button { padding: 3px 10px; border: 1px solid var(--border); border-radius: 6px; background: none; cursor: pointer; font-size: 12px; color: var(--text-secondary); }
@@ -2186,3 +2207,102 @@ button.danger { color: var(--red); }
   .search-row-body { grid-template-columns: 1fr; }
   .search-latex { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 8px; }
 }
+
+/* ── Local-reference chips (clickable refs) ─────────────────────────────────
+   Reuse the shared --tag-* token system so light and (any future) dark theme
+   stay coherent; each reference kind gets its own tone. The chips are injected
+   into rendered markdown and also used directly on the board. */
+.ref-chip, a.ref-chip, .commit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--tag-border);
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  vertical-align: baseline;
+  max-width: 100%;
+}
+.ref-chip:hover, .commit-chip:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag-fg) 35%, transparent);
+}
+.tag-ref-roadmap { --tag-fg: var(--tag-purple-fg); --tag-bg: var(--tag-purple-bg); --tag-border: var(--tag-purple-border); }
+.tag-ref-task { --tag-fg: var(--tag-blue-fg); --tag-bg: var(--tag-blue-bg); --tag-border: var(--tag-blue-border); }
+.tag-ref-inbox { --tag-fg: var(--tag-cyan-fg); --tag-bg: var(--tag-cyan-bg); --tag-border: var(--tag-cyan-border); }
+.tag-ref-node { --tag-fg: var(--tag-green-fg); --tag-bg: var(--tag-green-bg); --tag-border: var(--tag-green-border); }
+.tag-ref-commit { --tag-fg: var(--tag-amber-fg); --tag-bg: var(--tag-amber-bg); --tag-border: var(--tag-amber-border); }
+.tag-ref-owner { --tag-fg: var(--accent-text); --tag-bg: var(--accent-bg); --tag-border: var(--accent-ring); }
+.tag-ref-milestone { --tag-fg: var(--tag-slate-fg); --tag-bg: var(--tag-slate-bg); --tag-border: var(--tag-slate-border); }
+.commit-chip-sha { font-weight: 700; flex: none; }
+.commit-chip-subject { font-weight: 500; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Board page (GitHub-Projects style) ─────────────────────────────────────*/
+.board-page .tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--tag-border);
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.board-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.board-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 16px; padding: 0 5px; border-radius: 999px;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  font-size: 10px; font-weight: 700;
+}
+.board-milestone { margin-bottom: 22px; }
+.board-milestone-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.board-milestone-head h3 { margin: 0; font-size: 14px; }
+/* Columns scroll horizontally inside their own container — never the page. */
+.board-columns {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.board-column {
+  display: flex; flex-direction: column; min-width: 0;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px;
+}
+.board-column-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.board-column-cards { display: flex; flex-direction: column; gap: 8px; min-height: 8px; }
+.board-column-empty { color: var(--text-muted); font-size: 12px; text-align: center; padding: 6px 0; }
+.board-card {
+  background: var(--bg-primary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 9px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.board-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.board-card-id { font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--text-secondary); }
+.board-card-head .priority-chip { margin-left: auto; }
+.board-card-title { font-size: 13px; font-weight: 600; line-height: 1.35; margin-bottom: 6px; overflow-wrap: anywhere; }
+.board-card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.board-owner-empty { color: var(--text-muted); font-size: 11px; font-style: italic; }
+.board-running-badge {
+  color: var(--tag-green-fg); font-size: 10px; font-weight: 800; letter-spacing: 0.03em;
+  animation: board-pulse 1.6s ease-in-out infinite;
+}
+.board-card-running { border-color: var(--tag-green-border); box-shadow: 0 0 0 1px var(--tag-green-border), 0 1px 2px rgba(15, 23, 42, 0.04); }
+@keyframes board-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.board-card-details { margin-top: 6px; }
+.board-card-details summary { cursor: pointer; font-size: 11px; color: var(--text-secondary); }
+.board-card-detail-body { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.board-detail-row { display: flex; gap: 6px; font-size: 11px; }
+.board-detail-row > span { flex: 0 0 62px; color: var(--text-muted); }
+.board-detail-row > div { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.board-commits { flex-direction: column; align-items: flex-start; }

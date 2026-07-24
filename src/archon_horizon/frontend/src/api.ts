@@ -77,7 +77,7 @@ export interface BlueprintChaptersResponse {
 export const getBlueprintChapters = (project: string) =>
   getJson<BlueprintChaptersResponse>(`/api/blueprint/chapters?project=${encodeURIComponent(project)}`);
 
-// Full (heavy) per-project blueprint DAG — node statements, proofs, and Lean
+// Full (heavy) per-project hgraph cache — node statements, proofs, and Lean
 // source — fetched on demand by the Blueprint and DAG pages. Kept out of
 // /api/state (which now carries only light DAG nodes) so the 5s poll stays small.
 export interface BlueprintDagResponse {
@@ -126,6 +126,12 @@ export const getSourceFile = (project: string, path: string) =>
 export const getGitLog = (project: string) =>
   getJson<{ commits: GitCommit[] }>(`/api/git/log?project=${encodeURIComponent(project)}`);
 
+// Resolve a bare (possibly abbreviated) commit SHA to its subject + owning
+// project. 404s (throws) when the SHA is not found in any project's history.
+export interface CommitInfo { sha: string; short_sha: string; subject: string; project: string }
+export const getCommit = (sha: string) =>
+  getJson<CommitInfo>(`/api/commit?sha=${encodeURIComponent(sha)}`);
+
 export type ChangeCategory = 'lean' | 'blueprint' | 'other';
 export interface SessionChangeFile {
   path: string;
@@ -164,6 +170,7 @@ export interface CommitChange {
   sha: string;
   short_sha: string;
   subject: string;
+  summary?: string;
   created_at?: string;
   role?: string;
   kind: string; // 'agent' | 'integration' | …
