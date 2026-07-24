@@ -17,7 +17,10 @@ from archon_horizon.core.roadmap import (
     apply_hierarchy,
     hierarchy_status_warnings,
     item_depth,
+    item_milestone,
+    item_owner,
     item_parent,
+    item_pinned_commits,
     ordered_tree,
     subtree,
     subtree_progress,
@@ -26,7 +29,7 @@ from archon_horizon.core.scope import ItemScope
 from archon_horizon.log import log
 from archon_horizon.store import serde
 
-from .shared import agent_author, emit_json, history_entry as _history_entry, load_workspace, roadmap_store, with_provenance
+from .shared import agent_author, emit_json, history_entry as _history_entry, load_workspace, provenance_project, roadmap_store, with_provenance
 
 app = typer.Typer(help="Read and update the roadmap.", no_args_is_help=True)
 
@@ -52,7 +55,44 @@ def _item_dict(item: RoadmapItem) -> dict:
         "scope": serde.to_jsonable(item.scope),
         "parent": item_parent(item),
         "depth": item_depth(item),
+        "owner": item_owner(item),
+        "milestone": item_milestone(item),
+        "pinned_commits": list(item_pinned_commits(item)),
     }
+
+
+def _apply_board_meta(
+    metadata: dict,
+    *,
+    owner: str | None = None,
+    milestone: str | None = None,
+    pin: tuple[str, ...] = (),
+    unpin: tuple[str, ...] = (),
+) -> dict:
+    """Fold board fields into an item's metadata. ``owner``/``milestone`` are only
+    touched when not ``None``; an empty string clears them. ``pin``/``unpin`` add
+    or remove commit SHAs (newest pinned first, de-duplicated)."""
+    meta = dict(metadata)
+    for key, value in (("owner", owner), ("milestone", milestone)):
+        if value is not None:
+            stripped = value.strip()
+            if stripped:
+                meta[key] = stripped
+            else:
+                meta.pop(key, None)
+    if pin or unpin:
+        current = [str(s).strip() for s in meta.get("pinned_commits", []) if str(s).strip()]
+        for sha in pin:
+            sha = sha.strip()
+            if sha and sha not in current:
+                current.insert(0, sha)
+        drop = {s.strip() for s in unpin}
+        current = [s for s in current if s not in drop]
+        if current:
+            meta["pinned_commits"] = current
+        else:
+            meta.pop("pinned_commits", None)
+    return meta
 
 
 def _hierarchy_meta(base: dict, depth: int | None, parent: str | None) -> dict:
@@ -101,6 +141,8 @@ def list_items(
     ctx: typer.Context,
     focus: str | None = typer.Option(None, "--focus", help="Show only this item and its descendants (its subtree)."),
     max_depth: int | None = typer.Option(None, "--max-depth", help="Hide items deeper than this level (0 = top-level only)."),
+    milestone: str | None = typer.Option(None, "--milestone", help="Only items in this milestone label."),
+    owner: str | None = typer.Option(None, "--owner", help="Only items owned by this team/agent."),
     as_json: bool = _JSON,
 ) -> None:
     """List roadmap items as an indented outline (parents above their sub-items)."""
@@ -108,6 +150,10 @@ def list_items(
     rows = subtree(items, focus) if focus else ordered_tree(items)
     if max_depth is not None:
         rows = [(it, d) for it, d in rows if d <= max_depth]
+    if milestone is not None:
+        rows = [(it, d) for it, d in rows if item_milestone(it) == milestone]
+    if owner is not None:
+        rows = [(it, d) for it, d in rows if item_owner(it) == owner]
     progress = subtree_progress(items)
     if as_json:
         emit_json({
@@ -138,8 +184,17 @@ def list_items(
             return f"{item.status.value} · {done}/{total} done"
         return item.status.value
 
+    def _title_cell(item: RoadmapItem, depth: int) -> str:
+        tags = []
+        if item_milestone(item):
+            tags.append(f"◇{item_milestone(item)}")
+        if item_owner(item):
+            tags.append(f"@{item_owner(item)}")
+        suffix = f"  [{' '.join(tags)}]" if tags else ""
+        return "  " * depth + item.title + suffix
+
     log.results_table(
-        [("  " * d + i.id, _status_cell(i), "  " * d + i.title) for i, d in rows],
+        [("  " * d + i.id, _status_cell(i), _title_cell(i, d)) for i, d in rows],
         title="Roadmap" + (f" · {focus} subtree" if focus else ""),
     )
     _warn_roadmap(items)
@@ -157,6 +212,10 @@ def set_item(
     kind: str | None = typer.Option(None, "--kind", help="proof|blueprint|refactor|workspace|report."),
     parent: str | None = typer.Option(None, "--parent", help="Nest under this item id; pass '' to un-nest to top level."),
     depth: int | None = typer.Option(None, "--depth", help="Indentation level when there is no --parent (0 = top level)."),
+    owner: str | None = typer.Option(None, "--owner", help="Team/agent responsible; pass '' to clear."),
+    milestone: str | None = typer.Option(None, "--milestone", help="Milestone label for grouping/filtering; pass '' to clear."),
+    pin_commit: list[str] = typer.Option((), "--pin-commit", help="Pin a commit SHA as a deliverable (repeatable)."),
+    unpin_commit: list[str] = typer.Option((), "--unpin-commit", help="Remove a pinned commit SHA (repeatable)."),
     author: str | None = typer.Option(None, "--author", help="Who is making the change (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
@@ -188,19 +247,30 @@ def set_item(
     if parent is not None or depth is not None:
         store.append_history(item_id, _history_entry(actor, "nested",
                              note=(f"parent={parent.strip() or 'none'}" if parent is not None else f"depth={depth}")))
-    edited_fields = [f for f in changes if f != "status"]
+    board_fields = []
+    if owner is not None:
+        board_fields.append("owner")
+    if milestone is not None:
+        board_fields.append("milestone")
+    if pin_commit or unpin_commit:
+        board_fields.append("pinned_commits")
+    edited_fields = [f for f in changes if f != "status"] + board_fields
     if edited_fields:
         store.append_history(item_id, _history_entry(actor, "edited",
                              note=", ".join(edited_fields) + " updated"))
     metadata = _hierarchy_meta(
         {**item.metadata, "updated_at": utc_now().isoformat()}, depth, parent
     )
+    metadata = _apply_board_meta(
+        metadata, owner=owner, milestone=milestone,
+        pin=tuple(pin_commit), unpin=tuple(unpin_commit),
+    )
     items[idx] = dataclasses.replace(item, metadata=metadata, **changes)
     _save(store, tuple(items))
     if as_json:
         emit_json({**_item_dict(items[idx]), "warnings": _roadmap_warnings(items)})
         return
-    log.success(f"Updated roadmap item {item_id} ({', '.join(changes) or 'no fields'}).")
+    log.success(f"Updated roadmap item {item_id} ({', '.join([*changes, *board_fields]) or 'no fields'}).")
     _warn_roadmap(items)
 
 
@@ -209,7 +279,7 @@ def add_item(
     ctx: typer.Context,
     item_id: str = typer.Option(..., "--id", help="New item id, e.g. A.4."),
     title: str = typer.Option(..., "--title", help="Item title."),
-    projects: list[str] = typer.Option(..., "--project", help="Project the item targets (repeatable)."),
+    projects: list[str] = typer.Option((), "--project", help="Project the item targets (repeatable); defaults to the session's project."),
     summary: str | None = typer.Option(None, "--summary"),
     summary_file: str | None = typer.Option(None, "--summary-file"),
     status: str = typer.Option("pending", "--status"),
@@ -217,11 +287,19 @@ def add_item(
     priority: str = typer.Option("normal", "--priority"),
     parent: str | None = typer.Option(None, "--parent", help="Nest the new item under this existing item id."),
     depth: int | None = typer.Option(None, "--depth", help="Indentation level when there is no --parent (0 = top level)."),
+    owner: str | None = typer.Option(None, "--owner", help="Team/agent responsible."),
+    milestone: str | None = typer.Option(None, "--milestone", help="Milestone label for grouping/filtering."),
     author: str | None = typer.Option(None, "--author", help="Who is adding the item (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
     """Add a new roadmap item (optionally nested under a --parent, so the roadmap
     reads as an outline rather than a flat list)."""
+    if not projects:
+        inferred = provenance_project()
+        if inferred:
+            projects = [inferred]
+        else:
+            raise typer.BadParameter("pass --project (no session project to default from)")
     store = _store(ctx)
     items = list(store.load().items)
     if any(it.id == item_id for it in items):
@@ -239,8 +317,11 @@ def add_item(
         kind=RoadmapKind(kind.lower()),
         priority=priority,
         scope=ItemScope(projects=tuple(projects)),
-        metadata=_hierarchy_meta(
-            with_provenance({"author": actor, "created_at": utc_now().isoformat()}), depth, parent
+        metadata=_apply_board_meta(
+            _hierarchy_meta(
+                with_provenance({"author": actor, "created_at": utc_now().isoformat()}), depth, parent
+            ),
+            owner=owner, milestone=milestone,
         ),
     )
     items.append(item)

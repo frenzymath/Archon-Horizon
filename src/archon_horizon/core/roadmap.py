@@ -110,6 +110,28 @@ def item_depth(item: RoadmapItem) -> int:
         return 0
 
 
+def item_owner(item: RoadmapItem) -> str:
+    """The team/agent responsible for this item, or ``""``. A categorization aid,
+    not an assignment lock — who is *currently* running it is derived live."""
+    raw = item.metadata.get("owner")
+    return str(raw).strip() if raw else ""
+
+
+def item_milestone(item: RoadmapItem) -> str:
+    """The milestone label grouping this item, or ``""``. A free string used for
+    visual grouping and filtering on the board — orthogonal to the parent tree."""
+    raw = item.metadata.get("milestone")
+    return str(raw).strip() if raw else ""
+
+
+def item_pinned_commits(item: RoadmapItem) -> tuple[str, ...]:
+    """Commit SHAs pinned to this item as concrete deliverables (newest first)."""
+    raw = item.metadata.get("pinned_commits")
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(str(sha).strip() for sha in raw if str(sha).strip())
+
+
 def ordered_tree(items: Sequence[RoadmapItem]) -> list[tuple[RoadmapItem, int]]:
     """Items in pre-order tree traversal, each paired with its *effective* depth.
 
