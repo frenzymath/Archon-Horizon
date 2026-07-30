@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
-import { editInbox, editRoadmap, editTask, getState, getBlueprints, getProjects, getProjectHistory, getReport, getTranscript, getTranscripts, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectTrendPoint, type SessionChangeFile, type CommitChange, type FileDiff } from './api';
+import { editInbox, editRoadmap, editTask, getState, getBlueprints, getProjects, getProjectMetrics, getReport, getTranscriptPage, getTranscripts, getSessionFileDiff, getSessionCommits, searchDeclarations, getBlueprintChapters, type ProjectStat, type ProjectMetrics, type SessionChangeFile, type CommitChange, type FileDiff, type SessionInboxActivity, type SessionRoadmapActivity } from './api';
 import { isStaticDashboard } from './staticMode';
 import { version as APP_VERSION } from '../package.json';
 import MarkdownBlock, { markdownToHtml } from './components/MarkdownBlock';
@@ -11,7 +11,7 @@ import BlueprintPage from './BlueprintPage';
 import DagPage from './DagPage';
 import LeanPage from './LeanPage';
 import BoardPage from './BoardPage';
-import { RefLinkProvider, useRefResolver, useRefLinks, refChipClickHandler } from './refs';
+import { RefLinkProvider, useRefResolver, useRefLinks, refChipClickHandler, inboxOwnerTask, inboxReadBy, RefChip } from './refs';
 
 const STATIC = isStaticDashboard();
 // Triage labels (must match core/labels.py). The UI gate vocabulary stays
@@ -19,15 +19,17 @@ const STATIC = isStaticDashboard();
 const ARCHON_ACCEPT = 'agent-ready';
 const ARCHON_PENDING = 'not-ready';
 const ARCHON_REJECTED = 'rejected';
-const INBOX_KIND_OPTIONS = ['hint', 'issue', 'protection', 'info', 'memory'];
+const INBOX_KIND_OPTIONS = ['conversation', 'hint', 'issue', 'protection', 'info', 'memory'];
 const INBOX_PROVIDER_OPTIONS = ['local', 'github'];
 const INBOX_STATUS_OPTIONS = ['open', 'closed', 'archived'];
 // Resolved and archived items remain available, but triage starts with live work.
 const INBOX_STATUS_DEFAULT = ['open'];
 const INBOX_GATE_OPTIONS = ['accept', 'pending', 'reject', 'clear'];
+const INBOX_WORKSPACE_SCOPE = '__workspace__';
 const TASK_STATUS_OPTIONS = ['queued', 'running', 'blocked', 'done', 'failed', 'cancelled'];
 const TASK_PRIORITY_OPTIONS = ['urgent', 'high', 'normal', 'low'];
 const ROADMAP_STATUS_OPTIONS = ['active', 'pending', 'blocked', 'done', 'rejected'];
+const ROADMAP_KIND_OPTIONS = ['proof', 'blueprint', 'refactor', 'workspace', 'report'];
 
 type HorizonState = {
   workspace: string;
@@ -96,12 +98,21 @@ export function App() {
     // Blueprints ride a separate endpoint (they change only on publish/sync;
     // its ETag makes the poll a 304), merged back so consumers still read
     // `state.blueprints`. A blueprint fetch failure never blocks the state.
-    Promise.all([getState(), getBlueprints().catch(() => ({}))])
-      .then(([next, blueprints]) => {
-        setState(
-          next && next.blueprints === undefined ? { ...next, blueprints } : next,
-        );
+    getState()
+      .then((next) => {
+        setState((current) => (
+          next && next.blueprints === undefined && current?.blueprints
+            ? { ...next, blueprints: current.blueprints }
+            : next
+        ));
         setIsError(false);
+        // Do not make the dashboard shell wait for blueprint data. Its own ETag
+        // keeps later polls cheap, and blueprint consumers update when it lands.
+        getBlueprints()
+          .then((blueprints) => setState((current) => (
+            current ? { ...current, blueprints } : current
+          )))
+          .catch(() => undefined);
       })
       .catch(() => setIsError(true));
   };
@@ -198,7 +209,7 @@ function Overview({ state }: PageProps) {
         </div>
       </section>
 
-      <ProjectsPanel />
+      <ProjectsPanel projectNames={state.projects ?? []} />
 
       <Panel title="Recent Runs" subtitle="Run logs, rounds, sessions, and transcript links" to="/logs">
         <RunList runs={recentRuns} />
@@ -219,201 +230,86 @@ function Overview({ state }: PageProps) {
   );
 }
 
-function ProjectsPanel() {
-  const [data, setData] = useState<{ projects: ProjectStat[]; totals: Omit<ProjectStat, 'name'> } | null>(null);
-  const [selected, setSelected] = useState('');
-  const [historyLimit, setHistoryLimit] = useState(10);
-  const [historyByProject, setHistoryByProject] = useState<Record<string, ProjectTrendPoint[]>>({});
-  const [historyLoading, setHistoryLoading] = useState('');
-  useEffect(() => { getProjects().then(setData).catch(() => setData(null)); }, []);
+function ProjectsPanel({ projectNames }: { projectNames: string[] }) {
+  const [indexProjects, setIndexProjects] = useState<ProjectStat[]>([]);
+  const [metrics, setMetrics] = useState<Record<string, ProjectMetrics | false>>({});
+  const projectKey = projectNames.join('\u0000');
+  const projects = useMemo(() => {
+    const indexed = new Map(indexProjects.map((project) => [project.name, project]));
+    const names = [...new Set([...projectNames, ...indexProjects.map((project) => project.name)])];
+    return names.map((name) => indexed.get(name) ?? { name, depends_on: [] });
+  }, [projectKey, indexProjects]);
+  const metricsKey = projects.map((project) => project.name).join('\u0000');
+
   useEffect(() => {
-    if (!data?.projects.length) return;
-    if (!selected || !data.projects.some((p) => p.name === selected)) {
-      setSelected(data.projects[0].name);
-    }
-  }, [data, selected]);
-  useEffect(() => {
-    const key = `${selected}:${historyLimit}`;
-    if (!selected || historyByProject[key]) return;
     let cancelled = false;
-    setHistoryLoading(key);
-    getProjectHistory(selected, historyLimit)
-      .then((result) => {
-        if (cancelled) return;
-        setHistoryByProject((prev) => ({ ...prev, [key]: result.history ?? [] }));
-      })
-      .catch(() => {
-        if (!cancelled) setHistoryByProject((prev) => ({ ...prev, [key]: [] }));
-      })
-      .finally(() => {
-        if (!cancelled) setHistoryLoading((current) => current === key ? '' : current);
-      });
+    getProjects()
+      .then((data) => { if (!cancelled) setIndexProjects(data.projects ?? []); })
+      .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [selected, historyLimit, historyByProject]);
-  if (!data) {
-    return (
-      <Panel title="Workspace" subtitle="Per-project Lean size, open sorries, and blueprint coverage">
-        <div className="project-trend-empty">Loading workspace metrics...</div>
-      </Panel>
-    );
-  }
-  if (data.projects.length === 0) return null;
-  const selectedProject = data.projects.find((p) => p.name === selected) ?? data.projects[0];
-  const historyKey = `${selectedProject.name}:${historyLimit}`;
-  const selectedHistory = historyByProject[historyKey] ?? [];
-  const fmt = (n: number) => n.toLocaleString();
+  }, [projectKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let cursor = 0;
+    setMetrics({});
+    const loadWorker = async () => {
+      while (!cancelled && cursor < projects.length) {
+        const project = projects[cursor++];
+        try {
+          const value = await getProjectMetrics(project.name);
+          if (!cancelled) setMetrics((current) => ({ ...current, [project.name]: value }));
+        } catch {
+          if (!cancelled) setMetrics((current) => ({ ...current, [project.name]: false }));
+        }
+      }
+    };
+    void loadWorker();
+    void loadWorker();
+    return () => { cancelled = true; };
+  }, [metricsKey]);
+
+  if (projects.length === 0) return null;
+  const metricCell = (metric: ProjectMetrics | false | undefined, field: keyof Omit<ProjectMetrics, 'name'>) => {
+    if (metric === false) return <span className="empty">Unavailable</span>;
+    if (!metric) return <span className="project-metric-loading">Loading...</span>;
+    return metric[field].toLocaleString();
+  };
   return (
-    <Panel title="Workspace" subtitle="Per-project Lean size, open sorries, and blueprint coverage">
-      <ProjectTrendChart
-        projects={data.projects}
-        selected={selectedProject.name}
-        onSelect={setSelected}
-        limit={historyLimit}
-        onLimitChange={setHistoryLimit}
-        points={selectedHistory}
-        loading={historyLoading === historyKey && !historyByProject[historyKey]}
-      />
+    <Panel title="Workspace" subtitle="Per-project Lean metrics load independently">
       <div className="table-wrap">
         <table className="projects-table">
           <thead>
             <tr>
-              <th>Project</th><th>Lean files</th><th>LOC</th><th>Code</th><th>Open sorries</th><th>Blueprint proved</th>
+              <th>Project</th><th>Lean files</th><th>LOC</th><th>Code</th><th>Open sorries</th>
             </tr>
           </thead>
           <tbody>
-            {data.projects.map((p) => (
-              <tr key={p.name}>
+            {projects.map((project) => {
+              const metric = metrics[project.name];
+              return <tr key={project.name}>
                 <td>
-                  <strong>{p.name}</strong>
-                  {(p.depends_on ?? []).length > 0 && (
+                  <strong>{project.name}</strong>
+                  {(project.depends_on ?? []).length > 0 && (
                     <div className="project-deps">
-                      depends on {(p.depends_on ?? []).join(', ')}
+                      depends on {(project.depends_on ?? []).join(', ')}
                     </div>
                   )}
                 </td>
-                <td>{fmt(p.lean_files)}</td>
-                <td>{fmt(p.loc)}</td>
-                <td>{fmt(p.loc_code)}</td>
-                <td>{p.sorries > 0 ? <span className="sorry-pill">{p.sorries}</span> : <span className="ok-pill">0</span>}</td>
-                <td><BlueprintProgress ok={p.blueprint_leanok} total={p.blueprint_nodes} /></td>
-              </tr>
-            ))}
+                <td>{metricCell(metric, 'lean_files')}</td>
+                <td>{metricCell(metric, 'loc')}</td>
+                <td>{metricCell(metric, 'loc_code')}</td>
+                <td>{metric && metric.sorries > 0
+                  ? <span className="sorry-pill">{metric.sorries.toLocaleString()}</span>
+                  : metric
+                    ? <span className="ok-pill">0</span>
+                    : metricCell(metric, 'sorries')}</td>
+              </tr>;
+            })}
           </tbody>
         </table>
       </div>
     </Panel>
-  );
-}
-
-function ProjectTrendChart({
-  projects,
-  selected,
-  onSelect,
-  limit,
-  onLimitChange,
-  points,
-  loading,
-}: {
-  projects: ProjectStat[];
-  selected: string;
-  onSelect: (name: string) => void;
-  limit: number;
-  onLimitChange: (limit: number) => void;
-  points: ProjectTrendPoint[];
-  loading: boolean;
-}) {
-  const project = projects.find((p) => p.name === selected) ?? projects[0];
-  const datedPoints = points.filter((p) => p.date);
-  const latest = datedPoints[datedPoints.length - 1];
-  return (
-    <div className="project-trend">
-      <div className="project-trend-toolbar">
-        <select value={project?.name ?? ''} onChange={(e) => onSelect(e.target.value)} aria-label="Project trend">
-          {projects.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-        </select>
-        <div className="project-trend-limit" role="group" aria-label="Commit history length">
-          {[10, 25, 50].map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={value === limit ? 'active' : ''}
-              onClick={() => onLimitChange(value)}
-            >
-              {value}
-            </button>
-          ))}
-        </div>
-        <div className="project-trend-stats">
-          <span>{(latest?.sorries ?? project?.sorries ?? 0).toLocaleString()} open sorries</span>
-          {datedPoints.length > 0 && <span>{datedPoints.length.toLocaleString()} commits sampled</span>}
-          {loading && <span>loading history...</span>}
-        </div>
-      </div>
-      {datedPoints.length >= 2 ? (
-        <SorryTrendSvg points={datedPoints} />
-      ) : (
-        <div className="project-trend-empty">{loading ? 'Loading sorry history...' : 'No commit history for this project yet.'}</div>
-      )}
-    </div>
-  );
-}
-
-function SorryTrendSvg({ points }: { points: ProjectTrendPoint[] }) {
-  const w = 760;
-  const h = 210;
-  const pad = { left: 42, right: 18, top: 18, bottom: 34 };
-  const times = points.map((p) => Date.parse(p.date)).filter((n) => Number.isFinite(n));
-  const minT = Math.min(...times);
-  const maxT = Math.max(...times);
-  const sorries = points.map((p) => p.sorries);
-  const maxS = Math.max(1, ...sorries);
-  const x = (p: ProjectTrendPoint, i: number) => {
-    const t = Date.parse(p.date);
-    if (!Number.isFinite(t) || minT === maxT) {
-      return pad.left + (i / Math.max(1, points.length - 1)) * (w - pad.left - pad.right);
-    }
-    return pad.left + ((t - minT) / (maxT - minT)) * (w - pad.left - pad.right);
-  };
-  const ySorry = (value: number) => pad.top + (1 - value / maxS) * (h - pad.top - pad.bottom);
-  const barBase = h - pad.bottom;
-  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p, i).toFixed(1)} ${ySorry(p.sorries).toFixed(1)}`).join(' ');
-  const firstDate = formatShortDate(points[0]?.date);
-  const lastDate = formatShortDate(points[points.length - 1]?.date);
-  return (
-    <svg className="project-trend-chart" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Open sorries over commit history">
-      <line className="trend-axis" x1={pad.left} y1={barBase} x2={w - pad.right} y2={barBase} />
-      <line className="trend-axis" x1={pad.left} y1={pad.top} x2={pad.left} y2={barBase} />
-      {[0, 0.5, 1].map((n) => {
-        const y = ySorry(maxS * n);
-        return <line key={n} className="trend-grid" x1={pad.left} y1={y} x2={w - pad.right} y2={y} />;
-      })}
-      <path className="trend-sorry-line" d={path} />
-      {points.map((p, i) => (
-        <circle key={p.sha} className="trend-sorry-node" cx={x(p, i)} cy={ySorry(p.sorries)} r={4}>
-          <title>{formatDateTime(p.date)} · {p.sorries.toLocaleString()} open sorries · {p.short_sha} · {p.subject}</title>
-        </circle>
-      ))}
-      <text className="trend-label" x={pad.left} y={13}>{maxS.toLocaleString()} sorry</text>
-      <text className="trend-label" x={pad.left} y={h - 10}>{firstDate}</text>
-      <text className="trend-label trend-label-end" x={w - pad.right} y={h - 10}>{lastDate}</text>
-    </svg>
-  );
-}
-
-function formatShortDate(value: string | undefined) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return '';
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-}
-
-function BlueprintProgress({ ok, total }: { ok: number; total: number }) {
-  if (!total) return <span className="empty">No blueprint nodes</span>;
-  const pct = Math.round((ok / total) * 100);
-  return (
-    <div className="blueprint-progress" title={`${ok} proved or Lean-linked nodes out of ${total}`}>
-      <span className="blueprint-progress-text">{pct}% <span>{ok} of {total}</span></span>
-    </div>
   );
 }
 
@@ -1075,6 +971,7 @@ function visibleRoadmapRows(
 
 function RoadmapPage({ state, reload }: PageProps) {
   const [message, setMessage] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  const [creating, setCreating] = useState(false);
   const items = state.roadmap?.items ?? [];
   const allProjects = state.projects || [];
 
@@ -1137,12 +1034,7 @@ function RoadmapPage({ state, reload }: PageProps) {
   return (
     <div className="page">
       <Panel title="Roadmap" subtitle={`${filteredItems.length} item${filteredItems.length === 1 ? '' : 's'}`}>
-        {!STATIC && (
-          <details className="local-create">
-            <summary>New roadmap item</summary>
-            <RoadmapComposer runAction={runAction} projects={allProjects} parentOptions={items.map((i: any) => i.id)} />
-          </details>
-        )}
+        {STATIC && <div className="notice info">This roadmap snapshot is read-only. Editing is available in the live dashboard.</div>}
         <div className="filter-stack">
           {roadmapProjectOptions.length > 0 && (
             <div className="search-facet-group"><span className="search-facet-label">Projects</span>
@@ -1151,6 +1043,9 @@ function RoadmapPage({ state, reload }: PageProps) {
           )}
           <div className="search-facet-group"><span className="search-facet-label">Status</span>
             <ChipMultiSelect options={ROADMAP_STATUS_OPTIONS} selected={statusFilter} onToggle={toggleStatusFilter} label="Roadmap status filter" />
+            {!STATIC && <button className="primary roadmap-add-inline" type="button" onClick={() => setCreating((open) => !open)}>
+              {creating ? 'Close editor' : '+ Add item'}
+            </button>}
           </div>
           {parentIds.size > 0 && (
             <div className="search-facet-group"><span className="search-facet-label">Tree</span>
@@ -1159,6 +1054,17 @@ function RoadmapPage({ state, reload }: PageProps) {
             </div>
           )}
         </div>
+        {!STATIC && creating && (
+          <div className="roadmap-editor-shell">
+            <RoadmapEditor
+              runAction={runAction}
+              projects={allProjects}
+              parentOptions={items.map((i: any) => i.id)}
+              onCancel={() => setCreating(false)}
+              onSaved={() => setCreating(false)}
+            />
+          </div>
+        )}
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
         {(state.roadmap_warnings ?? []).map((w: string) => (
           // Parent/child status inconsistencies — informational only; the CLI/agent
@@ -1191,7 +1097,12 @@ function RoadmapPage({ state, reload }: PageProps) {
                       <span className="tree-toggle-spacer" aria-hidden="true" />
                     )}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <RoadmapItemCard item={item} runAction={runAction} projects={allProjects} />
+                      <RoadmapItemCard
+                        item={item}
+                        runAction={runAction}
+                        projects={allProjects}
+                        parentOptions={items.map((candidate: any) => candidate.id)}
+                      />
                     </div>
                   </div>
                 ))}
@@ -1205,47 +1116,115 @@ function RoadmapPage({ state, reload }: PageProps) {
   );
 }
 
-function RoadmapComposer({ runAction, projects, parentOptions = [] }: { runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>, projects: string[], parentOptions?: string[] }) {
-  const [title, setTitle] = useState('');
-  const [summary, setSummary] = useState('');
-  const [selProjects, setSelProjects] = useState<string[]>([]);
-  const [author, setAuthor] = useState('');
-  const [parent, setParent] = useState('');
+export function RoadmapEditor({
+  item,
+  runAction,
+  projects,
+  parentOptions = [],
+  initialMilestone = '',
+  requireMilestone = false,
+  onCancel,
+  onSaved,
+}: {
+  item?: any;
+  runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>;
+  projects: string[];
+  parentOptions?: string[];
+  initialMilestone?: string;
+  requireMilestone?: boolean;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const editing = !!item;
+  const [itemId, setItemId] = useState('');
+  const [title, setTitle] = useState(item?.title ?? '');
+  const [summary, setSummary] = useState(item?.summary ?? '');
+  const [selProjects, setSelProjects] = useState<string[]>(item?.projects ?? []);
+  const [author, setAuthor] = useState('human');
+  const [status, setStatus] = useState(item?.status ?? 'pending');
+  const [kind, setKind] = useState(item?.kind ?? 'proof');
+  const [priority, setPriority] = useState(item?.priority ?? 'normal');
+  const [parent, setParent] = useState(roadmapParent(item));
+  const [depth, setDepth] = useState(item?.metadata?.depth === undefined ? '' : String(item.metadata.depth));
+  const [owner, setOwner] = useState(item?.metadata?.owner ?? '');
+  const [milestone, setMilestone] = useState(item?.metadata?.milestone ?? initialMilestone);
+  const [dependsOn, setDependsOn] = useState((item?.depends_on ?? []).join(', '));
+  const [inboxRefs, setInboxRefs] = useState((item?.inbox_refs ?? []).join(', '));
+  const [taskRefs, setTaskRefs] = useState((item?.task_refs ?? []).join(', '));
+  const [pinnedCommits, setPinnedCommits] = useState((item?.metadata?.pinned_commits ?? []).join(', '));
   const [busy, setBusy] = useState(false);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!title.trim() || !author.trim() || busy) return;
+    if (
+      !title.trim()
+      || !author.trim()
+      || selProjects.length === 0
+      || (requireMilestone && !milestone.trim())
+      || busy
+    ) return;
     setBusy(true);
     runAction({
-      action: 'add',
+      action: editing ? 'edit' : 'add',
+      ...(editing ? { id: item.id } : itemId.trim() ? { id: itemId.trim() } : {}),
       title: title.trim(),
       summary: summary.trim(),
       projects: selProjects,
       author: author.trim(),
-      ...(parent.trim() ? { parent: parent.trim() } : {})
-    }, 'Roadmap item added.')
+      status,
+      kind,
+      priority,
+      parent: parent.trim(),
+      ...(depth.trim() ? { depth: Number(depth) } : {}),
+      owner: owner.trim(),
+      milestone: milestone.trim(),
+      depends_on: splitList(dependsOn),
+      inbox_refs: splitList(inboxRefs),
+      task_refs: splitList(taskRefs),
+      pinned_commits: splitList(pinnedCommits),
+    }, editing ? 'Roadmap item updated.' : 'Roadmap item added.')
       .then((ok) => {
         if (!ok) return;
-        setTitle('');
-        setSummary('');
-        setAuthor('');
-        setSelProjects([]);
-        setParent('');
+        onSaved();
       })
       .finally(() => setBusy(false));
   };
 
   return (
-    <form className="composer" onSubmit={submit}>
-      <label className="composer-label">Projects <span className="composer-hint">(pick one or more — shared items can span several)</span></label>
-      <MultiProjectSelect value={selProjects} onChange={setSelProjects} projects={projects} />
-      <input value={author} placeholder="Author (required)" onChange={(event) => setAuthor(event.target.value)} />
-      <input value={title} placeholder="Title" onChange={(event) => setTitle(event.target.value)} />
-      <input value={parent} placeholder="Parent item id (optional — nests this under it)" list="roadmap-parent-ids" onChange={(event) => setParent(event.target.value)} />
-      <datalist id="roadmap-parent-ids">{parentOptions.map((id) => <option key={id} value={id} />)}</datalist>
-      <textarea value={summary} placeholder="Summary (Markdown / LaTeX supported)" onChange={(event) => setSummary(event.target.value)} rows={3} />
-      <button className="primary" type="submit" disabled={!title.trim() || !author.trim() || busy}>Add roadmap item</button>
+    <form className="roadmap-editor" onSubmit={submit}>
+      <div className="roadmap-editor-grid">
+        {!editing && <label>Item ID <input value={itemId} placeholder="Generated when blank" onChange={(event) => setItemId(event.target.value)} /></label>}
+        <label className={editing ? 'roadmap-editor-wide' : ''}>Title <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} required /></label>
+        <label>Changed by <input value={author} onChange={(event) => setAuthor(event.target.value)} required /></label>
+        <label>Status <select value={status} onChange={(event) => setStatus(event.target.value)}>{ROADMAP_STATUS_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Kind <select value={kind} onChange={(event) => setKind(event.target.value)}>{ROADMAP_KIND_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Priority <select value={priority} onChange={(event) => setPriority(event.target.value)}>{TASK_PRIORITY_OPTIONS.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Parent <input value={parent} list={`roadmap-parent-${item?.id ?? 'new'}`} onChange={(event) => setParent(event.target.value)} /></label>
+        <datalist id={`roadmap-parent-${item?.id ?? 'new'}`}>{parentOptions.filter((id) => id !== item?.id).map((id) => <option key={id} value={id} />)}</datalist>
+        <label>Owner <input value={owner} onChange={(event) => setOwner(event.target.value)} /></label>
+        <label>Milestone <input value={milestone} onChange={(event) => setMilestone(event.target.value)} /></label>
+        <label>Fallback depth <input type="number" min="0" value={depth} onChange={(event) => setDepth(event.target.value)} /></label>
+      </div>
+      <fieldset className="roadmap-project-field">
+        <legend>Projects</legend>
+        <MultiProjectSelect value={selProjects} onChange={setSelProjects} projects={projects} />
+      </fieldset>
+      <label className="roadmap-editor-summary">Summary <textarea value={summary} onChange={(event) => setSummary(event.target.value)} rows={5} /></label>
+      <details className="roadmap-editor-advanced">
+        <summary>Links and dependencies</summary>
+        <div className="roadmap-editor-grid">
+          <label>Depends on <input value={dependsOn} onChange={(event) => setDependsOn(event.target.value)} placeholder="Comma-separated item IDs" /></label>
+          <label>Task refs <input value={taskRefs} onChange={(event) => setTaskRefs(event.target.value)} placeholder="Comma-separated task IDs" /></label>
+          <label>Inbox refs <input value={inboxRefs} onChange={(event) => setInboxRefs(event.target.value)} placeholder="Comma-separated inbox IDs" /></label>
+          <label>Pinned commits <input value={pinnedCommits} onChange={(event) => setPinnedCommits(event.target.value)} placeholder="Comma-separated SHAs" /></label>
+        </div>
+      </details>
+      {selProjects.length === 0 && <span className="roadmap-editor-error">Select at least one project.</span>}
+      {requireMilestone && !milestone.trim() && <span className="roadmap-editor-error">Set a milestone for this board item.</span>}
+      <div className="roadmap-editor-actions">
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button className="primary" type="submit" disabled={!title.trim() || !author.trim() || selProjects.length === 0 || (requireMilestone && !milestone.trim()) || busy}>{busy ? 'Saving...' : editing ? 'Save changes' : 'Create item'}</button>
+      </div>
     </form>
   );
 }
@@ -1261,15 +1240,81 @@ function InboxPage({ state, reload }: PageProps) {
   const providers = state.inbox_providers ?? {};
   const github = providers.github;
   const allItems = [...(state.local_inbox ?? []), ...(state.github_inbox ?? [])];
+  const runningTeams = useMemo(() => activeInboxTeams(state), [state.runs, state.tasks]);
+  const conversationDetails = useRef<HTMLDetailsElement>(null);
+  const [conversationTarget, setConversationTarget] = useState<string[]>([]);
+  const [conversationSeed, setConversationSeed] = useState(0);
   const audienceOptions = useMemo(() => {
-    const values = new Set(allItems.map((item) => String(item.audience || 'general')));
+    const values = new Set(allItems.flatMap((item) => {
+      const targets = inboxAudienceTargets(item);
+      return targets.length ? targets : ['general'];
+    }));
     return ['general', ...[...values].filter((value) => value !== 'general').sort()];
   }, [allItems]);
+  const ownerOptions = useMemo(() => {
+    const values = new Set(allItems.map((item) => inboxOwnerTask(item) || 'shared'));
+    return ['shared', ...[...values].filter((value) => value !== 'shared').sort()];
+  }, [allItems]);
+  const projectOptions = useMemo(
+    () => {
+      const scoped = [...new Set(allItems.flatMap((item) => scopeTargets(item, 'projects')))].sort();
+      const hasWorkspaceItems = allItems.some((item) => scopeTargets(item, 'projects').length === 0);
+      return hasWorkspaceItems ? [INBOX_WORKSPACE_SCOPE, ...scoped] : scoped;
+    },
+    [allItems],
+  );
+  const authorOptions = useMemo(
+    () => [...new Set(allItems.map(inboxAuthor).filter(Boolean))].sort(),
+    [allItems],
+  );
   const [audienceFilter, toggleAudienceFilter] = useFilterSelection(audienceOptions);
+  const [ownerFilter, toggleOwnerFilter] = useFilterSelection(ownerOptions);
+  const [projectFilter, toggleProjectFilter] = useFilterSelection(projectOptions);
+  const [authorFilter, toggleAuthorFilter] = useFilterSelection(authorOptions);
   const items = allItems
-    .filter((item) => matchesInboxFilters(item, { query, providerFilter, statusFilter, gateFilter, kinds: kindFilter, audienceFilter }))
+    .filter((item) => matchesInboxFilters(item, {
+      query,
+      providerFilter,
+      statusFilter,
+      gateFilter,
+      kinds: kindFilter,
+      audienceFilter,
+      ownerFilter,
+      projectFilter,
+      authorFilter,
+    }))
     .sort(compareInboxItems);
   const itemGroups = groupByDay(items, inboxActivityAt);
+  const conversationRecipients = useMemo<InboxRecipientOption[]>(() => {
+    const options: InboxRecipientOption[] = [
+      { value: 'human', label: 'Human' },
+      { value: 'horizon', label: 'All Horizon teams' },
+      ...runningTeams.map((team) => ({
+        value: team.recipient,
+        label: team.taskTitle || team.task || `Run ${team.run}`,
+        detail: `run ${team.run}${team.task ? ` · ${team.task}` : ''}`,
+      })),
+      ...(state.projects ?? []).map((project) => ({
+        value: `project:${project}`,
+        label: project,
+        detail: 'project',
+      })),
+    ];
+    return options.filter((option, index) => (
+      options.findIndex((candidate) => candidate.value === option.value) === index
+    ));
+  }, [runningTeams, state.projects]);
+
+  const startConversation = (recipient?: string) => {
+    setConversationTarget(recipient ? [recipient] : []);
+    setConversationSeed((value) => value + 1);
+    requestAnimationFrame(() => {
+      if (conversationDetails.current) {
+        conversationDetails.current.open = true;
+        conversationDetails.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  };
 
   const runAction = (payload: Record<string, unknown>, success?: string) => {
     setMessage(null);
@@ -1309,6 +1354,15 @@ function InboxPage({ state, reload }: PageProps) {
             <div className="search-facet-group"><span className="search-facet-label">To</span>
               <ChipMultiSelect options={audienceOptions} selected={audienceFilter} onToggle={toggleAudienceFilter} label="Inbox audience filter" />
             </div>
+            <div className="search-facet-group"><span className="search-facet-label">Owner</span>
+              <ChipMultiSelect options={ownerOptions} selected={ownerFilter} onToggle={toggleOwnerFilter} label="Inbox owner filter" />
+            </div>
+            {projectOptions.length > 0 && <div className="search-facet-group"><span className="search-facet-label">Project</span>
+              <ChipMultiSelect options={projectOptions} selected={projectFilter} onToggle={toggleProjectFilter} label="Inbox project filter" />
+            </div>}
+            {authorOptions.length > 0 && <div className="search-facet-group"><span className="search-facet-label">Author</span>
+              <ChipMultiSelect options={authorOptions} selected={authorFilter} onToggle={toggleAuthorFilter} label="Inbox author filter" />
+            </div>}
             <div className="search-facet-group"><span className="search-facet-label">Type</span>
               <ChipMultiSelect options={INBOX_KIND_OPTIONS} selected={kindFilter} onToggle={toggleKindFilter} label="Inbox type filter" />
             </div>
@@ -1321,8 +1375,21 @@ function InboxPage({ state, reload }: PageProps) {
             Sync GitHub
           </button>
         </div>
+        {runningTeams.length > 0 && (
+          <TeamPresence teams={runningTeams} onMessage={(recipient) => startConversation(recipient)} />
+        )}
+        <details ref={conversationDetails} className="local-create conversation-create">
+          <summary>New conversation</summary>
+          <InboxComposer
+            key={`conversation-${conversationSeed}`}
+            runAction={runAction}
+            conversation
+            recipientOptions={conversationRecipients}
+            initialRecipients={conversationTarget}
+          />
+        </details>
         <details className="local-create">
-          <summary>New local item</summary>
+          <summary>New inbox item</summary>
           <InboxComposer runAction={runAction} />
         </details>
         {message && <div className={`notice ${message.kind}`}>{message.text}</div>}
@@ -1353,11 +1420,77 @@ function InboxPage({ state, reload }: PageProps) {
   );
 }
 
-function InboxComposer({ runAction }: { runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean> }) {
-  const [kind, setKind] = useState('hint');
-  const [author, setAuthor] = useState('');
+type InboxRecipientOption = { value: string; label: string; detail?: string };
+type InboxTeam = {
+  run: string;
+  task: string;
+  taskTitle: string;
+  recipient: string;
+  projects: string[];
+};
+
+function activeInboxTeams(state: HorizonState): InboxTeam[] {
+  const tasks = new Map((state.tasks ?? []).map((task: any) => [String(task.id), task]));
+  return (state.runs ?? [])
+    .filter((run: any) => run.status === 'running')
+    .map((run: any) => {
+      const sessions = flattenSessions(run.sessions ?? []);
+      const active = [...sessions].reverse().find((session: any) => session.status === 'running')
+        ?? sessions[sessions.length - 1];
+      const task = String(active?.meta?.task_id || run.focus?.task || run.focus?.tasks?.[0] || '');
+      const taskRecord: any = tasks.get(task);
+      const projects = (active?.meta?.projects ?? run.focus?.projects ?? [])
+        .map((project: unknown) => String(project))
+        .filter(Boolean);
+      return {
+        run: String(run.id),
+        task,
+        taskTitle: String(taskRecord?.title || taskRecord?.objective || ''),
+        recipient: task ? `task:${task}` : `run:${run.id}`,
+        projects,
+      };
+    });
+}
+
+function TeamPresence({ teams, onMessage }: { teams: InboxTeam[]; onMessage: (recipient: string) => void }) {
+  return (
+    <section className="team-presence" aria-label="Running teams">
+      <div className="team-presence-heading">
+        <strong>Running teams</strong>
+        <span>{teams.length}</span>
+      </div>
+      <div className="team-presence-list">
+        {teams.map((team) => (
+          <div className="team-presence-row" key={`${team.run}-${team.recipient}`}>
+            <span className="team-live-dot" aria-hidden="true" />
+            <span className="team-run">run {team.run}</span>
+            {team.task && <RefChip token={team.task} />}
+            <strong title={team.taskTitle}>{team.taskTitle || 'Workspace session'}</strong>
+            {team.projects.length > 0 && <span className="team-projects">{team.projects.join(', ')}</span>}
+            <button type="button" onClick={() => onMessage(team.recipient)}>Message</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function InboxComposer({
+  runAction,
+  conversation = false,
+  recipientOptions = [],
+  initialRecipients = [],
+}: {
+  runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>;
+  conversation?: boolean;
+  recipientOptions?: InboxRecipientOption[];
+  initialRecipients?: string[];
+}) {
+  const [kind, setKind] = useState(conversation ? 'conversation' : 'hint');
+  const [author, setAuthor] = useState('human');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [recipients, setRecipients] = useState<Set<string>>(() => new Set(initialRecipients));
   const [busy, setBusy] = useState(false);
 
   if (STATIC) return null;
@@ -1367,35 +1500,65 @@ function InboxComposer({ runAction }: { runAction: (payload: Record<string, unkn
     const cleanAuthor = author.trim();
     const cleanTitle = title.trim();
     const cleanDescription = description.trim();
-    if (!cleanAuthor || !cleanTitle || !cleanDescription || busy) return;
+    if (!cleanAuthor || !cleanTitle || !cleanDescription || busy || (conversation && recipients.size === 0)) return;
     setBusy(true);
     runAction({
       action: 'add',
-      kind,
+      kind: conversation ? 'conversation' : kind,
       author: cleanAuthor,
       title: cleanTitle,
       comment: cleanDescription,
-    }, 'Local inbox item added.')
+      ...(conversation ? {
+        conversation: true,
+        audience: [...recipients].join(', '),
+      } : {}),
+    }, conversation ? 'Conversation started.' : 'Local inbox item added.')
       .then((ok) => {
         if (!ok) return;
-        setAuthor('');
+        setAuthor('human');
         setTitle('');
         setDescription('');
+        setRecipients(new Set());
       })
       .finally(() => setBusy(false));
   };
 
   return (
     <form className="composer" onSubmit={submit}>
+      {conversation && (
+        <fieldset className="conversation-recipients">
+          <legend>Participants</legend>
+          <div className="conversation-recipient-options">
+            {recipientOptions.map((option) => (
+              <label key={option.value} className={recipients.has(option.value) ? 'selected' : ''}>
+                <input
+                  type="checkbox"
+                  checked={recipients.has(option.value)}
+                  onChange={() => setRecipients((current) => {
+                    const next = new Set(current);
+                    if (next.has(option.value)) next.delete(option.value);
+                    else next.add(option.value);
+                    return next;
+                  })}
+                />
+                <span>{option.label}</span>
+                {option.detail && <small>{option.detail}</small>}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
       <div className="composer-row">
-        <select value={kind} onChange={(event) => setKind(event.target.value)} aria-label="Inbox type">
-          {INBOX_KIND_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-        </select>
+        {conversation
+          ? <span className="type-chip type-conversation">conversation</span>
+          : <select value={kind} onChange={(event) => setKind(event.target.value)} aria-label="Inbox type">
+              {INBOX_KIND_OPTIONS.filter((option) => option !== 'conversation').map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>}
         <input value={author} placeholder="Who is creating this item?" onChange={(event) => setAuthor(event.target.value)} />
       </div>
-      <input value={title} placeholder="Title" onChange={(event) => setTitle(event.target.value)} />
-      <textarea value={description} placeholder="Description" onChange={(event) => setDescription(event.target.value)} rows={3} />
-      <button className="primary" type="submit" disabled={!author.trim() || !title.trim() || !description.trim() || busy}>Add local item</button>
+      <input value={title} placeholder={conversation ? 'Topic' : 'Title'} onChange={(event) => setTitle(event.target.value)} />
+      <textarea value={description} placeholder={conversation ? 'Opening message' : 'Description'} onChange={(event) => setDescription(event.target.value)} rows={3} />
+      <button className="primary" type="submit" disabled={!author.trim() || !title.trim() || !description.trim() || busy || (conversation && recipients.size === 0)}>{conversation ? 'Start conversation' : 'Add inbox item'}</button>
     </form>
   );
 }
@@ -1417,12 +1580,35 @@ function InboxCard({
   const canArchive = item.provider === 'local';
   const sourceUrl = inboxSourceUrl(item, provider.repo ?? undefined);
   const comments = inboxComments(item);
+  const history = historyOf(item).map((entry) => (
+    entry.field === 'created'
+      ? {
+          ...entry,
+          provenance: entry.provenance ?? item.metadata?.provenance,
+          agent: entry.agent ?? item.metadata?.agent,
+        }
+      : entry
+  ));
   const gate = inboxGate(item.labels ?? []);
   const { title, body } = inboxTitleAndBody(item);
   const itemNumber = item.metadata?.number ? `#${item.metadata.number}` : item.id;
   const author = inboxAuthor(item);
   const agent = inboxAgent(item);
+  const owner = inboxOwnerTask(item);
+  const readers = inboxReadBy(item);
+  const scopedProjects = scopeTargets(item, 'projects');
+  const recipients = inboxAudienceTargets(item);
+  const participants = inboxParticipants(item);
+  const isConversation = item.kind === 'conversation'
+    || Boolean(item.metadata?.conversation)
+    || recipients.length > 1
+    || recipients.some((recipient) => recipient.startsWith('task:') || recipient.startsWith('run:'));
   const itemStatus = normalizedInboxStatus(item.status);
+  const unreadForHuman = isConversation
+    && participants.includes('human')
+    && !readers.includes('human')
+    && itemStatus === 'open';
+  const activityCount = comments.length + history.length + (body ? 1 : 0);
   const [visibleKind, setVisibleKind] = useState(item.kind);
   const [visibleStatus, setVisibleStatus] = useState(itemStatus);
   const [visibleGate, setVisibleGate] = useState(gate);
@@ -1434,6 +1620,14 @@ function InboxCard({
   }, [item.id, item.kind, itemStatus, gate]);
 
   const pseudoProvider = author?.toLowerCase() === 'ground' ? 'ground' : author?.toLowerCase() === 'horizon' ? 'horizon' : item.provider;
+
+  const toggleExpanded = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && unreadForHuman && caps.has('read_state')) {
+      runAction({ action: 'read', provider: item.provider, id: item.id, reader: 'human' });
+    }
+  };
 
   const deleteLocal = () => {
     if (!window.confirm(`Delete local inbox item ${item.id}? This cannot be undone.`)) return;
@@ -1497,38 +1691,50 @@ function InboxCard({
   return (
     <article className={`inbox-item source-${pseudoProvider}${expanded ? ' expanded' : ''}`}>
       <div className="inbox-item-content">
-        <div className="issue-title-line" onClick={() => setExpanded((value) => !value)}>
+        <div className="issue-title-line" onClick={toggleExpanded}>
           <div className="issue-title-main">
             <SourceMark provider={pseudoProvider} />
-            <span className={`source-chip ${item.provider}`}>{item.provider}</span>
-            {editable && item.provider === 'local' ? (
-              <select className={`chip-select type ${visibleKind}`} value={visibleKind} onClick={stop} onChange={(event) => updateKind(event.target.value)} aria-label="Type">
-                {INBOX_KIND_OPTIONS.map((option) => (
-                  <option className={`kind-${option}`} key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            ) : <span className={`type-chip type-${item.kind}`}>{item.kind}</span>}
-            {editable && caps.has('status') ? (
-              <select className={`chip-select state ${visibleStatus}`} value={visibleStatus} onClick={stop} onChange={(event) => updateStatus(event.target.value)} aria-label="State">
-                <option className="state-open" value="open">open</option>
-                <option className="state-closed" value="closed">closed</option>
-                {canArchive && <option className="state-archived" value="archived">archived</option>}
-              </select>
-            ) : <Status value={normalizedInboxStatus(item.status)} label={filterLabel(normalizedInboxStatus(item.status))} />}
-            {editable && caps.has('label') ? (
-              <select className={`chip-select gate ${visibleGate}`} value={visibleGate} onClick={stop} onChange={(event) => updateGate(event.target.value)} aria-label="Agent label">
-                <option className="gate-accept" value="accept">agent-ready</option>
-                <option className="gate-pending" value="pending">not-ready</option>
-                <option className="gate-reject" value="reject">rejected</option>
-                <option className="gate-clear" value="clear">unlabeled</option>
-              </select>
-            ) : <Status value={gate} label={gateLabel(gate)} />}
-            <span className="issue-title"><InlineMarkdown content={title} /></span>
-            {author && <span className="author-tag">by {author}{agent && <span className="agent-tag"> · {agent}</span>}</span>}
+            <div className="issue-title-stack">
+              <span className="issue-title"><InlineMarkdown content={title} /></span>
+              <div className="issue-quick-meta">
+                <span className={`source-chip ${item.provider}`}>{item.provider}</span>
+                {isConversation && item.kind !== 'conversation' && <span className="conversation-chip">conversation</span>}
+                {unreadForHuman && <span className="conversation-unread-chip">unread reply</span>}
+                {editable && item.provider === 'local' ? (
+                  <select className={`chip-select type ${visibleKind}`} value={visibleKind} onClick={stop} onChange={(event) => updateKind(event.target.value)} aria-label="Type">
+                    {INBOX_KIND_OPTIONS.map((option) => (
+                      <option className={`kind-${option}`} key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                ) : <span className={`type-chip type-${item.kind}`}>{item.kind}</span>}
+                {editable && caps.has('status') ? (
+                  <select className={`chip-select state ${visibleStatus}`} value={visibleStatus} onClick={stop} onChange={(event) => updateStatus(event.target.value)} aria-label="State">
+                    <option className="state-open" value="open">open</option>
+                    <option className="state-closed" value="closed">closed</option>
+                    {canArchive && <option className="state-archived" value="archived">archived</option>}
+                  </select>
+                ) : <Status value={normalizedInboxStatus(item.status)} label={filterLabel(normalizedInboxStatus(item.status))} />}
+                {editable && caps.has('label') ? (
+                  <select className={`chip-select gate ${visibleGate}`} value={visibleGate} onClick={stop} onChange={(event) => updateGate(event.target.value)} aria-label="Agent label">
+                    <option className="gate-accept" value="accept">agent-ready</option>
+                    <option className="gate-pending" value="pending">not-ready</option>
+                    <option className="gate-reject" value="reject">rejected</option>
+                    <option className="gate-clear" value="clear">unlabeled</option>
+                  </select>
+                ) : <Status value={gate} label={gateLabel(gate)} />}
+                {owner
+                  ? <span className="tag-chip tag-ref-owner">@{owner}</span>
+                  : <span className="owner-shared-chip">shared</span>}
+                {isConversation && participants.length > 0 && (
+                  <span className="recipient-summary" title={participants.join(' · ')}>participants {participants.join(' · ')}</span>
+                )}
+                {author && <span className="author-tag">by {author}{agent && <span className="agent-tag"> · {agent}</span>}</span>}
+              </div>
+            </div>
           </div>
           <div className="issue-title-actions">
-            {comments.length > 0 && (
-              <span className="comment-count" title={`${comments.length} comment${comments.length === 1 ? '' : 's'}`}>{comments.length}</span>
+            {activityCount > 0 && (
+              <span className="comment-count" title={`${activityCount} activity ${activityCount === 1 ? 'entry' : 'entries'}`}>{activityCount}</span>
             )}
             {editable && canArchive && (
               <button className="text-action" onClick={(event) => { stop(event); toggleArchive(); }} title={isArchived ? 'Restore from archive' : 'Archive (soft-delete: kept but hidden by default)'}>
@@ -1543,30 +1749,35 @@ function InboxCard({
         </div>
         {expanded && (
           <div className="issue-body">
-            <div className="issue-meta">
-              <span>{itemNumber}</span>
-              {author && <span>by {author}{agent ? ` · ${agent}` : ''}</span>}
-              {item.audience && <span className="audience-chip" title="Who this item is addressed to">to {item.audience}</span>}
-              <ProvenanceChip provenance={item.metadata?.provenance} />
-              <span>opened {formatDate(item.created_at)}</span>
-              {item.updated_at && item.updated_at !== item.created_at && <span>updated {formatDate(item.updated_at)}</span>}
-              {sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer">Open on GitHub</a>}
+            <div className="issue-meta-grid">
+              <div><strong>ID</strong><span>{itemNumber}</span></div>
+              <div><strong>Author</strong><span>{author || 'unknown'}{agent ? ` · ${agent}` : ''}</span></div>
+              <div><strong>Owner</strong><span>{owner ? <RefChip token={owner} label={`@${owner}`} /> : 'shared'}</span></div>
+              <div><strong>To</strong><span>{recipients.length ? recipients.join(' · ') : 'general'}</span></div>
+              {isConversation && <div><strong>Participants</strong><span>{participants.join(' · ') || 'unknown'}</span></div>}
+              <div><strong>Projects</strong><span>{scopedProjects.length ? scopedProjects.join(', ') : 'workspace-wide'}</span></div>
+              <div><strong>Labels</strong><span>{(item.labels ?? []).join(', ') || 'none'}</span></div>
+              <div><strong>Read by</strong><span>{readers.join(', ') || 'nobody'}</span></div>
+              <div><strong>Opened</strong><span>{formatDate(item.created_at)}</span></div>
+              {item.updated_at && item.updated_at !== item.created_at && <div><strong>Updated</strong><span>{formatDate(item.updated_at)}</span></div>}
+              {item.metadata?.provenance && <div className="issue-meta-source"><strong>Source</strong><ProvenanceText provenance={item.metadata.provenance} /></div>}
+              {sourceUrl && <div><strong>External</strong><span><a href={sourceUrl} target="_blank" rel="noreferrer">Open on GitHub</a></span></div>}
             </div>
-            <EditableDescription
-              body={body}
-              createdAt={item.created_at}
-              editable={editable && item.provider === 'local'}
-              itemId={item.id}
-              runAction={runAction}
-              title={title}
-              titleLabel={author ?? (isGithub ? 'GitHub description' : 'Description')}
-            />
             <ActivityTimeline
               comments={comments}
-              history={historyOf(item)}
+              history={history}
               editable={editable && item.provider === 'local'}
               itemId={item.id}
               runAction={runAction}
+              description={body ? {
+                body,
+                author: author || (isGithub ? 'GitHub description' : 'Description'),
+                agent,
+                at: item.created_at,
+                editable: editable && item.provider === 'local',
+                provenance: item.metadata?.provenance,
+                title,
+              } : undefined}
             />
             {editable && caps.has('comment') && <CommentBox item={item} runAction={runAction} />}
           </div>
@@ -1574,6 +1785,52 @@ function InboxCard({
       </div>
     </article>
   );
+}
+
+// Legacy agent messages sometimes arrived as one very long paragraph. Preserve
+// stored Markdown, but add display-only paragraph boundaries when the message is
+// both long and entirely unstructured. New writes are validated by the CLI.
+function readableMessageMarkdown(content: string): string {
+  const text = content.trim();
+  if (text.length < 600) return content;
+  if (/\n\s*\n|(?:^|\n)\s*(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s*|```|\|)/m.test(text)) {
+    return content;
+  }
+
+  const sectionLead = /\s+(?=(?:(?:WHY|WHAT|WHEN|WHERE|HOW|FIRST|SECOND|THIRD|FOURTH|CORRECTION|RETRACTION|CONCLUSION|FINAL STATE|PRACTICAL CONSEQUENCE|THE PART|THE ONE|ITEM \d+|NOTHING IN|Separately)\b[^:\n]{0,120}:))/g;
+  const withSections = text.replace(sectionLead, '\n\n');
+  return withSections
+    .split(/\n\s*\n/)
+    .flatMap((paragraph) => structureDenseParagraph(paragraph))
+    .join('\n\n');
+}
+
+function structureDenseParagraph(paragraph: string): string[] {
+  const declaration = /\b(?:thm|lem|def|inst|prop|cor):[A-Za-z0-9_.-]+/g;
+  const declarations = [...paragraph.matchAll(declaration)];
+  if (declarations.length >= 2 && declarations[0].index !== undefined) {
+    const first = declarations[0].index;
+    const prefix = paragraph.slice(0, first).trim();
+    const list = paragraph
+      .slice(first)
+      .replace(/\s+(?=(?:thm|lem|def|inst|prop|cor):[A-Za-z0-9_.-]+)/g, '\n- ');
+    return [prefix, `- ${list}`].filter(Boolean);
+  }
+  if (paragraph.length <= 520) return [paragraph];
+
+  const clauses = paragraph.split(/(?<=[.!?;])\s+(?=[A-Z0-9([])/);
+  const chunks: string[] = [];
+  let current = '';
+  for (const clause of clauses) {
+    if (current && current.length + clause.length > 520) {
+      chunks.push(current);
+      current = clause;
+    } else {
+      current = current ? `${current} ${clause}` : clause;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 function EditableDescription({
@@ -1584,6 +1841,8 @@ function EditableDescription({
   runAction,
   title,
   titleLabel,
+  agent,
+  provenance,
 }: {
   body: string;
   createdAt: string;
@@ -1592,6 +1851,8 @@ function EditableDescription({
   runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>;
   title: string;
   titleLabel: string;
+  agent?: string;
+  provenance?: any;
 }) {
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(title);
@@ -1628,6 +1889,8 @@ function EditableDescription({
     <div className="comment-item description-comment">
       <div className="comment-header">
         <strong>{titleLabel}</strong>
+        {agent && <span className="agent-tag">{agent}</span>}
+        <ActivityProvenance author={titleLabel} provenance={provenance} />
         <time>{formatDate(createdAt)}</time>
         {editable && !editing && <button className="text-action" onClick={() => setEditing(true)}>Modify</button>}
       </div>
@@ -1641,7 +1904,7 @@ function EditableDescription({
           </div>
         </form>
       ) : (
-        <div className="comment-body"><MarkdownBlock content={body} /></div>
+        <div className="comment-body"><MarkdownBlock content={readableMessageMarkdown(body)} /></div>
       )}
     </div>
   );
@@ -1697,8 +1960,9 @@ function EditableComment({
     <div className={`comment-item${comment._description ? ' description-comment' : ''}`}>
       <div className="comment-header">
         <strong>{author}</strong>
+        {comment.agent && <span className="agent-tag">{comment.agent}</span>}
         {comment._description && <span className="comment-tag">description</span>}
-        <ProvenanceChip provenance={comment.provenance} />
+        <ActivityProvenance author={author} provenance={comment.provenance} />
         <time>{formatDate(comment.createdAt ?? comment.created_at ?? comment.at)}</time>
         {comment.edited_at && <span>edited {formatDate(comment.edited_at)}</span>}
         {comment.url && <a href={comment.url} target="_blank" rel="noreferrer">Open</a>}
@@ -1714,7 +1978,7 @@ function EditableComment({
           </div>
         </form>
       ) : (
-        <div className="comment-body"><MarkdownBlock content={body} /></div>
+        <div className="comment-body"><MarkdownBlock content={readableMessageMarkdown(body)} /></div>
       )}
     </div>
   );
@@ -1754,7 +2018,7 @@ function CommentBox({
   item: any;
   runAction: (payload: Record<string, unknown>, success?: string) => Promise<boolean>;
 }) {
-  const [author, setAuthor] = useState('');
+  const [author, setAuthor] = useState(item.provider === 'local' ? 'human' : '');
   const [body, setBody] = useState('');
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -1770,7 +2034,7 @@ function CommentBox({
     }, item.provider === 'github' ? 'GitHub comment posted.' : 'Comment added.').then((ok) => {
       if (!ok) return;
       setBody('');
-      setAuthor('');
+      setAuthor(item.provider === 'local' ? 'human' : '');
     });
   };
   return (
@@ -1798,6 +2062,9 @@ function describeHistory(e: any): string {
     case 'status': return `status ${from} → ${to}`;
     case 'label': return `labels ${from} → ${e.to || '—'}`;
     case 'kind': return `type ${from} → ${e.to || '—'}`;
+    case 'read_by': return 'marked this item read';
+    case 'owner': return `owner ${from} → ${to}`;
+    case 'audience': return `audience ${from} → ${to}`;
     case 'body': return e.note || 'edited the description';
     case 'edited': return e.note || 'edited fields';
     default: return e.note || e.field || 'changed';
@@ -1813,6 +2080,8 @@ function HistoryRow({ entry }: { entry: any }) {
     <div className="history-row" title={formatDate(entry.at)}>
       <span className="history-dot" aria-hidden="true" />
       <span className="history-text"><strong>{entry.actor || 'system'}</strong> {describeHistory(entry)}</span>
+      {entry.agent && <span className="agent-tag">{entry.agent}</span>}
+      <ActivityProvenance author={entry.actor} provenance={entry.provenance} />
       <time>{formatDate(entry.at)}</time>
     </div>
   );
@@ -1839,52 +2108,103 @@ function ActivityTimeline({
   // Roadmap/task items have no standalone description field in the UI — their
   // body is shown as the FIRST comment in this feed (read-only), exactly like
   // the inbox, so description + comments + history read as one thread.
-  description?: { body: string; author?: string; at?: string };
+  description?: { body: string; author?: string; agent?: string; at?: string; editable?: boolean; provenance?: any; title?: string };
 }) {
-  const [visibleCommentCount, setVisibleCommentCount] = useState(2);
+  const ACTIVITY_PAGE = 5;
+  const [visibleCount, setVisibleCount] = useState(ACTIVITY_PAGE);
   const commentTime = (c: any) => String(c.at ?? c.created_at ?? c.createdAt ?? '');
   useEffect(() => {
-    setVisibleCommentCount(2);
-  }, [itemId, comments.length]);
-  const commentStart = Math.max(0, comments.length - visibleCommentCount);
-  const visibleComments = comments.slice(commentStart);
-  const allComments = description && description.body
-    ? [{ author: description.author, at: description.at, body: description.body, _description: true }, ...visibleComments]
-    : visibleComments;
-  const entries = [
-    ...allComments.map((c, i) => ({
-      kind: 'comment' as const,
-      at: commentTime(c),
-      c,
-      i: c._description ? -1 : i - (description?.body ? 1 : 0) + commentStart,
+    setVisibleCount(ACTIVITY_PAGE);
+  }, [itemId, comments.length, history.length, description?.body]);
+  const entries: any[] = [
+    ...(description?.body ? [{
+      kind: 'description',
+      at: String(description.at ?? ''),
+      rank: 1,
+      description,
+      index: 0,
+    }] : []),
+    ...comments.map((comment, index) => ({
+      kind: 'comment',
+      at: commentTime(comment),
+      rank: 2,
+      comment,
+      index,
     })),
-    ...history.map((h, i) => ({ kind: 'event' as const, at: String(h.at ?? ''), h, i })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
+    ...history.map((entry, index) => ({
+      kind: 'event',
+      // "opened" logically precedes the initial description even though its
+      // append-only history write may be a few milliseconds later.
+      at: entry.field === 'created' && description?.at
+        ? String(description.at)
+        : String(entry.at ?? ''),
+      rank: entry.field === 'created' ? 0 : 3,
+      entry,
+      index,
+    })),
+  ].sort((a, b) => {
+    const aTime = Date.parse(a.at) || 0;
+    const bTime = Date.parse(b.at) || 0;
+    return aTime - bTime || a.rank - b.rank || (a.index ?? 0) - (b.index ?? 0);
+  });
   if (!entries.length) return null;
+  const hidden = Math.max(0, entries.length - visibleCount);
+  const visibleEntries = entries.slice(hidden);
   return (
     <div className="issue-details">
       <div className="comment-thread">
         <div className="comment-thread-title">{title}</div>
-        {commentStart > 0 && (
+        {hidden > 0 && (
           <button
             className="timeline-load-more"
             type="button"
-            onClick={() => setVisibleCommentCount((count) => Math.min(comments.length, count + 5))}
+            onClick={() => setVisibleCount((count) => Math.min(entries.length, count + ACTIVITY_PAGE))}
           >
-            Load older comments ({commentStart} remaining)
+            Load {Math.min(hidden, ACTIVITY_PAGE)} earlier activities ({hidden} remaining)
           </button>
         )}
-        {entries.map((e) => e.kind === 'comment' ? (
+        {visibleEntries.map((entry) => entry.kind === 'description' ? (
+          entry.description.editable ? (
+            <EditableDescription
+              body={entry.description.body}
+              createdAt={entry.description.at ?? ''}
+              editable
+              itemId={itemId}
+              key="description"
+              runAction={runAction}
+              title={entry.description.title ?? itemId}
+              titleLabel={entry.description.author || 'Description'}
+              agent={entry.description.agent}
+              provenance={entry.description.provenance}
+            />
+          ) : (
+            <EditableComment
+              comment={{
+                author: entry.description.author,
+                agent: entry.description.agent,
+                at: entry.description.at,
+                body: entry.description.body,
+                provenance: entry.description.provenance,
+                _description: true,
+              }}
+              editable={false}
+              index={-1}
+              itemId={itemId}
+              key="description"
+              runAction={runAction}
+            />
+          )
+        ) : entry.kind === 'comment' ? (
           <EditableComment
-            comment={e.c}
+            comment={entry.comment}
             editable={editable}
-            index={e.i}
+            index={entry.index}
             itemId={itemId}
-            key={`c-${e.c.id ?? e.i}`}
+            key={`c-${entry.comment.id ?? entry.index}`}
             runAction={runAction}
           />
         ) : (
-          <HistoryRow entry={e.h} key={`h-${e.i}`} />
+          <HistoryRow entry={entry.entry} key={`h-${entry.index}`} />
         ))}
       </div>
     </div>
@@ -1922,24 +2242,50 @@ function CommentComposer({
 
 // Compact, dim chip showing which run/session/subagent authored an item.
 function ProvenanceChip({ provenance }: { provenance: any }) {
-  if (!provenance || typeof provenance !== 'object') return null;
+  const parts = provenanceParts(provenance);
+  if (!parts.length) return null;
+  return <span className="provenance-chip" title="Authoring role · run · session · task">{parts.join(' · ')}</span>;
+}
+
+function ActivityProvenance({ author, provenance }: { author?: string; provenance: any }) {
+  if (provenanceParts(provenance).length > 0) {
+    return <ProvenanceChip provenance={provenance} />;
+  }
+  if (String(author || '').toLowerCase() === 'horizon') {
+    return <span className="provenance-missing" title="This legacy activity predates per-action provenance.">session not recorded</span>;
+  }
+  return null;
+}
+
+function ProvenanceText({ provenance }: { provenance: any }) {
+  const parts = provenanceParts(provenance);
+  if (!parts.length) return null;
+  return <span className="provenance-text">{parts.join(' · ')}</span>;
+}
+
+function provenanceParts(provenance: any): string[] {
+  if (!provenance || typeof provenance !== 'object') return [];
   const parts: string[] = [];
   if (provenance.role) parts.push(String(provenance.role));
   if (provenance.run) parts.push(`run ${provenance.run}`);
   if (provenance.session) parts.push(String(provenance.session));
   if (provenance.subagent) parts.push(String(provenance.subagent));
   if (provenance.task) parts.push(`task ${provenance.task}`);
-  if (!parts.length) return null;
-  return <span className="provenance-chip" title="Authoring role · run · session · task">{parts.join(' · ')}</span>;
+  return parts;
 }
 
 function Transcripts({ state }: { state?: any }) {
+  const TRANSCRIPT_PAGE_SIZE = 120;
   const runs = state?.runs ?? [];
   // Newest run first, so an in-progress run is at the top of the sidebar.
   const orderedRuns = [...runs].sort(compareRuns);
   const [events, setEvents] = useState<any[] | null>(null);
   const [report, setReport] = useState<string>('');
   const [recommendation, setRecommendation] = useState<string>('');
+  const [before, setBefore] = useState<number | null>(null);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [transcriptError, setTranscriptError] = useState('');
   const [selected, setSelected] = useState<string>('');
   const [now, setNow] = useState(() => Date.now());
   const selectedSession = useMemo(() => findSessionByRef(runs, selected), [runs, selected]);
@@ -1972,26 +2318,68 @@ function Transcripts({ state }: { state?: any }) {
   // stream closes, so keep polling a couple of cycles past `session_end` to catch
   // it before going quiet for good.
   useEffect(() => {
-    if (!selected) { setEvents(null); setReport(''); setRecommendation(''); return; }
+    if (!selected) {
+      setEvents(null);
+      setReport('');
+      setRecommendation('');
+      setBefore(null);
+      setHasOlder(false);
+      setTranscriptError('');
+      return;
+    }
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let graceLeft = 2;
+    let initialized = false;
+    setEvents(null);
+    setBefore(null);
+    setHasOlder(false);
+    setTranscriptError('');
     const load = async () => {
-      const [tx, rep] = await Promise.all([
-        getTranscript(selected).then((e) => e, () => null),
-        getReport(selected).then((r) => r, () => null),
-      ]);
+      const reportRequest = getReport(selected).then((value) => value, () => null);
+      const tx = await getTranscriptPage(selected, undefined, TRANSCRIPT_PAGE_SIZE)
+        .then((value) => value, () => null);
       if (cancelled) return;
-      setEvents(tx ?? []);
-      setReport(rep?.markdown ?? '');
-      setRecommendation(rep?.recommendation ?? '');
-      const ended = Array.isArray(tx) && tx.some((event: any) => event?.kind === 'session_end');
+      if (tx) {
+        setEvents((current) => initialized
+          ? mergeTranscriptPages(current ?? [], tx.events ?? [])
+          : (tx.events ?? []));
+        if (!initialized) {
+          setBefore(tx.before ?? null);
+          setHasOlder(Boolean(tx.has_more));
+        }
+        setTranscriptError('');
+      } else if (!initialized) {
+        setEvents([]);
+        setTranscriptError('Unable to load this session.');
+      }
+      initialized = true;
+      void reportRequest.then((rep) => {
+        if (cancelled) return;
+        setReport(rep?.markdown ?? '');
+        setRecommendation(rep?.recommendation ?? '');
+      });
+      const ended = Boolean(tx?.events?.some((event: any) => event?.kind === 'session_end'));
       if (ended && graceLeft-- <= 0) return;
       timer = setTimeout(load, 3000);
     };
     load();
     return () => { cancelled = true; if (timer !== undefined) clearTimeout(timer); };
   }, [selected]);
+
+  const loadOlder = () => {
+    if (!selected || before == null || loadingOlder) return;
+    setLoadingOlder(true);
+    setTranscriptError('');
+    getTranscriptPage(selected, before, TRANSCRIPT_PAGE_SIZE)
+      .then((page) => {
+        setEvents((current) => mergeTranscriptPages(page.events ?? [], current ?? []));
+        setBefore(page.before ?? null);
+        setHasOlder(Boolean(page.has_more));
+      })
+      .catch(() => setTranscriptError('Unable to load older entries.'))
+      .finally(() => setLoadingOlder(false));
+  };
 
   return (
     <div className="page transcripts-page">
@@ -2018,9 +2406,28 @@ function Transcripts({ state }: { state?: any }) {
         runId={selectedRun?.id}
         nextSessionStart={selectedNextStart}
         activeTickSession={activeTickSession}
+        hasOlder={hasOlder}
+        loadingOlder={loadingOlder}
+        onLoadOlder={loadOlder}
+        transcriptError={transcriptError}
       />
     </div>
   );
+}
+
+function mergeTranscriptPages(left: any[], right: any[]): any[] {
+  const byCursor = new Map<number | string, any>();
+  let fallback = 0;
+  for (const event of [...left, ...right]) {
+    const key = event?._cursor ?? `fallback-${fallback++}-${event?.at ?? ''}-${event?.kind ?? ''}`;
+    byCursor.set(key, event);
+  }
+  return [...byCursor.values()].sort((a, b) => {
+    if (typeof a?._cursor === 'number' && typeof b?._cursor === 'number') {
+      return a._cursor - b._cursor;
+    }
+    return (Date.parse(a?.at ?? '') || 0) - (Date.parse(b?.at ?? '') || 0);
+  });
 }
 
 // Native subagent events are tagged inline by the parsers (Claude: subagent_type
@@ -2331,37 +2738,63 @@ function CommitCard({ commit, runId, session }: { commit: CommitChange; runId: s
 // The commit-granular "progress" panel for a session: each commit is a card whose
 // message + diff IS the progress record. Fetched lazily from /api/session/commits.
 function SessionCommitsPanel({ runId, session }: { runId: string; session: string }) {
+  const COMMIT_PAGE = 3;
+  // The inbox-activity list arrives whole in the page payload (not server-paged
+  // like commits), so long sessions dumped dozens of rows at once. Cap it and
+  // reveal the rest on demand, matching the Commits panel's "show more".
+  const INBOX_PAGE = 6;
   const [commits, setCommits] = useState<CommitChange[] | null>(null);
+  const [inbox, setInbox] = useState<SessionInboxActivity | null>(null);
+  const [inboxExpanded, setInboxExpanded] = useState(false);
+  const [roadmap, setRoadmap] = useState<SessionRoadmapActivity | null>(null);
+  const [roadmapExpanded, setRoadmapExpanded] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>('');
   useEffect(() => {
     let live = true;
-    let frame: number | undefined;
-    let offset = 0;
     setCommits(null);
+    setInbox(null);
+    setInboxExpanded(false);
+    setRoadmap(null);
+    setRoadmapExpanded(false);
     setTotal(null);
+    setNextOffset(null);
+    setLoadingMore(false);
     setError('');
-
-    const loadNext = async () => {
-      try {
-        const page = await getSessionCommits(runId, session, offset, 1);
+    getSessionCommits(runId, session, 0, COMMIT_PAGE)
+      .then((page) => {
         if (!live) return;
-        setTotal(page.total ?? null);
-        setCommits((current) => [...(current ?? []), ...(page.commits ?? [])]);
-        if (page.has_more && page.next_offset != null) {
-          offset = page.next_offset;
-          frame = requestAnimationFrame(() => { void loadNext(); });
-        }
-      } catch {
-        if (live) setError('Unable to load the remaining commits.');
-      }
-    };
-    void loadNext();
-    return () => {
-      live = false;
-      if (frame !== undefined) cancelAnimationFrame(frame);
-    };
+        setTotal(page.total ?? page.commits?.length ?? 0);
+        setCommits(page.commits ?? []);
+        setInbox(page.inbox ?? { items: [], created: 0, comments: 0, actions: 0, total: 0 });
+        setRoadmap(page.roadmap ?? { items: [], created: 0, status_changes: 0, comments: 0, total: 0 });
+        setNextOffset(page.has_more ? (page.next_offset ?? null) : null);
+      })
+      .catch(() => {
+        if (!live) return;
+        setCommits([]);
+        setInbox({ items: [], created: 0, comments: 0, actions: 0, total: 0 });
+        setRoadmap({ items: [], created: 0, status_changes: 0, comments: 0, total: 0 });
+        setError('Unable to load commits.');
+      });
+    return () => { live = false; };
   }, [runId, session]);
+
+  const loadMore = () => {
+    if (nextOffset == null || loadingMore) return;
+    setLoadingMore(true);
+    setError('');
+    getSessionCommits(runId, session, nextOffset, COMMIT_PAGE)
+      .then((page) => {
+        setCommits((current) => [...(current ?? []), ...(page.commits ?? [])]);
+        setTotal(page.total ?? total);
+        setNextOffset(page.has_more ? (page.next_offset ?? null) : null);
+      })
+      .catch(() => setError('Unable to load older commits.'))
+      .finally(() => setLoadingMore(false));
+  };
   if (commits === null) {
     return (
       <details className="log-panel commits-panel" open>
@@ -2370,17 +2803,101 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
       </details>
     );
   }
-  if (commits.length === 0) return null;
+  const inboxPanel = inbox && inbox.items.length > 0 ? (
+    <details className="log-panel session-inbox-panel" open>
+      <summary>
+        Inbox activity <span className="commits-count">{inbox.total}</span>
+        <span className="session-inbox-totals">
+          {inbox.created} opened · {inbox.comments} comment{inbox.comments === 1 ? '' : 's'} · {inbox.actions} action{inbox.actions === 1 ? '' : 's'}
+        </span>
+      </summary>
+      <div className="session-inbox-list">
+        {(inboxExpanded ? inbox.items : inbox.items.slice(0, INBOX_PAGE)).map((item) => (
+          <Link className="session-inbox-row" key={item.id} to={`/inbox?item=${encodeURIComponent(item.id)}`}>
+            <span className={`type-chip type-${item.kind}`}>{item.kind}</span>
+            <span className="session-inbox-copy">
+              <strong>{item.title}</strong>
+              <span>{item.id} · {item.status}</span>
+            </span>
+            <span className="session-inbox-actions">
+              {item.created && <span>opened</span>}
+              {item.comments > 0 && <span>{item.comments} comment{item.comments === 1 ? '' : 's'}</span>}
+              {item.actions > 0 && <span>{item.actions} action{item.actions === 1 ? '' : 's'}</span>}
+            </span>
+          </Link>
+        ))}
+        {inbox.items.length > INBOX_PAGE && (
+          <button
+            type="button"
+            className="commit-load-more session-inbox-more"
+            onClick={() => setInboxExpanded((v) => !v)}
+          >
+            {inboxExpanded ? 'Show fewer' : `Show ${inbox.items.length - INBOX_PAGE} more`}
+            {!inboxExpanded && <span>{inbox.items.length - INBOX_PAGE} more items hidden</span>}
+          </button>
+        )}
+      </div>
+    </details>
+  ) : null;
+  const roadmapPanel = roadmap && roadmap.items.length > 0 ? (
+    <details className="log-panel session-inbox-panel session-roadmap-panel" open>
+      <summary>
+        Roadmap activity <span className="commits-count">{roadmap.total}</span>
+        <span className="session-inbox-totals">
+          {roadmap.created} created · {roadmap.status_changes} status change{roadmap.status_changes === 1 ? '' : 's'} · {roadmap.comments} comment{roadmap.comments === 1 ? '' : 's'}
+        </span>
+      </summary>
+      <div className="session-inbox-list">
+        {(roadmapExpanded ? roadmap.items : roadmap.items.slice(0, INBOX_PAGE)).map((item) => (
+          <Link className="session-inbox-row" key={item.id} to={`/roadmap?item=${encodeURIComponent(item.id)}`}>
+            <span className="type-chip type-roadmap">roadmap</span>
+            <span className="session-inbox-copy">
+              <strong>{item.title}</strong>
+              <span>{item.id} · {item.status}</span>
+            </span>
+            <span className="session-inbox-actions">
+              {item.created && <span>created</span>}
+              {item.status_changes > 0 && <span>→ {item.status_to || item.status}</span>}
+              {item.comments > 0 && <span>{item.comments} comment{item.comments === 1 ? '' : 's'}</span>}
+            </span>
+          </Link>
+        ))}
+        {roadmap.items.length > INBOX_PAGE && (
+          <button
+            type="button"
+            className="commit-load-more session-inbox-more"
+            onClick={() => setRoadmapExpanded((v) => !v)}
+          >
+            {roadmapExpanded ? 'Show fewer' : `Show ${roadmap.items.length - INBOX_PAGE} more`}
+            {!roadmapExpanded && <span>{roadmap.items.length - INBOX_PAGE} more items hidden</span>}
+          </button>
+        )}
+      </div>
+    </details>
+  ) : null;
+  if (commits.length === 0) {
+    if (!error) return <>{inboxPanel}{roadmapPanel}</>;
+    return <>{inboxPanel}{roadmapPanel}<details className="log-panel commits-panel" open>
+      <summary>Commits</summary>
+      <p className="empty commit-loading">{error}</p>
+    </details></>;
+  }
   return (
-    <details className="log-panel commits-panel" open>
+    <>{inboxPanel}{roadmapPanel}<details className="log-panel commits-panel" open>
       <summary>
         Commits <span className="commits-count">{total == null ? commits.length : `${commits.length}/${total}`}</span>
       </summary>
       <div className="commit-cards">
         {commits.map((c) => <CommitCard key={c.sha} commit={c} runId={runId} session={session} />)}
+        {nextOffset != null && (
+          <button type="button" className="commit-load-more" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading...' : `Show ${Math.min(COMMIT_PAGE, Math.max(0, (total ?? commits.length) - commits.length))} more`}
+            <span>{Math.max(0, (total ?? commits.length) - commits.length)} older commits hidden</span>
+          </button>
+        )}
       </div>
       {error && <p className="empty commit-loading">{error}</p>}
-    </details>
+    </details></>
   );
 }
 
@@ -2389,6 +2906,31 @@ function lifecycleIdentity(event: any): string {
   if (data.subagent_key) return `key:${String(data.subagent_key)}`;
   if (data.name) return `name:${String(data.name)}`;
   return '';
+}
+
+function collapseWorkflowProgress(events: any[] | null): any[] | null {
+  if (!events) return events;
+  const seen = new Set<string>();
+  const kept: any[] = [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.kind !== 'workflow_progress') {
+      kept.push(event);
+      continue;
+    }
+    const data = event.data ?? {};
+    const identity = data.task_id || data.workflow_id || data.run_id || data.name;
+    if (!identity) {
+      kept.push(event);
+      continue;
+    }
+    const key = String(identity);
+    if (!seen.has(key)) {
+      seen.add(key);
+      kept.push(event);
+    }
+  }
+  return kept.reverse();
 }
 
 /** Pair lifecycle end rows with their dispatch row without changing the stored
@@ -2429,6 +2971,10 @@ function TranscriptViewer({
   runId,
   nextSessionStart,
   activeTickSession,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
+  transcriptError = '',
 }: {
   events: any[] | null;
   harnesses?: Record<string, any>;
@@ -2440,8 +2986,15 @@ function TranscriptViewer({
   runId?: string;
   nextSessionStart?: string;
   activeTickSession?: string;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
+  transcriptError?: string;
 }) {
-  const displayEvents = useMemo(() => annotateSubagentDurations(events), [events]);
+  const displayEvents = useMemo(
+    () => annotateSubagentDurations(collapseWorkflowProgress(events)),
+    [events],
+  );
   const start = displayEvents?.find((event: any) => event.kind === 'session_start');
   const prompt = start?.data?.prompt ? stripAnsi(String(start.data.prompt)).trim() : '';
   const harness = start?.data?.harness ?? session?.meta?.data?.harness ?? '';
@@ -2454,7 +3007,7 @@ function TranscriptViewer({
   // reopens rows the user had closed and breaks native scroll anchoring.
   const ordered = displayEvents
     ? displayEvents
-        .map((event: any, idx: number) => ({ event, idx }))
+        .map((event: any, idx: number) => ({ event, idx: event?._cursor ?? idx }))
         .filter(({ event }: any) => event.kind !== 'session_start' && event.kind !== 'session_meta')
         .reverse()
     : displayEvents;
@@ -2464,17 +3017,11 @@ function TranscriptViewer({
   // rest in over the next frames, so a long session doesn't block on rendering
   // every event before anything shows. Reset the ramp when the session changes.
   //
-  // The ramp only covers the capped slice. Past `EVENT_PAGE` the older tail is
-  // rendered on request rather than automatically: the git panel, the report and
-  // the newest events answer most of what you open a session for, and paying to
-  // render the whole history before you've asked for it is what made this slow.
+  // Network pagination bounds this list. As an older page arrives, progressively
+  // paint those newly loaded rows without remounting the already-visible tail.
   const renderList: any[] = groups ?? ordered ?? [];
-  const [limit, setLimit] = useState(EVENT_PAGE);
-  useEffect(() => { setLimit(EVENT_PAGE); }, [selected]);
-  const capped = Math.min(renderList.length, limit);
-  const shownCount = useProgressiveCount(capped, { resetKey: selected, initial: 40, step: 100 });
-  const rendering = capped - shownCount;
-  const hidden = renderList.length - capped;
+  const shownCount = useProgressiveCount(renderList.length, { resetKey: selected, initial: 40, step: 100 });
+  const rendering = renderList.length - shownCount;
   const title = session?.meta?.name ?? session?.session ?? 'Log';
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
@@ -2553,9 +3100,13 @@ function TranscriptViewer({
         {rendering > 0 && (
           <p className="empty transcript-empty transcript-loading-more">Rendering {rendering} more event{rendering === 1 ? '' : 's'}…</p>
         )}
-        {hidden > 0 && rendering === 0 && (
-          <ShowMoreButton hidden={hidden} onMore={() => setLimit((l) => l + EVENT_PAGE)} />
+        {hasOlder && rendering === 0 && onLoadOlder && (
+          <button type="button" className="log-expand-more" onClick={onLoadOlder} disabled={loadingOlder}>
+            {loadingOlder ? 'Loading older entries…' : `Load ${EVENT_PAGE} older entries`}
+            <span className="log-expand-rest">older events remain on disk</span>
+          </button>
         )}
+        {transcriptError && <p className="empty transcript-empty">{transcriptError}</p>}
       </div>
       {session && <SessionParameters session={session} harness={harness} harnessConfig={harnessConfig} nextSessionStart={nextSessionStart} tick={sessionKey(session) === activeTickSession} />}
       {prompt && (
@@ -2684,6 +3235,7 @@ const EVENT_COLORS: Record<string, string> = {
   thinking: '#7c3aed', text: '#2563eb', tool_call: '#d97706',
   tool_result: '#059669', error: '#dc2626', session_start: '#64748b', session_end: '#64748b',
   subagent_start: '#7c3aed', subagent_end: '#15803d',
+  workflow_progress: '#0f766e',
 };
 // Render text/thinking as markdown (after stripping terminal ANSI); everything
 // else stays monospace. The input prompt is rendered by TranscriptViewer.
@@ -3111,7 +3663,53 @@ function SubagentLifecycleView({ event }: { event: any }) {
   );
 }
 
+function compactCount(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact', maximumFractionDigits: 1,
+  }).format(Math.max(0, value));
+}
+
+function WorkflowProgressView({ event }: { event: any }) {
+  const data = event.data ?? {};
+  const name = String(data.name || 'Workflow');
+  const done = Number(data.completed_agents ?? 0);
+  const total = Number(data.total_agents ?? 0);
+  const status = String(data.status || 'running');
+  const terminal = ['completed', 'failed', 'error', 'cancelled'].includes(status);
+  const duration = data.duration_seconds != null ? formatSeconds(Number(data.duration_seconds)) : '';
+  const tokens = Number(data.subagent_tokens ?? 0);
+  const errors = Number(data.agents_error ?? 0);
+  const progress = total > 0 ? Math.min(100, Math.max(0, (done / total) * 100)) : 0;
+  return (
+    <div className={`workflow-progress-card ${terminal ? 'terminal' : 'running'} ${errors ? 'has-errors' : ''}`}>
+      <span className="workflow-progress-glyph" aria-hidden="true">{status === 'completed' && !errors ? '✓' : terminal || errors ? '!' : '○'}</span>
+      <div className="workflow-progress-main">
+        <div className="workflow-progress-title">
+          <strong>{name}</strong>
+          <span>{total > 0 ? `${done}/${total} agents done` : status}</span>
+        </div>
+        {data.summary ? <small>{String(data.summary)}</small> : null}
+        {total > 0 ? (
+          <div className="workflow-progress-track" aria-label={`${done} of ${total} agents done`}>
+            <span style={{ width: `${progress}%` }} />
+          </div>
+        ) : null}
+      </div>
+      <div className="workflow-progress-meta">
+        {duration ? <span>{duration}</span> : null}
+        {tokens ? <span>{compactCount(tokens)} tokens</span> : null}
+        {errors ? <span className="workflow-error-count">{errors} failed</span> : null}
+        {data.agents_skipped ? <span>{String(data.agents_skipped)} skipped</span> : null}
+      </div>
+    </div>
+  );
+}
+
 function EventBodyView({ event, text }: { event: any; text: string }) {
+  if (event.kind === 'workflow_progress') {
+    return <WorkflowProgressView event={event} />;
+  }
   if (event.kind === 'subagent_start' || event.kind === 'subagent_end') {
     return <SubagentLifecycleView event={event} />;
   }
@@ -3152,6 +3750,8 @@ const TranscriptEvent = React.memo(function TranscriptEvent({ event, forceOpen }
         ? 'agent start'
         : event.kind === 'subagent_end'
           ? 'agent end'
+          : event.kind === 'workflow_progress'
+            ? 'workflow'
           : event.kind;
   const tag = commandTag(event);
   const preview = text.slice(0, 120).replace(/\s+/g, ' ');
@@ -3540,19 +4140,41 @@ function RoadmapFocus({ items, compact = false }: { items: any[]; compact?: bool
   );
 }
 
-function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAction?: any, projects?: string[] }) {
+function roadmapCreatedAt(item: any): string | undefined {
+  return item.activity?.created_at || item.metadata?.created_at;
+}
+
+function roadmapActivityAt(item: any): string | undefined {
+  return item.activity?.updated_at || item.metadata?.updated_at || roadmapCreatedAt(item);
+}
+
+function roadmapActivityTitle(item: any): string {
+  const taskCount = Number(item.activity?.task_count || 0);
+  const sources = ['roadmap edits, comments, and history'];
+  if (taskCount > 0) sources.push(`${taskCount} linked task${taskCount === 1 ? '' : 's'}`);
+  if (item.activity?.updated_from_descendants) sources.push('child roadmap items');
+  return `Latest activity across ${sources.join(', ')}`;
+}
+
+function formatCompactDateTime(value: string | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? value
+    : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function RoadmapItemCard({ item, runAction, projects = [], parentOptions = [] }: { item: any, runAction?: any, projects?: string[], parentOptions?: string[] }) {
   const [editing, setEditing] = useState(false);
-  const [draftTitle, setDraftTitle] = useState(item.title);
-  const [draftSummary, setDraftSummary] = useState(item.summary || '');
-  const [draftAuthor, setDraftAuthor] = useState(item.metadata?.author || '');
-  const [draftProjects, setDraftProjects] = useState<string[]>(item.projects ?? []);
   const [visibleStatus, setVisibleStatus] = useState(item.status);
   const [priority, setPriority] = useState(item.priority || 'normal');
+  const createdAt = roadmapCreatedAt(item);
+  const activityAt = roadmapActivityAt(item);
 
   const updateStatus = (nextStatus: string) => {
     const previous = visibleStatus;
     setVisibleStatus(nextStatus);
-    runAction?.({ action: 'status', id: item.id, status: nextStatus }).then((ok: boolean) => {
+    runAction?.({ action: 'status', id: item.id, status: nextStatus, author: 'human' }).then((ok: boolean) => {
       if (!ok) setVisibleStatus(previous);
     });
   };
@@ -3560,7 +4182,7 @@ function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAct
   const updatePriority = (next: string) => {
     const previous = priority;
     setPriority(next);
-    runAction?.({ action: 'edit', id: item.id, priority: next }).then((ok: boolean) => {
+    runAction?.({ action: 'edit', id: item.id, priority: next, author: 'human' }).then((ok: boolean) => {
       if (!ok) setPriority(previous);
     });
   };
@@ -3572,32 +4194,17 @@ function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAct
     setPriority(item.priority || 'normal');
   }, [item.status, item.priority]);
 
-  const deleteItem = () => {
+  const deleteItem = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!window.confirm(`Delete roadmap item ${item.id}?`)) return;
-    runAction?.({ action: 'delete', id: item.id });
+    runAction?.({ action: 'delete', id: item.id, author: 'human' }, 'Roadmap item deleted.');
   };
 
-  const save = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draftTitle.trim() || !draftAuthor.trim()) return;
-    runAction?.({
-      action: 'edit',
-      id: item.id,
-      title: draftTitle.trim(),
-      summary: draftSummary.trim(),
-      author: draftAuthor.trim(),
-      projects: draftProjects
-    }).then((ok: boolean) => {
-      if (ok) setEditing(false);
-    });
-  };
-
-  const cancel = () => {
-    setDraftTitle(item.title);
-    setDraftSummary(item.summary || '');
-    setDraftAuthor(item.metadata?.author || '');
-    setDraftProjects(item.projects ?? []);
-    setEditing(false);
+  const editItem = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setEditing(true);
   };
 
   return (
@@ -3624,36 +4231,54 @@ function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAct
           <strong className="clamp-1"><InlineMarkdown content={item.title} /></strong>
           {item.metadata?.author && <span className="author-tag">by {item.metadata.author}</span>}
           <ProvenanceChip provenance={item.metadata?.provenance} />
-          {item.metadata?.updated_at && <span className="author-tag" style={{ marginLeft: 'auto' }}>updated {new Date(item.metadata.updated_at).toLocaleDateString()}</span>}
+          {activityAt && (
+            <time className="roadmap-activity-time" title={roadmapActivityTitle(item)}>
+              activity {formatCompactDateTime(activityAt)}
+            </time>
+          )}
         </div>
         {!STATIC && runAction && (
-           <button className="icon-danger button-reset" onClick={deleteItem} title="Delete roadmap item" aria-label="Delete roadmap item"><TrashIcon /></button>
+          <div className="roadmap-row-actions">
+            <button className="text-action roadmap-edit-action" type="button" onClick={editItem}>Edit</button>
+            <button className="icon-danger button-reset" type="button" onClick={deleteItem} title="Delete roadmap item" aria-label="Delete roadmap item"><TrashIcon /></button>
+          </div>
         )}
       </summary>
       <div className="roadmap-body">
         {editing ? (
-          <form className="inline-edit" onSubmit={save}>
-            <label className="composer-label">Projects</label>
-            <MultiProjectSelect value={draftProjects} onChange={setDraftProjects} projects={projects} />
-            <input value={draftAuthor} onChange={(e) => setDraftAuthor(e.target.value)} placeholder="Author (required)" />
-            <input value={draftTitle} onChange={(e) => setDraftTitle(e.target.value)} placeholder="Title" />
-            <textarea value={draftSummary} onChange={(e) => setDraftSummary(e.target.value)} rows={4} placeholder="Summary (Markdown)" />
-            <div className="inline-edit-actions">
-              <button type="submit" disabled={!draftTitle.trim() || !draftAuthor.trim()}>Save</button>
-              <button type="button" onClick={cancel}>Cancel</button>
-            </div>
-          </form>
+          <RoadmapEditor
+            item={item}
+            runAction={runAction}
+            projects={projects}
+            parentOptions={parentOptions}
+            onCancel={() => setEditing(false)}
+            onSaved={() => setEditing(false)}
+          />
         ) : (
           <div className="roadmap-summary">
              <div className="item-meta">
                <span>{item.id}</span>
                {item.metadata?.author && <span>by {item.metadata.author}</span>}
                <ProvenanceChip provenance={item.metadata?.provenance} />
-               {item.metadata?.created_at && <span>created {formatDate(item.metadata.created_at)}</span>}
-               {item.metadata?.updated_at && <span>updated {formatDate(item.metadata.updated_at)}</span>}
+               {createdAt && (
+                 <span title={item.activity?.created_at_inferred ? 'Inferred from recorded roadmap/task activity' : undefined}>
+                   created {formatDate(createdAt)}{item.activity?.created_at_inferred ? ' (inferred)' : ''}
+                 </span>
+               )}
+               {activityAt && <span title={roadmapActivityTitle(item)}>latest activity {formatDate(activityAt)}</span>}
+             </div>
+             <div className="roadmap-fields roadmap-item-fields">
+               <FieldChips label="Projects" values={item.projects ?? []} />
+               <FieldChips label="Owner" values={item.metadata?.owner ? [item.metadata.owner] : []} />
+               <FieldChips label="Milestone" values={item.metadata?.milestone ? [item.metadata.milestone] : []} />
+               <FieldChips label="Parent" values={roadmapParent(item) ? [roadmapParent(item)] : []} />
+               <FieldChips label="Kind" values={item.kind ? [item.kind] : []} />
+               <FieldChips label="Depends on" values={item.depends_on ?? []} />
+               <FieldChips label="Tasks" values={item.task_refs ?? []} />
+               <FieldChips label="Inbox" values={item.inbox_refs ?? []} />
              </div>
              <ActivityTimeline
-               description={item.summary ? { body: item.summary, author: item.metadata?.author, at: item.metadata?.created_at } : undefined}
+               description={item.summary ? { body: item.summary, author: item.metadata?.author, at: createdAt } : undefined}
                comments={item.metadata?.comments ?? []}
                history={historyOf(item)}
                editable={false}
@@ -3662,7 +4287,6 @@ function RoadmapItemCard({ item, runAction, projects = [] }: { item: any, runAct
              />
              {!item.summary && (item.metadata?.comments ?? []).length === 0 && historyOf(item).length === 0 && <p className="empty">No summary.</p>}
              {!STATIC && runAction && <CommentComposer id={item.id} runAction={runAction} />}
-             {!STATIC && runAction && <button className="text-action" onClick={() => setEditing(true)}>Modify</button>}
           </div>
         )}
       </div>
@@ -3909,6 +4533,11 @@ function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
 }
 
 function compareInboxItems(a: any, b: any) {
+  const priority = (item: any) => item.kind === 'protection'
+    ? 3
+    : (item.kind === 'conversation' || item.metadata?.conversation ? 2 : 1);
+  const priorityDifference = priority(b) - priority(a);
+  if (priorityDifference) return priorityDifference;
   const aTime = Date.parse(inboxActivityAt(a) || '') || 0;
   const bTime = Date.parse(inboxActivityAt(b) || '') || 0;
   if (aTime !== bTime) return bTime - aTime;
@@ -3967,6 +4596,7 @@ function normalizedInboxStatus(status: string | undefined) {
 }
 
 function filterLabel(value: string) {
+  if (value === INBOX_WORKSPACE_SCOPE) return 'Workspace';
   if (value === 'completed') return 'closed';
   if (value === 'archived') return 'archived';
   if (value === 'accept') return gateLabel(value);
@@ -4001,6 +4631,15 @@ function inboxComments(item: any) {
   return [];
 }
 
+function scopeTargets(item: any, key: string): string[] {
+  const values = item?.scope?.[key];
+  if (!Array.isArray(values)) return [];
+  return values.map((value: any) => {
+    if (typeof value === 'string') return value.trim();
+    return String(value?.target ?? value?.id ?? value?.name ?? '').trim();
+  }).filter(Boolean);
+}
+
 function inboxAuthor(item: any) {
   for (const value of [item.author, item.metadata?.author]) {
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -4014,6 +4653,31 @@ function inboxAuthor(item: any) {
 function inboxAgent(item: any) {
   const agent = item.metadata?.agent;
   return typeof agent === 'string' && agent.trim() ? agent.trim() : '';
+}
+
+function inboxAudienceTargets(item: any): string[] {
+  return String(item?.audience || '')
+    .split(',')
+    .map((target) => target.trim())
+    .filter(Boolean);
+}
+
+function inboxParticipants(item: any): string[] {
+  const values = [...inboxAudienceTargets(item)];
+  const raw = item?.metadata?.participants;
+  if (Array.isArray(raw)) values.push(...raw.map(String));
+  else if (typeof raw === 'string') values.push(...raw.split(','));
+  const startedBy = String(item?.metadata?.started_by || '').trim();
+  if (startedBy) values.push(startedBy);
+  const provenance = item?.metadata?.provenance;
+  const task = String(provenance?.task || '').trim();
+  const run = String(provenance?.run || '').trim();
+  if (task) values.push(`task:${task}`);
+  else if (run) values.push(`run:${run}`);
+  const author = inboxAuthor(item).toLowerCase();
+  if (author === 'human') values.push('human');
+  else if (author === 'horizon' && !startedBy && !task && !run) values.push('horizon');
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function inboxTitleAndBody(item: any) {
@@ -4038,12 +4702,36 @@ function inboxSourceUrl(item: any, repo?: string | null) {
 
 function matchesInboxFilters(
   item: any,
-  filters: { query: string; providerFilter: Set<string>; statusFilter: Set<string>; gateFilter: Set<string>; kinds?: Set<string>; audienceFilter?: Set<string> },
+  filters: {
+    query: string;
+    providerFilter: Set<string>;
+    statusFilter: Set<string>;
+    gateFilter: Set<string>;
+    kinds?: Set<string>;
+    audienceFilter?: Set<string>;
+    ownerFilter?: Set<string>;
+    projectFilter?: Set<string>;
+    authorFilter?: Set<string>;
+  },
 ) {
   if (!filters.providerFilter.has(item.provider)) return false;
   if (!filters.statusFilter.has(normalizedInboxStatus(item.status))) return false;
-  if (filters.kinds && filters.kinds.size > 0 && !filters.kinds.has(item.kind)) return false;
-  if (filters.audienceFilter && !filters.audienceFilter.has(String(item.audience || 'general'))) return false;
+  if (filters.kinds && filters.kinds.size > 0) {
+    const kind = item.kind === 'conversation' || item.metadata?.conversation
+      ? 'conversation'
+      : item.kind;
+    if (!filters.kinds.has(kind)) return false;
+  }
+  const audiences = inboxAudienceTargets(item);
+  if (
+    filters.audienceFilter
+    && !(audiences.length ? audiences : ['general']).some((target) => filters.audienceFilter!.has(target))
+  ) return false;
+  if (filters.ownerFilter && !filters.ownerFilter.has(inboxOwnerTask(item) || 'shared')) return false;
+  const projects = scopeTargets(item, 'projects');
+  const projectScopes = projects.length ? projects : [INBOX_WORKSPACE_SCOPE];
+  if (filters.projectFilter && filters.projectFilter.size > 0 && !projectScopes.some((project) => filters.projectFilter!.has(project))) return false;
+  if (filters.authorFilter && filters.authorFilter.size > 0 && !filters.authorFilter.has(inboxAuthor(item))) return false;
   const gate = inboxGate(item.labels ?? []);
   if (!filters.gateFilter.has(gate)) return false;
   const query = filters.query.trim().toLowerCase();
@@ -4057,6 +4745,9 @@ function matchesInboxFilters(
     item.body,
     item.audience,
     inboxAuthor(item),
+    inboxOwnerTask(item),
+    ...inboxReadBy(item),
+    ...projects,
     item.source_ref,
     ...(item.labels ?? []),
     comments,

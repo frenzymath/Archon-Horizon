@@ -38,7 +38,7 @@ function DepList({ items, empty, onGoTo }: { items: string[]; empty: string; onG
   );
 }
 
-function DualRange({ label, max, value, onChange, infiniteTop }: {
+function DualRange({ label, max, value, onChange }: {
   label: string; max: number; value: [number, number]; onChange: (v: [number, number]) => void;
 }) {
   const [lo, hi] = value;
