@@ -12,6 +12,7 @@ from archon_horizon.config.harnesses import HarnessRegistry, UnknownHarnessKind
 from archon_horizon.config.env import load_env_file
 from archon_horizon.config.loader import build_orchestrator, build_workspace, load_config
 from archon_horizon.config.schema import HarnessConfig
+from archon_horizon.commands.interactive import build_interactive_launch
 from archon_horizon.core.sessions import Focus, RunRecord
 from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 
@@ -165,6 +166,11 @@ def test_registry_builds_codex_argv(tmp_path: Path) -> None:
     argv = harness._argv("PROMPT")  # noqa: SLF001 — asserting the wiring
     assert argv[:2] == ["codex", "exec"]
     assert "fable5" in argv and "model_reasoning_effort=high" in argv
+    assert "--dangerously-bypass-hook-trust" in argv
+    assert any(arg.startswith("hooks.SessionStart=") for arg in argv)
+    assert any(arg.startswith("hooks.PreToolUse=") for arg in argv)
+    assert any(arg.startswith("hooks.PostToolUse=") for arg in argv)
+    assert any(arg.startswith("hooks.Stop=") for arg in argv)
     assert argv[-1] == "PROMPT"
 
 
@@ -186,7 +192,11 @@ def test_registry_claude_ultracode_uses_settings_not_effort() -> None:
     argv = harness._argv("PROMPT")  # noqa: SLF001
     assert "--effort" not in argv
     assert "--settings" in argv
-    assert json.loads(argv[argv.index("--settings") + 1]) == {"ultracode": True}
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings["ultracode"] is True
+    assert set(settings["hooks"]) == {
+        "SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "Stop",
+    }
     # It still surfaces to the Logs/UI as the effort label.
     assert getattr(harness, "horizon_effort") == "ultracode"
 
@@ -226,6 +236,68 @@ def test_registry_codex_effort_default_omits_reasoning_flag() -> None:
     harness = HarnessRegistry().build(cfg)
     argv = harness._argv("PROMPT")  # noqa: SLF001 — asserting the wiring
     assert not any("model_reasoning_effort" in a for a in argv)
+
+
+def test_attention_hooks_can_be_disabled_for_older_engines() -> None:
+    for kind in ("claude-code", "codex"):
+        cfg = HarnessConfig(
+            name="horizon", kind=kind, options={"inbox_hooks": False}
+        )
+        argv = HarnessRegistry().build(cfg)._argv("PROMPT")  # noqa: SLF001
+        assert "--dangerously-bypass-hook-trust" not in argv
+        assert not any(arg.startswith("hooks.") for arg in argv)
+        if "--settings" in argv:
+            assert "hooks" not in json.loads(argv[argv.index("--settings") + 1])
+
+
+def test_interactive_launches_include_attention_hooks(monkeypatch) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    claude = build_interactive_launch(
+        HarnessConfig(
+            name="claude", kind="claude-code",
+            options={"skip_permissions": False},
+        ),
+        "PROMPT",
+    )
+    assert claude is not None
+    settings = json.loads(claude.argv[claude.argv.index("--settings") + 1])
+    assert "PostToolUse" in settings["hooks"]
+    assert "PreToolUse" in settings["hooks"]
+    assert "Stop" in settings["hooks"]
+
+    codex = build_interactive_launch(
+        HarnessConfig(name="codex", kind="codex"), "PROMPT"
+    )
+    assert codex is not None
+    assert "--dangerously-bypass-hook-trust" in codex.argv
+    assert any(arg.startswith("hooks.PostToolUse=") for arg in codex.argv)
+
+
+def test_interactive_launch_can_omit_attention_hooks(monkeypatch) -> None:
+    # `horizon discuss` is a human-driven advisor: it launches without the
+    # Horizon inbox hooks even though the harness would otherwise carry them.
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    claude = build_interactive_launch(
+        HarnessConfig(
+            name="claude", kind="claude-code",
+            options={"skip_permissions": False, "effort": "ultracode"},
+        ),
+        "PROMPT",
+        attention_hooks=False,
+    )
+    assert claude is not None
+    # No hooks, but other session settings (ultracode) survive.
+    if "--settings" in claude.argv:
+        settings = json.loads(claude.argv[claude.argv.index("--settings") + 1])
+        assert "hooks" not in settings
+        assert settings.get("ultracode") is True
+
+    codex = build_interactive_launch(
+        HarnessConfig(name="codex", kind="codex"), "PROMPT", attention_hooks=False
+    )
+    assert codex is not None
+    assert "--dangerously-bypass-hook-trust" not in codex.argv
+    assert not any(arg.startswith("hooks.") for arg in codex.argv)
 
 
 def test_registry_claude_unknown_effort_is_explicit() -> None:
@@ -548,5 +620,3 @@ def test_unknown_workspace_keys_are_ignored(tmp_path: Path) -> None:
     _write_config(tmp_path, body)
     cfg = load_config(tmp_path)
     assert cfg.rounds == 1
-
-

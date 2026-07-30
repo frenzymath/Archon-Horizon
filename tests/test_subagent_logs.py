@@ -103,6 +103,56 @@ def test_claude_parent_emits_dispatch_and_completion_lifecycle() -> None:
     assert parse_claude_line(background) == []
 
 
+def test_claude_workflow_launch_and_completion_are_structured() -> None:
+    launch = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-27T02:11:01Z",
+        "message": {"content": [{
+            "type": "tool_result", "tool_use_id": "toolu_workflow",
+            "content": "Workflow launched in background.",
+        }]},
+        "toolUseResult": {
+            "status": "async_launched",
+            "taskId": "wtck0gjlg",
+            "taskType": "local_workflow",
+            "workflowName": "ajc-state-of-the-project",
+            "runId": "wf_bed62eb6-c82",
+            "summary": "Answer, with file evidence",
+            "transcriptDir": "/tmp/session/subagents/workflows/wf_bed62eb6-c82",
+        },
+    })
+    events = parse_claude_line(launch)
+    progress = [event for event in events if event.kind is TranscriptKind.WORKFLOW_PROGRESS]
+    assert len(progress) == 1
+    assert progress[0].data["name"] == "ajc-state-of-the-project"
+    assert progress[0].data["workflow_id"] == "wf_bed62eb6-c82"
+    assert progress[0].data["task_id"] == "wtck0gjlg"
+    assert progress[0].data["status"] == "running"
+
+    completion = json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-27T02:44:23Z",
+        "message": {"content": (
+            "<task-notification>\n"
+            "<task-id>wtck0gjlg</task-id>\n"
+            "<status>completed</status>\n"
+            '<summary>Dynamic workflow "Answer, with file evidence" completed</summary>\n'
+            "<usage><agent_count>12</agent_count><agents_done>12</agents_done>"
+            "<agents_error>0</agents_error><agents_skipped>0</agents_skipped>"
+            "<subagent_tokens>1670976</subagent_tokens><tool_uses>672</tool_uses>"
+            "<duration_ms>2001419</duration_ms></usage>\n"
+            "</task-notification>"
+        )},
+    })
+    (ended,) = parse_claude_line(completion)
+    assert ended.kind is TranscriptKind.WORKFLOW_PROGRESS
+    assert ended.data["status"] == "completed"
+    assert ended.data["completed_agents"] == 12
+    assert ended.data["total_agents"] == 12
+    assert ended.data["subagent_tokens"] == 1670976
+    assert ended.data["duration_seconds"] == 2001.419
+
+
 def test_claude_harness_materializes_native_subagent_session(tmp_path: Path) -> None:
     line = {
         "type": "assistant",

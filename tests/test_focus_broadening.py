@@ -88,9 +88,11 @@ def test_focused_task_stops_when_done(tmp_path: Path) -> None:
     assert len(ran) == 1
     stops = [e for e in orch.event_log.read_all() if e.type == "run.stopped"]
     assert stops and stops[-1].data.get("reason") == "focus-complete"
+    finished = [e for e in orch.event_log.read_all() if e.type == "run.finished"][-1]
+    assert "stop_reason" not in finished.data
 
 
-def test_frozen_focused_task_reports_unrunnable_and_stops(tmp_path: Path) -> None:
+def test_frozen_focused_task_reports_unrunnable_and_stops(tmp_path: Path, capsys) -> None:
     root = tmp_path / "ws"
     orch = _orchestrator(root, lambda req: HarnessResult(ok=True, text="done"), config=_CONFIG_FROZEN)
     orch.task_store.put(HorizonTask(
@@ -98,11 +100,29 @@ def test_frozen_focused_task_reports_unrunnable_and_stops(tmp_path: Path) -> Non
         projects=("ag-main",), status=TaskStatus.QUEUED, write_set=WriteSet(projects=("ag-main",)),
     ))
 
-    orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=1))
+    # Legacy runs used the singular focus.task field; resume diagnostics must be
+    # identical to current focus.tasks records.
+    reports = orch.run(RunRecord(id="", focus=Focus(task="T-1"), rounds_requested=1))
 
-    types = [e.type for e in orch.event_log.read_all()]
+    events = orch.event_log.read_all()
+    types = [e.type for e in events]
     assert "run.focus_unrunnable" in types
     assert "run.stopped" in types
+    assert reports[0].tasks_unrunnable == ("T-1",)
+    focus_event = next(e for e in events if e.type == "run.focus_unrunnable")
+    assert focus_event.data["tasks"] == {"T-1": "frozen"}
+    assert focus_event.data["blockers"]["T-1"] == [{
+        "level": "project",
+        "target": "ag-main",
+        "pattern": "ag-main",
+        "config_key": "freeze.projects",
+    }]
+    finished = next(e for e in events if e.type == "run.finished")
+    assert finished.data["stop_reason"] == "no-runnable-tasks"
+    terminal = capsys.readouterr().out
+    assert "No agent was launched" in terminal
+    assert "freeze.projects" in terminal
+    assert "ended after stopping early" in terminal
 
 
 def test_empty_focus_runs_all_queued_once(tmp_path: Path) -> None:

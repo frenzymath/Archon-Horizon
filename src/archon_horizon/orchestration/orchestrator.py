@@ -23,7 +23,7 @@ from archon_horizon.blueprint.workspace import workspace_dags
 from archon_horizon.config.schema import BudgetConfig
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.events import Event
-from archon_horizon.core.freeze import FreezeSet, frozen_violations
+from archon_horizon.core.freeze import FreezeSet, freeze_violation_details, frozen_violations
 from archon_horizon.core.roadmap import Roadmap, RoadmapStatus
 from archon_horizon.core.scope import ItemScope
 from archon_horizon.core.sessions import RunRecord, SyncBoundary
@@ -72,6 +72,14 @@ def _short_sha(value: object) -> str:
     return text[:7] if text else "none"
 
 
+def _focus_task_ids(run: RunRecord) -> tuple[str, ...]:
+    """Focused task ids across current and legacy singular run records."""
+    values = [*run.focus.tasks]
+    if run.focus.task:
+        values.append(run.focus.task)
+    return tuple(dict.fromkeys(values))
+
+
 def _files_summary(value: object, *, limit: int = 8) -> str:
     """A compact "which files" fragment for a commit event, e.g.
     ``3 files: a.lean, b.tex, config.yaml`` — truncated with ``+N more``.
@@ -86,6 +94,39 @@ def _files_summary(value: object, *, limit: int = 8) -> str:
         shown += f", +{len(files) - limit} more"
     noun = "file" if len(files) == 1 else "files"
     return f"{len(files)} {noun}: {shown}"
+
+
+def _freeze_blockers(task: HorizonTask, freeze: FreezeSet) -> list[dict[str, str]]:
+    """Serializable concrete freeze matches for events, logs, and the dashboard."""
+    return [
+        {
+            "level": violation.rule.level.value,
+            "target": violation.target,
+            "pattern": violation.rule.pattern,
+            "config_key": str(violation.rule.metadata.get("config_key") or "freeze"),
+            **({"reason": violation.rule.reason} if violation.rule.reason else {}),
+        }
+        for violation in freeze_violation_details(task.write_set, freeze)
+    ]
+
+
+def _freeze_blockers_summary(value: object, *, limit: int = 4) -> str:
+    if not isinstance(value, (list, tuple)):
+        return "a configured freeze rule"
+    parts: list[str] = []
+    for raw in value[:limit]:
+        if not isinstance(raw, dict):
+            continue
+        level = str(raw.get("level") or "target")
+        target = str(raw.get("target") or "unknown")
+        pattern = str(raw.get("pattern") or target)
+        source = str(raw.get("config_key") or "freeze")
+        match = f" ({pattern!r})" if pattern != target else ""
+        reason = f", reason: {raw.get('reason')}" if raw.get("reason") else ""
+        parts.append(f"{level} {target!r} is frozen by `{source}`{match}{reason}")
+    if len(value) > limit:
+        parts.append(f"+{len(value) - limit} more freeze matches")
+    return "; ".join(parts) or "a configured freeze rule"
 
 
 _FATAL_RUN_REASONS = frozenset({"auth_error", "usage_limit", "aborted_early", "session_budget"})
@@ -114,14 +155,29 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
         suffix = "round" if rounds == 1 else "rounds"
         return f"Started run {data.get('run_id')} ({rounds} {suffix})."
     if event_type == "run.finished":
+        if data.get("stop_reason"):
+            return (
+                f"Run {data.get('run_id')} ended after stopping early: "
+                f"{data.get('stop_reason')}."
+            )
         return f"Finished run {data.get('run_id')}."
     if event_type == "run.stopped":
         return f"Stopped run {data.get('run_id')}: {data.get('reason')}."
     if event_type == "run.focus_unrunnable":
         tasks = data.get("tasks")
         if isinstance(tasks, dict) and tasks:
-            detail = ", ".join(f"{tid} is {status}" for tid, status in tasks.items())
-            return f"Focus task(s) not runnable ({detail}); the scheduler only runs queued tasks."
+            blockers = data.get("blockers")
+            detail: list[str] = []
+            for tid, status in tasks.items():
+                task_blockers = blockers.get(tid) if isinstance(blockers, dict) else None
+                if status == "frozen" and task_blockers:
+                    detail.append(f"{tid}: {_freeze_blockers_summary(task_blockers)}")
+                else:
+                    detail.append(f"{tid} is {status}")
+            return (
+                f"No agent was launched because the focus is not runnable: {'; '.join(detail)}. "
+                "Inspect enforced rules with `horizon freeze list`."
+            )
         return "The pinned focus task(s) were not runnable."
     if event_type == "run.dry-run":
         return f"Dry run planned tasks: {_csv(data.get('planned'))}."
@@ -197,6 +253,12 @@ def _event_summary(event_type: str, data: dict[str, object]) -> str:
             f"{data.get('status')} outside the running agent."
         )
     if event_type == "task.blocked":
+        if data.get("reason") == "freeze":
+            return (
+                f"Blocked task {data.get('task_id')} before launching an agent: "
+                f"{_freeze_blockers_summary(data.get('blockers'))}. "
+                "Inspect enforced rules with `horizon freeze list`."
+            )
         return f"Blocked task {data.get('task_id')}: {data.get('reason')}."
     if event_type == "task.budget_cancelled":
         return (
@@ -316,6 +378,7 @@ class RoundReport:
     round_index: int
     tasks_run: tuple[str, ...] = ()
     tasks_blocked: tuple[str, ...] = ()
+    tasks_unrunnable: tuple[str, ...] = ()
     planned: tuple[str, ...] = ()
 
 
@@ -352,10 +415,18 @@ class Orchestrator:
     # session_end + report written) when the next agent runs or the run ends.
     _open_system: "SessionLog | None" = field(default=None, repr=False)
     _open_system_events: list[TranscriptEvent] = field(default_factory=list, repr=False)
+    _stop_reason: str | None = field(default=None, repr=False)
 
     # ── event helper ────────────────────────────────────────────────
 
     def _emit(self, type: str, actor: str = "orchestrator", **data: object) -> None:
+        if type == "run.started":
+            self._stop_reason = None
+        elif type == "run.stopped":
+            reason = str(data.get("reason") or "stopped")
+            self._stop_reason = None if reason == "focus-complete" else reason
+        elif type == "run.finished" and self._stop_reason:
+            data["stop_reason"] = self._stop_reason
         self.event_log.append(Event(type=type, id=uuid.uuid4().hex, actor=actor, data=data))
         if self._collecting:
             is_error = "fail" in type or "error" in type
@@ -379,7 +450,10 @@ class Orchestrator:
                 suffix = ""
             log.header(f"Starting Run (ID: {data.get('run_id')}) - {rounds} rounds{suffix}")
         elif type == "run.finished":
-            log.success(f"Run {data.get('run_id')} finished.")
+            if data.get("stop_reason"):
+                log.warn(_event_summary(type, data))
+            else:
+                log.success(f"Run {data.get('run_id')} finished.")
         elif type == "task.started":
             log.step(f"[{actor}] Started task: {data.get('task_id')}")
         elif type == "task.finished":
@@ -393,6 +467,13 @@ class Orchestrator:
         elif type == "project.commit":
             sha = str(data.get('sha'))[:7] if data.get('sha') else "none"
             log.step(f"Committed changes to {data.get('project')} ({sha})")
+        elif type in {"run.focus_unrunnable", "task.blocked"}:
+            log.error(_event_summary(type, data))
+        elif type == "run.stopped":
+            if data.get("reason") == "focus-complete":
+                log.success(f"Run {data.get('run_id')} completed its focus.")
+            else:
+                log.warn(_event_summary(type, data))
 
     @staticmethod
     def _session(runlog: RunLog | None, label: str) -> SessionLog | None:
@@ -498,10 +579,11 @@ class Orchestrator:
     def _active_projects(self, run: RunRecord) -> tuple[str, ...]:
         if run.focus.projects:
             return run.focus.projects
-        if run.focus.tasks:
+        focus_task_ids = _focus_task_ids(run)
+        if focus_task_ids:
             tasks = {task.id: task for task in self.task_store.list()}
             projects: list[str] = []
-            for task_id in run.focus.tasks:
+            for task_id in focus_task_ids:
                 task = tasks.get(task_id)
                 if task is None:
                     continue
@@ -568,7 +650,7 @@ class Orchestrator:
         Only the explicit focus is re-queued — unfocused queued work still runs
         once and then rests. Frozen tasks are left alone (the scheduler and the
         pre-dispatch freeze check handle them)."""
-        for task_id in run.focus.tasks:
+        for task_id in _focus_task_ids(run):
             try:
                 task = self.task_store.get(task_id)
             except Exception:
@@ -608,9 +690,10 @@ class Orchestrator:
         it was launched for is complete instead of reworking it across the
         remaining requested rounds. A FAILED/BLOCKED task is *not* complete, so
         those still retry (status stays metadata, not a freeze)."""
-        if not run.focus.tasks:
+        focus_task_ids = _focus_task_ids(run)
+        if not focus_task_ids:
             return False
-        for task_id in run.focus.tasks:
+        for task_id in focus_task_ids:
             try:
                 task = self.task_store.get(task_id)
             except Exception:
@@ -751,11 +834,11 @@ class Orchestrator:
             self._emit("task.blocked", task_id=task.id, reason="agent-freeze")
             return None
 
-        violations = frozen_violations(task.write_set, self.freeze)
-        if violations:
+        blockers = _freeze_blockers(task, self.freeze)
+        if blockers:
             self.task_store.put(dataclasses.replace(task, status=TaskStatus.BLOCKED, updated_at=utc_now()))
             self._emit("task.blocked", task_id=task.id, reason="freeze",
-                       rules=[r.pattern for r in violations])
+                       rules=[blocker["pattern"] for blocker in blockers], blockers=blockers)
             return None
 
         try:
@@ -1138,10 +1221,7 @@ class Orchestrator:
 
     def _run_scope_projects(self, run: RunRecord) -> tuple[str, ...]:
         projects: list[str] = list(run.focus.projects)
-        task_ids = list(run.focus.tasks)
-        if run.focus.task:
-            task_ids.append(run.focus.task)
-        for task_id in task_ids:
+        for task_id in _focus_task_ids(run):
             try:
                 task = self.task_store.get(task_id)
             except Exception:
@@ -1289,23 +1369,32 @@ class Orchestrator:
             self._write_blueprint_dags(projects=self._run_scope_projects(run))
             candidates = self.task_store.list()
             selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
+            focus_task_ids = _focus_task_ids(run)
             # A focus pinned to a task that is not runnable (e.g. it is frozen, or
             # names nothing that exists) selects nothing. Say *why* before the run
             # stops, so it does not look like it silently "finished early".
-            if not selected and run.focus.tasks:
+            if not selected and focus_task_ids:
                 by_id = {t.id: t for t in candidates}
                 skipped: dict[str, str] = {}
-                for tid in run.focus.tasks:
+                blockers: dict[str, list[dict[str, str]]] = {}
+                for tid in focus_task_ids:
                     task = by_id.get(tid)
                     if task is None:
                         skipped[tid] = "unknown"
-                    elif frozen_violations(task.write_set, self.freeze):
+                    elif task_blockers := _freeze_blockers(task, self.freeze):
                         skipped[tid] = "frozen"
+                        blockers[tid] = task_blockers
                     elif task.status is not TaskStatus.QUEUED:
                         skipped[tid] = task.status.value
                     else:
                         skipped[tid] = "not-runnable"
-                self._emit("run.focus_unrunnable", run_id=run.id, round=i, tasks=skipped)
+                self._emit(
+                    "run.focus_unrunnable",
+                    run_id=run.id,
+                    round=i,
+                    tasks=skipped,
+                    blockers=blockers,
+                )
 
             if dry_run:
                 self._emit("run.dry-run", planned=[t.id for t in selected])
@@ -1313,7 +1402,12 @@ class Orchestrator:
                 break
 
             if not selected:
-                reports.append(RoundReport(round_index=i))
+                reports.append(
+                    RoundReport(
+                        round_index=i,
+                        tasks_unrunnable=tuple(skipped) if focus_task_ids else (),
+                    )
+                )
                 self._emit("run.stopped", run_id=run.id, reason="no-runnable-tasks", round=i)
                 break
 
@@ -1463,7 +1557,7 @@ class Orchestrator:
             "run_id": run.id,
             "reason": reason,
             "at": utc_now().isoformat(),
-            "focus_tasks": list(run.focus.tasks),
+            "focus_tasks": list(_focus_task_ids(run)),
             "focus_projects": list(run.focus.projects),
             "resume": f"horizon run --resume {run.id or 'latest'}",
         }
