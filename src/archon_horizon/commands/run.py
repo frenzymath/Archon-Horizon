@@ -21,6 +21,7 @@ from archon_horizon.log import log
 from archon_horizon.transcript.sink import latest_report_text
 
 from .dashboard import LOCAL_DASHBOARD_HOST, resolve_dashboard_host
+from .ps import clear_process_marker, write_process_marker
 from .shared import emit_json, inbox_providers, load_workspace
 
 # The single-agent run target: ``horizon run horizon`` drives exactly one
@@ -91,6 +92,7 @@ class RunCommand:
 
             cfg, workspace = load_workspace(self.root)
             self._install_native_subagents(cfg, workspace)
+            self._refresh_mcp_config(cfg, workspace)
             _, providers = inbox_providers(cfg, workspace)
             orch = build_orchestrator(self.root, registry=HarnessRegistry(), inbox_providers=providers)
 
@@ -208,26 +210,37 @@ class RunCommand:
         # governs — seeded with whatever focus was requested.
         return "horizon" if declares_interactive(cfg.horizon_harness) else None
 
-    def _recover_interactive_resume(self, role: str) -> tuple[str | None, tuple[str, ...]]:
+    def _interactive_resume_run_id(self, run_logs) -> str | None:
+        """Normalize the interactive ``--resume`` selector to an existing run id."""
+        run_id = (self.resume or "").strip()
+        if run_id.lower() in ("", "latest", "last"):
+            ids = run_logs.ids()
+            run_id = ids[-1] if ids else ""
+        elif run_id.isdigit():
+            run_id = f"{int(run_id):04d}"
+        if not run_id or run_id not in run_logs.ids():
+            return None
+        return run_id
+
+    def _recover_interactive_resume(
+        self, role: str
+    ) -> tuple[str | None, tuple[str, ...], str | None]:
         """For an interactive ``--resume``, find the run's last ``role`` session and
-        return ``(engine_session_id, focus)`` — the id to hand ``claude --resume`` and
-        the task to re-seed. Either may be empty when the run recorded neither."""
+        return ``(engine_session_id, focus, project)`` — the id to hand
+        ``claude --resume``, the task to re-seed, and the original project cwd.
+        Values may be empty when the run recorded none of them."""
         from archon_horizon.config.loader import build_stores
 
-        run_id = (self.resume or "").strip()
         try:
             _, workspace = load_workspace(self.root)
-            run_logs = build_stores(workspace).run_logs
-            if run_id.lower() in ("", "latest", "last"):
-                ids = run_logs.ids()
-                run_id = ids[-1] if ids else ""
-            elif run_id.isdigit():
-                run_id = f"{int(run_id):04d}"  # normalize to the width-4 on-disk id
+            stores = build_stores(workspace)
+            run_logs = stores.run_logs
+            run_id = self._interactive_resume_run_id(run_logs)
             if not run_id:
-                return None, ()
+                return None, (), None
             sessions = run_logs.get(run_id).sessions()
         except Exception:
-            return None, ()
+            return None, (), None
         # Walk newest-first for the last session of this role that pinned an engine id.
         for session in reversed(sessions):
             try:
@@ -239,13 +252,23 @@ class RunCommand:
             sid = meta.get("engine_session_id")
             task_id = str(meta.get("task_id") or "")
             focus = (task_id,) if task_id else ()
+            project = str(meta.get("project") or "") or None
+            if project is None:
+                names = meta.get("projects")
+                if isinstance(names, list) and names and isinstance(names[0], str):
+                    project = names[0]
             if isinstance(sid, str) and sid:
-                return sid, focus
+                return sid, focus, project
             if focus:
                 # No engine id (older/interrupted-before-first-turn), but we at least
                 # recovered the task — a fresh session seeded with it is still useful.
-                return None, focus
-        return None, ()
+                return None, focus, project
+        try:
+            run = stores.runs.get(run_id)
+            task_id = run.focus.task or (run.focus.tasks[-1] if run.focus.tasks else None)
+            return None, (task_id,) if task_id else (), None
+        except Exception:
+            return None, (), None
 
     def _run_interactive(self) -> None:
         """Launch the role's harness as an interactive TTY session, seeded with a
@@ -266,6 +289,7 @@ class RunCommand:
         )
 
         from .interactive import (
+            claude_session_file,
             horizon_seed_prompt,
             interactive_launch_for_role,
             run_interactive,
@@ -277,6 +301,8 @@ class RunCommand:
         focus = tuple(t for t in self.targets if t not in ROLE_TARGETS)
         cfg, workspace = load_workspace(self.root)
         self._install_native_subagents(cfg, workspace)
+        self._refresh_mcp_config(cfg, workspace)
+        stores = build_stores(workspace)
         # Prefer the role picked by config routing (`_config_interactive_role`); the
         # plain `--backend interactive` CLI path falls back to the target shape.
         # Only one role exists now (horizon); interactive always drives it.
@@ -284,15 +310,49 @@ class RunCommand:
 
         # `--resume` interactively continues the interrupted run's engine
         # conversation: recover its last matching session's engine id (for a true
-        # `claude --resume`) and the task it was on (to seed the focus).
+        # `claude --resume`), the task it was on, and the project cwd Claude used.
         resume_session_id: str | None = None
+        resume_project: str | None = None
+        resumed_run_id: str | None = None
         if self.resume is not None:
-            resume_session_id, resume_focus = self._recover_interactive_resume(role)
+            resumed_run_id = self._interactive_resume_run_id(stores.run_logs)
+            if resumed_run_id is None:
+                log.error(f"Cannot resume run {self.resume!r}: no run record found.")
+                raise typer.Exit(1)
+            resume_session_id, resume_focus, resume_project = (
+                self._recover_interactive_resume(role)
+            )
             if resume_focus and not focus:
                 focus = resume_focus
             if resume_session_id is None:
                 log.info("No resumable engine session found for that run; starting a "
                          "fresh interactive session seeded with its focus instead.")
+
+        task = None
+        for target in ((self.task,) if self.task else focus):
+            if not target:
+                continue
+            try:
+                task = stores.tasks.get(target)
+                break
+            except Exception:
+                continue
+        task_id = task.id if task is not None else self.task
+        if task_id is None and self.resume is not None and focus:
+            task_id = focus[0]
+        if task is not None:
+            projects = tuple(task.projects) or ((task.project,) if task.project else ())
+        else:
+            projects = tuple(name for name in focus if name in workspace.projects)
+
+        # Claude stores conversations under a cwd-scoped project directory.  Use
+        # the resumed session's recorded project (or the task's primary project),
+        # otherwise a valid id created by a headless project run is invisible to an
+        # interactive process launched from the workspace root.
+        cwd_project = resume_project or (task.project if task is not None else None)
+        interactive_cwd = self.root
+        if cwd_project and cwd_project in workspace.projects:
+            interactive_cwd = workspace.project_path(cwd_project)
 
         # Every interactive session gets the lightweight seed: the only
         # instruction is to load the `horizon` skill, then wait for the user —
@@ -311,42 +371,49 @@ class RunCommand:
         if launch is None:
             log.error(f"The {role} harness is 'null'; nothing to launch interactively.")
             raise typer.Exit(1)
+
+        attempted_resume_session_id = resume_session_id
+        resume_fallback_reason: str | None = None
+        resume_file = claude_session_file(launch) if resume_session_id else None
+        if resume_session_id and launch.engine == "claude" and resume_file is None:
+            resume_fallback_reason = "conversation-not-found"
+            log.warn(
+                f"Claude conversation {resume_session_id} is not present in this "
+                "harness's session store; starting a fresh interactive session in "
+                f"run {resumed_run_id} with the recovered run context."
+            )
+            try:
+                launch = interactive_launch_for_role(self.root, role, prompt)
+            except Exception as exc:
+                log.error(f"Could not launch a fresh interactive {role} session: {exc}")
+                raise typer.Exit(1)
+            if launch is None:
+                log.error(f"The {role} harness is 'null'; nothing to launch interactively.")
+                raise typer.Exit(1)
         log.info(f"Launching an interactive {role} session using {launch.description}.")
 
         # A generic engine has no parseable session file, so just hand over the TTY.
         if launch.engine == "generic":
-            run_interactive(launch, self.root)
+            run_interactive(launch, interactive_cwd)
             return
 
-        stores = build_stores(workspace)
-        runlog = stores.run_logs.allocate()
-        task = None
-        for target in ((self.task,) if self.task else focus):
-            if not target:
-                continue
-            try:
-                task = stores.tasks.get(target)
-                break
-            except Exception:
-                continue
-        task_id = task.id if task is not None else self.task
-        if task is not None:
-            projects = tuple(task.projects) or ((task.project,) if task.project else ())
+        if resumed_run_id is not None:
+            runlog = stores.run_logs.get(resumed_run_id)
         else:
-            projects = tuple(name for name in focus if name in workspace.projects)
-        run = RunRecord(
-            id=runlog.id,
-            focus=Focus(
-                projects=projects,
-                task=task_id,
-                tasks=(task_id,) if task_id else (),
-            ),
-            rounds_requested=1,
-        )
-        try:
-            stores.runs.put(run)
-        except Exception:
-            pass
+            runlog = stores.run_logs.allocate()
+            run = RunRecord(
+                id=runlog.id,
+                focus=Focus(
+                    projects=projects,
+                    task=task_id,
+                    tasks=(task_id,) if task_id else (),
+                ),
+                rounds_requested=1,
+            )
+            try:
+                stores.runs.put(run)
+            except Exception:
+                pass
         session = runlog.new_session(f"{role}-interactive")
         base_meta = {
             "role": role,
@@ -354,9 +421,14 @@ class RunCommand:
             "engine": launch.engine,
             "engine_session_id": launch.session_id,
             "task_id": task_id,
+            "project": cwd_project,
             "projects": list(projects),
             "started_at": utc_now().isoformat(),
         }
+        if attempted_resume_session_id:
+            base_meta["resumed_engine_session_id"] = attempted_resume_session_id
+        if resume_fallback_reason:
+            base_meta["resume_fallback_reason"] = resume_fallback_reason
         session.write_meta({**base_meta, "status": "running"})
         log.info(f"Recording this interactive session under run {runlog.id} — visible in the dashboard/Log.")
 
@@ -385,6 +457,9 @@ class RunCommand:
         session_env = {
             **launch.env,
             "ARCHON_HORIZON_ROOT": str(workspace.root.resolve()),
+            "ARCHON_HORIZON_SKILL": str(
+                (workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
+            ),
             "ARCHON_HORIZON_RUN": runlog.id,
             "ARCHON_HORIZON_SESSION": session.name,
             "ARCHON_HORIZON_SESSION_DIR": str(session.path.resolve()),
@@ -411,9 +486,70 @@ class RunCommand:
             )
         launch = dataclasses.replace(launch, env=session_env)
 
-        returncode = run_interactive_captured(
-            launch, self.root, transcript_path=session.transcript_path, role=role, seed_prompt=prompt,
+        resume_fingerprint: tuple[int, int] | None = None
+        if resume_file is not None and resume_fallback_reason is None:
+            try:
+                stat = resume_file.stat()
+                resume_fingerprint = (stat.st_size, stat.st_mtime_ns)
+            except OSError:
+                resume_fingerprint = None
+        write_process_marker(
+            runlog.path,
+            task=task_id,
+            task_title=task.title if task is not None else "",
+            session=session.name,
+            projects=list(projects),
+            interactive=True,
         )
+        try:
+            returncode = run_interactive_captured(
+                launch,
+                interactive_cwd,
+                transcript_path=session.transcript_path,
+                role=role,
+                seed_prompt=prompt,
+            )
+            if (
+                returncode != 0
+                and attempted_resume_session_id
+                and resume_fallback_reason is None
+                and resume_file is not None
+                and resume_fingerprint is not None
+            ):
+                try:
+                    stat = resume_file.stat()
+                    resume_unchanged = resume_fingerprint == (stat.st_size, stat.st_mtime_ns)
+                except OSError:
+                    resume_unchanged = True
+                if resume_unchanged:
+                    resume_fallback_reason = "native-resume-rejected"
+                    log.warn(
+                        f"Claude could not resume conversation {attempted_resume_session_id}; "
+                        f"starting a fresh interactive session in run {runlog.id} with "
+                        "the recovered run context."
+                    )
+                    try:
+                        fresh_launch = interactive_launch_for_role(self.root, role, prompt)
+                    except Exception as exc:
+                        log.error(f"Could not launch a fresh interactive {role} session: {exc}")
+                        fresh_launch = None
+                    if fresh_launch is not None:
+                        launch = dataclasses.replace(fresh_launch, env=session_env)
+                        base_meta.update({
+                            "engine": launch.engine,
+                            "engine_session_id": launch.session_id,
+                            "resume_fallback_reason": resume_fallback_reason,
+                        })
+                        session.write_meta({**base_meta, "status": "running"})
+                        returncode = run_interactive_captured(
+                            launch,
+                            interactive_cwd,
+                            transcript_path=session.transcript_path,
+                            role=role,
+                            seed_prompt=prompt,
+                        )
+        finally:
+            clear_process_marker(runlog.path)
 
         agent_head = ledger.current_sha()
         candidate_shas = ledger.commit_shas_between(session_base_sha, agent_head)
@@ -479,6 +615,22 @@ class RunCommand:
         except Exception as exc:  # never block a run on optional subagent compile
             log.warn(f"Skipped subagent compilation: {exc}")
 
+    def _refresh_mcp_config(self, cfg, workspace) -> None:
+        """Refresh managed Lean MCP entries before an engine session starts.
+
+        Workspaces can outlive the package version that initialized them. Doing
+        this at run start keeps Codex's project-local config and Claude's
+        ``.mcp.json`` aligned without requiring a separate upgrade command.
+        Hand-added servers remain untouched by the merge helpers.
+        """
+        try:
+            from archon_horizon.config.mcp import install_mcp_for_harnesses, write_mcp_config
+
+            write_mcp_config(workspace.root / ".mcp.json")
+            install_mcp_for_harnesses(cfg.harnesses, workspace.root)
+        except Exception as exc:  # optional tooling must not block a run
+            log.warn(f"Skipped MCP setup refresh: {exc}")
+
     def _resume_run(self, orch) -> RunRecord:
         """Reconstruct the run to resume: the named run id, else the latest one."""
         run_id = (self.resume or "").strip()
@@ -516,9 +668,20 @@ class RunCommand:
                     "round": report.round_index,
                     "tasks_run": list(report.tasks_run),
                     "tasks_blocked": list(report.tasks_blocked),
+                    "tasks_unrunnable": list(report.tasks_unrunnable),
                 })
-                detail = f"ran {', '.join(report.tasks_run) or '-'}; blocked {', '.join(report.tasks_blocked) or '-'}"
-                rows.append((f"round {report.round_index}", "done", detail))
+                detail = (
+                    f"ran {', '.join(report.tasks_run) or '-'}; "
+                    f"blocked {', '.join(report.tasks_blocked) or '-'}; "
+                    f"not runnable {', '.join(report.tasks_unrunnable) or '-'}"
+                )
+                if report.tasks_blocked or report.tasks_unrunnable:
+                    status = "blocked"
+                elif report.tasks_run:
+                    status = "done"
+                else:
+                    status = "idle"
+                rows.append((f"round {report.round_index}", status, detail))
         if self.as_json:
             emit_json({"dry_run": self.dry_run, "rounds": summary})
             return

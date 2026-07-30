@@ -28,7 +28,7 @@ from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.store import serde
 from archon_horizon.log import log
 
-from .shared import agent_author, emit_json, history_entry, load_workspace, roadmap_store, task_store, with_provenance
+from .shared import agent_author, emit_json, ensure_concise_agent_message, history_entry, load_workspace, provenance_project, roadmap_store, task_store, with_provenance
 
 app = typer.Typer(help="Read and update Horizon tasks (safe YAML writes).", no_args_is_help=True)
 
@@ -64,6 +64,10 @@ def _task_dict(task: HorizonTask) -> dict:
         "scope": serde.to_jsonable(task.scope),
         "roadmap_refs": list(task.roadmap_refs),
         "inbox_refs": list(task.inbox_refs),
+        # Mirror `inbox show --json`, which returns comments: a lane that leaves a
+        # task comment and reads it back must see it, rather than concluding the
+        # write failed because the key was absent (I-0618).
+        "comments": list(task.metadata.get("comments", [])),
     }
 
 
@@ -109,7 +113,15 @@ def show_task(ctx: typer.Context, task_id: str = typer.Argument(...), as_json: b
     if as_json:
         emit_json({**_task_dict(task), **({"warnings": warnings} if warnings else {})})
         return
-    log.info(str(_task_dict(task)))
+    data = _task_dict(task)
+    comments = data.pop("comments", [])
+    log.info(str(data))
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        author = str(comment.get("author") or "local")
+        at = str(comment.get("at") or "")
+        log.panel(str(comment.get("body") or ""), title=f"{author} {at}".strip())
     _warn_tasks(store.list())
 
 
@@ -121,6 +133,8 @@ def set_task(
     priority: str | None = typer.Option(None, "--priority", help="urgent|high|normal|low."),
     objective: str | None = typer.Option(None, "--objective"),
     title: str | None = typer.Option(None, "--title"),
+    roadmap_ref: list[str] = typer.Option(None, "--roadmap-ref", help="Link to roadmap item id(s) (repeatable; replaces existing)."),
+    inbox_ref: list[str] = typer.Option(None, "--inbox-ref", help="Link to inbox item id(s) (repeatable; replaces existing)."),
     author: str | None = typer.Option(None, "--author", help="Who is making the change (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
@@ -152,6 +166,10 @@ def set_task(
         changes["objective"] = objective
     if title is not None:
         changes["title"] = title
+    if roadmap_ref:
+        changes["roadmap_refs"] = tuple(roadmap_ref)
+    if inbox_ref:
+        changes["inbox_refs"] = tuple(inbox_ref)
     edited = [f for f in changes if f not in ("status", "updated_at")]
     if edited:
         store.append_history(task_id, history_entry(actor, "edited", note=", ".join(edited) + " updated"))
@@ -214,7 +232,7 @@ def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, a
 def add_task(
     ctx: typer.Context,
     task_id: str = typer.Option(..., "--id", help="New task id."),
-    project: str = typer.Option(..., "--project", help="Primary project."),
+    project: str | None = typer.Option(None, "--project", help="Primary project; defaults to the session's project."),
     objective: str = typer.Option(..., "--objective", help="What the task should accomplish."),
     title: str = typer.Option("", "--title"),
     projects: list[str] = typer.Option(None, "--projects", help="All projects the task spans (repeatable)."),
@@ -225,6 +243,10 @@ def add_task(
     as_json: bool = _JSON,
 ) -> None:
     """Add a new task (safe YAML write). Open to agents and humans alike."""
+    if not project:
+        project = provenance_project()
+        if not project:
+            raise typer.BadParameter("pass --project (no session project to default from)")
     store = _store(ctx)
     actor = author or agent_author("human")
     project_tuple = tuple(projects) if projects else (project,)
@@ -265,7 +287,12 @@ def comment_task(
     except Exception:
         log.error(f"No task {task_id!r}.")
         raise typer.Exit(1)
-    store.add_comment(task_id, body, author or agent_author())
+    actor = author or agent_author()
+    try:
+        ensure_concise_agent_message(body, "task comment", author=actor)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    store.add_comment(task_id, body, actor, with_provenance())
     tasks = store.list()
     if as_json:
         emit_json(_with_task_warnings({"id": task_id, "commented": True}, tasks))

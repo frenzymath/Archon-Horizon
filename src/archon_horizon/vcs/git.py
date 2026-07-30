@@ -150,8 +150,13 @@ _WORKSPACE_EXCLUDES = (
 # A pre-commit guard installed into every out-of-tree git. Two protections:
 #
 # 1. Secrets: an accidental credential (in a transcript, config, or dropped
-#    file) is caught before it is committed. High-confidence formats only, to
-#    avoid blocking ordinary content; ARCHON_HORIZON_ALLOW_SECRETS=1 bypasses.
+#    file) is REDACTED to XXXX in the staged content and warned about — it never
+#    blocks the commit. High-confidence, case-sensitive, key-prefixed formats
+#    only, so ordinary content (long camelCase identifiers, lowercase base64) is
+#    not touched. The redaction is best-effort and fails open: any error just
+#    warns and lets the commit through, so a guard bug can never break commits.
+#    Rotate any real credential regardless. ARCHON_HORIZON_ALLOW_SECRETS=1 skips
+#    the scan entirely.
 #
 # 2. Silent clobbers on the shared ledger: a commit whose index was seeded
 #    from a STALE HEAD (a concurrent session committed since the read-tree)
@@ -167,15 +172,27 @@ _WORKSPACE_EXCLUDES = (
 #        deletions, unless ARCHON_HORIZON_ALLOW_DELETIONS=1 says they are
 #        intentional. New/modified files are always fine.
 _SECRET_HOOK = r"""#!/bin/sh
-# Auto-installed by Archon Horizon. Blocks obvious secrets and silent clobbers.
+# Auto-installed by Archon Horizon. Redacts obvious secrets (never blocks) and
+# blocks only silent clobbers of the shared ledger.
+# High-confidence, key-prefixed, CASE-SENSITIVE patterns only (grep -E, no -i),
+# so long camelCase identifiers and lowercase base64 never match.
+ARCHON_SECRET_PAT='ghp_[0-9A-Za-z]{30,}|gho_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|sk-ant-[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 if [ "$ARCHON_HORIZON_ALLOW_SECRETS" != "1" ]; then
-  added=$(git diff --cached --no-color -U0 --diff-filter=AM 2>/dev/null | grep '^+' | grep -v '^+++')
-  hit=$(printf '%s\n' "$added" | grep -Ein \
-    'ghp_[0-9A-Za-z]{30,}|gho_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|sk-ant-[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----')
-  if [ -n "$hit" ]; then
-    echo "Archon Horizon: possible secret in staged changes; commit blocked." >&2
-    echo "Remove it, or set ARCHON_HORIZON_ALLOW_SECRETS=1 to override." >&2
-    exit 1
+  # Redact each staged addition/modification in place, then re-stage it. Every
+  # step is guarded so a failure only warns — the commit is never blocked here.
+  archon_redacted=""
+  for f in $(git diff --cached --name-only --diff-filter=AM 2>/dev/null); do
+    [ -f "$f" ] || continue
+    LC_ALL=C grep -Eq "$ARCHON_SECRET_PAT" "$f" 2>/dev/null || continue
+    if LC_ALL=C sed -E "s/($ARCHON_SECRET_PAT)/XXXX/g" "$f" > "$f.archon_tmp" 2>/dev/null && mv "$f.archon_tmp" "$f" 2>/dev/null; then
+      git add -- "$f" 2>/dev/null && archon_redacted="$archon_redacted $f"
+    else
+      rm -f "$f.archon_tmp" 2>/dev/null
+    fi
+  done
+  if [ -n "$archon_redacted" ]; then
+    echo "Archon Horizon: redacted possible secret(s) to XXXX in:$archon_redacted" >&2
+    echo "The commit proceeds with the redacted content — ROTATE any real credential." >&2
   fi
 fi
 
@@ -684,23 +701,35 @@ class WorkspaceGit:
                     "%(trailers:key=Archon-Run,valueonly,separator=%x1e)%x1f"
                     "%(trailers:key=Archon-Session,valueonly,separator=%x1e)%x1f"
                     "%(trailers:key=Archon-Role,valueonly,separator=%x1e)%x1f"
-                    "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)",
+                    "%(trailers:key=Archon-Commit,valueonly,separator=%x1e)%x1f"
+                    "%(trailers:key=Summary,valueonly,separator=%x1e)",
                     sha,
                 ],
                 check=False,
             )
             parts = out.split("\x1f")
-            if len(parts) > 7:
+            if len(parts) > 8:
                 continue
-            parts.extend([""] * (7 - len(parts)))
-            full_sha, subject, date, run_trailer, session_trailer, role_trailer, kind_trailer = parts
+            parts.extend([""] * (8 - len(parts)))
+            (
+                full_sha,
+                subject,
+                date,
+                run_trailer,
+                session_trailer,
+                role_trailer,
+                kind_trailer,
+                summary_trailer,
+            ) = parts
             runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
             sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
             roles = [v.strip().lower() for v in role_trailer.split("\x1e") if v.strip()]
             kinds = [v.strip().lower() for v in kind_trailer.split("\x1e") if v.strip()]
+            summaries = [v.strip() for v in summary_trailer.split("\x1e") if v.strip()]
             rows.append({
                 "sha": full_sha,
                 "subject": subject,
+                "summary": "\n\n".join(summaries),
                 "date": date,
                 "run": runs[-1] if runs else "",
                 "session": sessions[-1] if sessions else "",
@@ -708,6 +737,24 @@ class WorkspaceGit:
                 "kind": kinds[-1] if kinds else "agent",
             })
         return rows
+
+    def _summary_for_commit(self, sha: str) -> str:
+        """Read every Summary trailer for one commit.
+
+        ``git log --grep`` currently collapses repeated trailers to the first
+        value, while ``git show`` preserves them. Resolve this small field per
+        matched commit so several explanations remain visible in the dashboard.
+        """
+        raw = self._run(
+            [
+                "show",
+                "-s",
+                "--format=%(trailers:key=Summary,valueonly,separator=%x1e)",
+                sha,
+            ],
+            check=False,
+        )
+        return "\n\n".join(v.strip() for v in raw.split("\x1e") if v.strip())
 
     def session_commits_detailed(self, run_id: str, session: str) -> list[dict[str, str]]:
         """Commit rows for one run/session, oldest-first, with provenance.
@@ -735,7 +782,15 @@ class WorkspaceGit:
             parts = line.split("\x1f")
             if len(parts) != 7:
                 continue
-            sha, subject, date, run_trailer, session_trailer, role_trailer, kind_trailer = parts
+            (
+                sha,
+                subject,
+                date,
+                run_trailer,
+                session_trailer,
+                role_trailer,
+                kind_trailer,
+            ) = parts
             runs = [v.strip() for v in run_trailer.split("\x1e") if v.strip()]
             sessions = [v.strip() for v in session_trailer.split("\x1e") if v.strip()]
             if run_id in runs and session in sessions:
@@ -745,6 +800,7 @@ class WorkspaceGit:
                 matched.append({
                     "sha": sha,
                     "subject": subject,
+                    "summary": self._summary_for_commit(sha),
                     "date": date,
                     "role": roles[-1] if roles else "",
                     "kind": kind,

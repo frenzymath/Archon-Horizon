@@ -264,33 +264,56 @@ def test_existing_gitlink_is_converted_to_tracked_files(tmp_path: Path) -> None:
     assert "projects/leheng/Ch0.lean" in tracked
 
 
-def test_secret_guard_hook_blocks_credentials(tmp_path: Path) -> None:
-    """The installed pre-commit hook rejects an obvious credential; the documented
-    env override lets a commit through when explicitly allowed."""
-    import os as _os
-
+def _commit_leak(tmp_path: Path, body: str, *, env: dict | None = None):
+    """Stage a file with ``body`` and commit it through the guarded ledger git.
+    Returns (CompletedProcess, committed_content)."""
     _identity()
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
-    (tmp_path / ".archon-horizon").mkdir()
+    (tmp_path / ".archon-horizon").mkdir(exist_ok=True)
     ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
     WorkspaceGit(tmp_path).init()
-    (tmp_path / ".archon-horizon" / "leak.txt").write_text(
-        'token = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz012345"\n', "utf-8"
-    )
-    subprocess.run(["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path),
-                    "add", "-f", ".archon-horizon/leak.txt"], cwd=tmp_path, check=True)
+    (tmp_path / ".archon-horizon" / "leak.txt").write_text(body, "utf-8")
+    base = ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path)]
+    subprocess.run(base + ["add", "-f", ".archon-horizon/leak.txt"], cwd=tmp_path, check=True)
+    proc = subprocess.run(base + ["commit", "-m", "x"], cwd=tmp_path,
+                          capture_output=True, text=True, env=env)
+    committed = subprocess.run(base + ["show", "HEAD:.archon-horizon/leak.txt"],
+                               cwd=tmp_path, capture_output=True, text=True).stdout
+    return proc, committed
 
-    blocked = subprocess.run(
-        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "commit", "-m", "x"],
-        cwd=tmp_path, capture_output=True, text=True,
-    )
-    assert blocked.returncode != 0
 
-    allowed = subprocess.run(
-        ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path), "commit", "-m", "x"],
-        cwd=tmp_path, capture_output=True, text=True,
+def test_secret_guard_redacts_and_never_blocks(tmp_path: Path) -> None:
+    """A credential is REDACTED to XXXX in the committed (and working-tree) content
+    and the commit still succeeds — the guard never blocks."""
+    secret = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+    proc, committed = _commit_leak(tmp_path, f'token = "{secret}"\n')
+    assert proc.returncode == 0                     # never blocked
+    assert "redacted" in proc.stderr.lower()
+    assert secret not in committed and "XXXX" in committed
+    # the working-tree file is redacted too, so the secret does not linger
+    assert secret not in (tmp_path / ".archon-horizon" / "leak.txt").read_text("utf-8")
+
+
+def test_secret_guard_override_preserves_content(tmp_path: Path) -> None:
+    """ARCHON_HORIZON_ALLOW_SECRETS=1 skips the scan: content is committed verbatim."""
+    import os as _os
+
+    secret = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+    proc, committed = _commit_leak(
+        tmp_path, f'token = "{secret}"\n',
         env={**_os.environ, "ARCHON_HORIZON_ALLOW_SECRETS": "1"},
     )
-    assert allowed.returncode == 0
+    assert proc.returncode == 0
+    assert secret in committed  # not redacted when explicitly allowed
+
+
+def test_secret_guard_no_false_positive_case_sensitive(tmp_path: Path) -> None:
+    """A lowercase camelCase identifier that a case-insensitive scan would flag
+    (AKIA…) must be left untouched now that the scan is case-sensitive (I-0238)."""
+    ident = "def akiaLongCamelCaseIdentifier01 := 1"
+    proc, committed = _commit_leak(tmp_path, ident + "\n")
+    assert proc.returncode == 0
+    assert "XXXX" not in committed
+    assert ident in committed
 
 

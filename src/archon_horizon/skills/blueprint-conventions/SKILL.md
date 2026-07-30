@@ -33,6 +33,11 @@ its following `proof` environment form one node's content.
   proof is formalized; on a statement, the signature is formalized.
 - `\mathlibok` — the declaration is already available in mathlib (no
   formalization needed; treat as a leaf).
+- `\notready` — the Lean is **not written yet**: the node's statement stands but
+  no declaration formalizes it. Mutually exclusive with `\leanok` (a node is
+  never both) — remove `\notready` exactly when you add `\leanok`, i.e. the
+  moment its Lean is written and checked. It is a human-facing marker of an
+  intentional gap, not a DAG edge.
 
 ## House style
 
@@ -40,7 +45,10 @@ its following `proof` environment form one node's content.
   semi-Lean pseudocode. No project history ("since iter N", "our failed route")
   and no conversational filler. Not every Lean helper needs its own node —
   auxiliary or implementation-only declarations can stay unnoded; add a node when
-  the result is mathematically meaningful in its own right.
+  the result is mathematically meaningful in its own right. In particular, never
+  add a `Formalization note` paragraph to blueprint `.tex`: attach implementation
+  details, failed approaches, and mechanization caveats to the statement's hgraph
+  node with `horizon graph ... add comment` instead.
 - **Complete proofs, not sketches.** A node's `proof` is a real, rigorous
   mathematical proof a reader could check — not a hand-wave or a TODO. The way to
   keep it short is to *split*, not to abbreviate: if a proof is long or a node

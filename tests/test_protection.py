@@ -30,12 +30,14 @@ def test_protect_creates_persistent_protection_item(tmp_path: Path) -> None:
         "--root", str(ws), "inbox", "protect",
         "--body", "do not change the signature of Foo.bar",
         "--declaration", "Foo.bar",
+        "--blueprint-node", "thm:foo-bar",
     ])
     assert rc == 0
     item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
     assert item.kind is InboxKind.PROTECTION
     assert item.body.startswith("[persistent]")
     assert item.scope.targets("declarations") == ("Foo.bar",)
+    assert item.scope.targets("blueprint_nodes") == ("thm:foo-bar",)
     assert item.audience == "horizon"
 
 

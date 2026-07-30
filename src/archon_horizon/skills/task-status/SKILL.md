@@ -51,11 +51,12 @@ change status for you; if the state is intentional, it may remain as-is.
 
 ## Comment as you work
 
-Leave a short comment whenever you hit a significant step or change the status, so
-the ledger tells the story without opening raw logs:
+Leave a short comment only for a durable state change or blocker. Default to one
+sentence or at most three bullets: conclusion, evidence, next open obligation.
+Do not restate commit summaries, the session report, or earlier comments.
 
 ```
-"$HORIZON_BIN" task comment <task_id> --body "Closed the base case; representability lemma still open."
+"$HORIZON_BIN" task comment <task_id> --body "Closed the base case; representability remains open."
 ```
 
 ## The one rule to remember

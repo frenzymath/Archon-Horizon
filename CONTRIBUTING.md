@@ -134,14 +134,16 @@ one-off scripts.
 
 ## Versioning & releases
 
-- The version lives in **one place**: `archon_horizon.__version__`
-  (`src/archon_horizon/__init__.py`); `pyproject.toml` reads it dynamically. Do
-  not duplicate it.
+- The authoritative version is `archon_horizon.__version__`
+  (`src/archon_horizon/__init__.py`); `pyproject.toml` reads it dynamically.
+  Run `python scripts/version.py X.Y.Z` for a release bump: it synchronizes the
+  README badge, dashboard package/lock metadata, and demo workspace stamp. Run
+  `python scripts/version.py --check` to detect drift.
 - Semantic Versioning; while `0.x`, minor releases may change on-disk formats
   (document migrations in `docs/CHANGELOG.md`).
-- To cut a release: bump `__version__`, move `docs/CHANGELOG.md` `[Unreleased]`
-  entries under a dated heading, update the README version badge, run the tests,
-  then commit and tag `vX.Y.Z`. `install.sh` pulls the `main` tarball, so a
+- To cut a release: run the version script, move `docs/CHANGELOG.md` `[Unreleased]`
+  entries under a dated heading, run the tests, then commit and tag `vX.Y.Z`.
+  `install.sh` pulls the `main` tarball, so a
   release is live on `main` immediately; the tag is for provenance.
 
 ## Reporting issues

@@ -7,6 +7,9 @@ Archon Horizon includes both an interactive Single Page Application (SPA) dashbo
 ## Table of Contents
 
 - [1. Live Web Dashboard Server](#1-live-web-dashboard-server)
+  - [Clickable Local-Reference Chips](#clickable-local-reference-chips)
+  - [Board View (`/board`)](#board-view-board)
+  - [Commit Resolution API & Log Ordering](#commit-resolution-api--log-ordering)
 - [2. Static Snapshot Export & GitHub Pages](#2-static-snapshot-export--github-pages)
   - [Automated GitHub Pages Workflow](#automated-github-pages-workflow)
 - [3. Offline Lean Declaration Search (`horizon search`)](#3-offline-lean-declaration-search-horizon-search)
@@ -41,7 +44,24 @@ or `--no-dashboard` to run without the UI.
 The server is implemented in [`server/app.py`](../../src/archon_horizon/server/app.py) (with data assembled by [`server/service.py`](../../src/archon_horizon/server/service.py) and Git/source endpoints in [`server/git_api.py`](../../src/archon_horizon/server/git_api.py) and [`server/source_api.py`](../../src/archon_horizon/server/source_api.py)); the CLI entry point is [`commands/dashboard.py`](../../src/archon_horizon/commands/dashboard.py), and the SPA source lives under [`frontend/`](../../src/archon_horizon/frontend). It provides real-time visualization and management features:
 - **Interactive chapter graph**: Explore a deterministic Graphviz layout with chapters collapsed by default, one-chapter expansion, filtering, and node selection.
 - **Roadmap & Task Tracker**: Monitor ongoing execution runs, inspect step-by-step run logs, and view milestone progress.
+- **Board view**: A GitHub-Projects-style kanban that groups the roadmap by milestone (see [Board View](#board-view-board)).
 - **Inbox Management**: Directly review, triage, and comment on workspace inbox hints and issues.
+- **Clickable reference chips**: Ids and commit SHAs mentioned anywhere in rendered text become links that jump straight to the entity (see [Clickable Local-Reference Chips](#clickable-local-reference-chips)).
+
+### Clickable Local-Reference Chips
+
+Rendered prose across the dashboard — inbox bodies, commit messages, session reports, roadmap summaries, and comments — now turns bare references to local entities into clickable, hoverable tag chips that navigate to the matching view. Recognized tokens are roadmap item ids, task ids, inbox ids, blueprint/hgraph node keys, and commit SHAs.
+
+This is **linkify-by-known-set**, not pattern-guessing: a token becomes a chip only when it resolves against the set of ids already in app state ([`refs.tsx`](../../src/archon_horizon/frontend/src/refs.tsx) builds the resolver keyed on live roadmap/task/inbox/node ids), so ordinary prose can't sprout false links. Commit SHAs are gated further — a hex token is only linkified when it matches a known `pinned_commits` entry (matched on its first 7 characters, so both abbreviated and full forms resolve). The rendered-markdown pass that injects the chip anchors lives in [`components/MarkdownBlock.tsx`](../../src/archon_horizon/frontend/src/components/MarkdownBlock.tsx) (`linkifyRefs`), which walks the assembled inline HTML and skips text already inside `<a>`, `<code>`, or `<pre>`. A commit chip self-resolves its subject and owning project from the live `/api/commit` endpoint (see below), so a pinned SHA reads as `abc1234 · fix the thing`.
+
+### Board View (`/board`)
+
+The **Board** page ([`BoardPage.tsx`](../../src/archon_horizon/frontend/src/BoardPage.tsx), reachable from the header nav) is a GitHub-Projects-style view of the roadmap that serves agents and humans off the exact same data. It groups roadmap items by their `milestone` label (a free string, with `Unassigned` floated to the end), lays out kanban columns by status (active / pending / blocked / done / rejected), and surfaces each item's `@owner` chip. A derived **live "running" pulse** marks any item a currently running task points at through its `roadmap_refs` — this is computed, never stored. Each card can expand to show projects, dependencies (as reference chips), the item's milestone, and its **pinned-commit chips**.
+
+### Commit Resolution API & Log Ordering
+
+- **`GET /api/commit?sha=<sha>`** resolves a bare (possibly abbreviated) commit SHA across every project to `{sha, short_sha, subject, project}`, returning the first match or `404` when nothing matches so the client leaves the reference plain. It backs the commit chips described above. Implemented in [`server/service.py`](../../src/archon_horizon/server/service.py) (`_resolve_commit`, dispatched from the `/api/commit` path handler).
+- **Commit log order**: the per-session commit log is now sorted **latest-first** — [`session_commits_view`](../../src/archon_horizon/server/service.py) sorts its rows by commit date descending before returning them.
 
 ---
 

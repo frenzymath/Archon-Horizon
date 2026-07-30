@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archon_horizon.commands.interactive import horizon_seed_prompt
+from archon_horizon.commands.interactive import discuss_prompt, horizon_seed_prompt
 
 
 def test_seed_loads_the_skill_and_waits() -> None:
@@ -28,3 +28,14 @@ def test_seed_resuming_frames_continuation() -> None:
     assert "RESUMING" in seed
     assert "T-7" in seed
     assert "skill" in seed
+    assert "$ARCHON_HORIZON_SESSION_DIR/.." in seed
+    assert "report.md" in seed and "transcript" in seed
+
+
+def test_discuss_is_the_consent_gated_coordination_console() -> None:
+    seed = discuss_prompt(Path("/ws"))
+    assert "coordination console" in seed
+    assert "horizon ps" in seed
+    assert "horizon permissions --json" in seed
+    assert "explicitly approves" in seed
+    assert "tmux" in seed and "max_parallel_sessions" in seed

@@ -3,6 +3,9 @@ import type { GitCommit } from './hooks/useGitLog';
 // The transcript path string must match the Python endpoint registry exactly
 // (it is what gets sha256-hashed in static mode), so ref is interpolated raw.
 const transcriptPath = (ref: string) => `/api/transcript?ref=${ref}`;
+const transcriptPagePath = (ref: string, before?: number, limit = 120) => (
+  `${transcriptPath(ref)}&limit=${limit}${before === undefined ? '' : `&before=${before}`}`
+);
 const reportPath = (ref: string) => `/api/report?ref=${ref}`;
 
 // Conditional-GET cache: remember the ETag + parsed body per URL so a repeat
@@ -64,6 +67,13 @@ export const getState = () => getJson<any>('/api/state');
 export const getBlueprints = () => getJson<Record<string, any>>('/api/blueprints');
 export const getTranscripts = () => getJson<any[]>('/api/transcripts');
 export const getTranscript = (ref: string) => getJson<any[]>(transcriptPath(ref));
+export interface TranscriptPage {
+  events: any[];
+  before: number | null;
+  has_more: boolean;
+}
+export const getTranscriptPage = (ref: string, before?: number, limit = 120) =>
+  getJson<TranscriptPage>(transcriptPagePath(ref, before, limit));
 export const getReport = (ref: string) => getJson<{ markdown: string; recommendation?: string }>(reportPath(ref));
 
 export interface BlueprintChaptersResponse {
@@ -77,7 +87,7 @@ export interface BlueprintChaptersResponse {
 export const getBlueprintChapters = (project: string) =>
   getJson<BlueprintChaptersResponse>(`/api/blueprint/chapters?project=${encodeURIComponent(project)}`);
 
-// Full (heavy) per-project blueprint DAG — node statements, proofs, and Lean
+// Full (heavy) per-project hgraph cache — node statements, proofs, and Lean
 // source — fetched on demand by the Blueprint and DAG pages. Kept out of
 // /api/state (which now carries only light DAG nodes) so the 5s poll stays small.
 export interface BlueprintDagResponse {
@@ -93,29 +103,18 @@ export interface SourceFile { path: string; size: number; sorries?: number; loc?
 export interface ProjectStat {
   name: string;
   depends_on?: string[];
-  lean_files: number;
-  loc: number;
-  loc_code: number;
-  sorries: number;
-  blueprint_nodes: number;
-  blueprint_leanok: number;
 }
-export interface ProjectTrendPoint {
-  sha: string;
-  short_sha: string;
-  date: string;
-  subject: string;
+export interface ProjectMetrics {
+  name: string;
   lean_files: number;
   loc: number;
   loc_code: number;
   sorries: number;
 }
 export const getProjects = () =>
-  getJson<{ projects: ProjectStat[]; totals: Omit<ProjectStat, 'name'> }>('/api/projects');
-export const getProjectHistory = (project: string, limit = 10) =>
-  getJson<{ project: string; limit?: number; history: ProjectTrendPoint[] }>(
-    `/api/project/history?project=${encodeURIComponent(project)}&limit=${encodeURIComponent(String(limit))}`,
-  );
+  getJson<{ projects: ProjectStat[] }>('/api/projects');
+export const getProjectMetrics = (project: string) =>
+  getJson<ProjectMetrics>(`/api/project/metrics?project=${encodeURIComponent(project)}`);
 export const getSourceFiles = (project: string) =>
   getJson<{ files: SourceFile[] }>(`/api/source?project=${encodeURIComponent(project)}`);
 export const getSourceFile = (project: string, path: string) =>
@@ -125,6 +124,12 @@ export const getSourceFile = (project: string, path: string) =>
 
 export const getGitLog = (project: string) =>
   getJson<{ commits: GitCommit[] }>(`/api/git/log?project=${encodeURIComponent(project)}`);
+
+// Resolve a bare (possibly abbreviated) commit SHA to its subject + owning
+// project. 404s (throws) when the SHA is not found in any project's history.
+export interface CommitInfo { sha: string; short_sha: string; subject: string; project: string }
+export const getCommit = (sha: string) =>
+  getJson<CommitInfo>(`/api/commit?sha=${encodeURIComponent(sha)}`);
 
 export type ChangeCategory = 'lean' | 'blueprint' | 'other';
 export interface SessionChangeFile {
@@ -164,6 +169,7 @@ export interface CommitChange {
   sha: string;
   short_sha: string;
   subject: string;
+  summary?: string;
   created_at?: string;
   role?: string;
   kind: string; // 'agent' | 'integration' | …
@@ -173,9 +179,45 @@ export interface CommitChange {
   sorry_delta: number;
   other_count: number;
 }
+export interface SessionInboxActivityItem {
+  id: string;
+  title: string;
+  kind: string;
+  status: string;
+  created: boolean;
+  comments: number;
+  actions: number;
+  last_activity_at?: string;
+}
+export interface SessionInboxActivity {
+  items: SessionInboxActivityItem[];
+  created: number;
+  comments: number;
+  actions: number;
+  total: number;
+}
+export interface SessionRoadmapActivityItem {
+  id: string;
+  title: string;
+  status: string;
+  created: boolean;
+  status_changes: number;
+  status_to?: string;
+  comments: number;
+  last_activity_at?: string;
+}
+export interface SessionRoadmapActivity {
+  items: SessionRoadmapActivityItem[];
+  created: number;
+  status_changes: number;
+  comments: number;
+  total: number;
+}
 export interface SessionCommits {
   run: string;
   session: string;
+  inbox?: SessionInboxActivity;
+  roadmap?: SessionRoadmapActivity;
   commits: CommitChange[];
   total?: number;
   offset?: number;

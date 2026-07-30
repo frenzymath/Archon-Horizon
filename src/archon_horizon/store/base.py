@@ -42,7 +42,9 @@ class TaskStore(ABC):
     @abstractmethod
     def delete(self, task_id: str) -> None: ...
 
-    def add_comment(self, task_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self, task_id: str, body: str, author: str | None = None, metadata: dict | None = None
+    ) -> None:
         raise NotImplementedError("this task store does not support comments")
 
     def append_history(self, task_id: str, entry: dict) -> None:
@@ -56,7 +58,9 @@ class RoadmapStore(ABC):
     @abstractmethod
     def save(self, roadmap: Roadmap) -> None: ...
 
-    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self, item_id: str, body: str, author: str | None = None, metadata: dict | None = None
+    ) -> None:
         raise NotImplementedError("this roadmap store does not support comments")
 
     def append_history(self, item_id: str, entry: dict) -> None:

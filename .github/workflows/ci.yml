@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared by requires-python, plus the version the demo
+        # workflow builds with.
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check version synchronization
+        run: python scripts/version.py --check
+
+      - name: Run tests
+        run: python -B -m pytest -q
+
+  frontend:
+    name: dashboard typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: src/archon_horizon/frontend/package-lock.json
+
+      - name: Install
+        run: npm --prefix src/archon_horizon/frontend ci
+
+      # `vite build` does not typecheck, so run tsc explicitly: type errors
+      # would otherwise ship a silently-broken dashboard. Run it from the
+      # frontend dir -- `npm --prefix ... exec` does not pass flags through to
+      # tsc (it prints its own help and exits 1).
+      - name: Typecheck
+        run: npx tsc --noEmit
+        working-directory: src/archon_horizon/frontend
+
+      - name: Build
+        run: npm --prefix src/archon_horizon/frontend run build
+
+  package:
+    name: wheel contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: src/archon_horizon/frontend/package-lock.json
+
+      # frontend/dist is gitignored, so a clean checkout has no built dashboard.
+      # It must be built before the wheel, or the wheel ships without the
+      # dashboard it is supposed to serve -- which is what check_wheel.py caught.
+      - name: Build dashboard SPA
+        run: |
+          npm --prefix src/archon_horizon/frontend ci
+          npm --prefix src/archon_horizon/frontend run build
+
+      - name: Build distributions
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Assert the wheel ships data files and no node_modules
+        run: python scripts/check_wheel.py

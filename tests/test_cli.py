@@ -139,6 +139,24 @@ def test_task_command_writes_safe_yaml(tmp_path: Path) -> None:
     assert not task_file.exists()
 
 
+def test_task_show_json_includes_comments(tmp_path: Path, capsys: Any) -> None:
+    """`task show --json` must return the comments key so a lane can verify its
+    own comment by read-back — parity with `inbox show --json` (I-0618)."""
+    ws = tmp_path / "ws"
+    assert _run(ws, "init", "--no-interactive") == 0
+    _use_null_engines(ws)
+    assert _run(ws, "project", "add", "ag-main", "projects/ag-main", "--build", "lake build") == 0
+    assert _run(ws, "task", "add", "--id", "T-1", "--project", "ag-main", "--objective", "x") == 0
+    assert _run(ws, "task", "comment", "T-1", "--body", "landed the crux lemma") == 0
+    capsys.readouterr()
+
+    assert _run(ws, "task", "show", "T-1", "--json") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "comments" in payload
+    assert len(payload["comments"]) == 1
+    assert payload["comments"][0]["body"] == "landed the crux lemma"
+
+
 def test_agents_have_full_task_access(tmp_path: Path, monkeypatch: Any) -> None:
     """Agents are no longer hard-refused from tasks: acting as the horizon agent
     (ARCHON_HORIZON_AGENT_ROLE set) they may add, set status, comment, and remove —
@@ -165,6 +183,28 @@ def test_agents_have_full_task_access(tmp_path: Path, monkeypatch: Any) -> None:
     assert _run(ws, "task", "list") == 0
     assert _run(ws, "task", "remove", "T-2") == 0
     assert not (ws / ".archon-horizon" / "tasks" / "items" / "T-2.yaml").exists()
+
+
+def test_agent_task_and_roadmap_comments_have_operational_length_bounds(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    ws = tmp_path / "ws"
+    assert _run(ws, "init", "--no-interactive") == 0
+    _use_null_engines(ws)
+    assert _run(ws, "project", "add", "ag-main", "projects/ag-main") == 0
+    assert _run(ws, "task", "add", "--id", "T-1", "--project", "ag-main", "--objective", "x") == 0
+    assert _run(ws, "roadmap", "add", "--id", "R-1", "--title", "x", "--project", "ag-main") == 0
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    oversized = "## Result\n\n- " + ("Repeated detail. " * 150)
+
+    assert _run(ws, "task", "comment", "T-1", "--body", oversized) == 2
+    assert _run(ws, "roadmap", "comment", "R-1", "--body", oversized) == 2
+
+    # Human-authored decisions are not constrained by the agent writing budget.
+    monkeypatch.delenv("ARCHON_HORIZON_AGENT_ROLE")
+    assert _run(
+        ws, "task", "comment", "T-1", "--body", oversized, "--author", "human",
+    ) == 0
 
 
 def test_init_refuses_to_clobber(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ from archon_horizon.core.tasks import HorizonTask, TaskStatus
 LIMITS = AdvisoryHealthLimits(
     open_memories=2,
     open_info=1,
+    open_conversations=2,
     open_inbox=3,
     open_tasks=2,
     active_roadmap=2,
@@ -79,6 +80,15 @@ def test_task_health_warns_for_queue_size_and_stale_running_status() -> None:
     assert len(warnings) == 2
     assert "3 open tasks" in warnings[0]
     assert "T-3" in warnings[1] and "more than 24h" in warnings[1]
+
+
+def test_inbox_health_warns_about_unclosed_conversations() -> None:
+    warnings = inbox_health_warnings(
+        [_inbox_item(i, InboxKind.CONVERSATION) for i in range(3)], LIMITS
+    )
+    assert len(warnings) == 1
+    assert "3 open conversations" in warnings[0]
+    assert "archive conversations you started" in warnings[0]
 
 
 def test_task_health_accepts_legacy_naive_timestamps() -> None:

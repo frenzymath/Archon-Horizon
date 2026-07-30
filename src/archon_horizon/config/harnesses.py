@@ -39,7 +39,7 @@ from .env import (
     openrouter_fallback_env,
     provider_env,
 )
-from .schema import HarnessConfig
+from .schema import ConfigError, HarnessConfig
 
 HarnessBuilder = Callable[[HarnessConfig], Harness]
 CLAUDE_P_INSTALL_HINT = (
@@ -49,8 +49,85 @@ CLAUDE_P_INSTALL_HINT = (
     "  (or: pip install git+https://github.com/AxelDlv00/claude-p)"
 )
 
+# Horizon owns this constant hook definition and injects it only into sessions it
+# launches. The hidden command returns the hook protocol's model-visible
+# ``additionalContext`` shape; ``--json`` also suppresses normal CLI chrome.
+_HORIZON_ATTENTION_HOOK_COMMAND = (
+    'ARCHON_HORIZON_NO_SYNC=1 "${HORIZON_BIN:-horizon}" agent-hook --json'
+)
+_HORIZON_ATTENTION_HOOK_EVENTS = (
+    ("SessionStart", "startup|resume|clear|compact"),
+    ("SubagentStart", None),
+    ("PreToolUse", "Bash"),
+    ("PostToolUse", "*"),
+    ("Stop", None),
+)
 
-class UnknownHarnessKind(ValueError):
+
+def _attention_hooks_enabled(cfg: HarnessConfig) -> bool:
+    """Allow an escape hatch for older/third-party engine builds."""
+    return bool(cfg.options.get("inbox_hooks", True))
+
+
+def _horizon_hook_groups() -> dict[str, list[dict[str, object]]]:
+    handler: dict[str, object] = {
+        "type": "command",
+        "command": _HORIZON_ATTENTION_HOOK_COMMAND,
+        "timeout": 5,
+    }
+    events: dict[str, list[dict[str, object]]] = {}
+    for event, matcher in _HORIZON_ATTENTION_HOOK_EVENTS:
+        group: dict[str, object] = {"hooks": [dict(handler)]}
+        if matcher is not None:
+            group["matcher"] = matcher
+        events[event] = [group]
+    return events
+
+
+def _claude_session_settings(cfg: HarnessConfig, *, attention_hooks: bool = True) -> str | None:
+    """Per-invocation settings shared by interactive and headless Claude.
+
+    ``attention_hooks=False`` suppresses the Horizon inbox hooks for a session
+    that must run without them (``horizon discuss`` — a human-driven advisor,
+    not an orchestrated run) while keeping every other session setting."""
+    settings: dict[str, object] = {}
+    if _claude_ultracode(cfg):
+        settings["ultracode"] = True
+    if attention_hooks and _attention_hooks_enabled(cfg):
+        settings["hooks"] = _horizon_hook_groups()
+    return json.dumps(settings) if settings else None
+
+
+def _toml_string(value: str) -> str:
+    # JSON basic strings are valid TOML basic strings for this ASCII command.
+    return json.dumps(value)
+
+
+def _codex_attention_hook_args(cfg: HarnessConfig) -> list[str]:
+    """Session-scoped Codex hook overrides.
+
+    Codex requires trust for non-managed command hooks. These definitions are
+    constants shipped by Horizon, so automated Horizon runs opt into Codex's
+    one-invocation trust bypass. Users can disable this integration with
+    ``options.inbox_hooks: false``.
+    """
+    if not _attention_hooks_enabled(cfg):
+        return []
+    args = ["--dangerously-bypass-hook-trust"]
+    command = _toml_string(_HORIZON_ATTENTION_HOOK_COMMAND)
+    for event, matcher in _HORIZON_ATTENTION_HOOK_EVENTS:
+        group_fields = []
+        if matcher is not None:
+            group_fields.append(f"matcher={_toml_string(matcher)}")
+        group_fields.append(
+            'hooks=[{type="command",command=' + command + ",timeout=5}]"
+        )
+        value = "[{" + ",".join(group_fields) + "}]"
+        args += ["-c", f"hooks.{event}={value}"]
+    return args
+
+
+class UnknownHarnessKind(ConfigError):
     """Raised when a harness config names a kind with no registered builder."""
 
 
@@ -237,8 +314,8 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
     # the Claude Code docs prescribe — `--settings '{"ultracode": true}'`, which
     # works headlessly under `claude -p`. It already sends xhigh, so effort_flag
     # is None for it (see _claude_effort_flag). Injected into argv below.
-    ultracode_settings = json.dumps({"ultracode": True}) if _claude_ultracode(cfg) else None
-    if ultracode_settings is not None:
+    claude_settings = _claude_session_settings(cfg)
+    if _claude_ultracode(cfg):
         log.info(
             f"harness {cfg.name!r}: ultracode enabled — xhigh + automatic dynamic-workflow "
             "orchestration via --settings (needs workflows enabled and claude >= 2.1.154; "
@@ -272,8 +349,8 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
             argv += ["--model", model]
         if effort_flag and _claude_p_supports("--effort"):
             argv += ["--effort", effort_flag]
-        if ultracode_settings and _claude_p_supports("--settings"):
-            argv += ["--settings", ultracode_settings]
+        if claude_settings and _claude_p_supports("--settings"):
+            argv += ["--settings", claude_settings]
         timeout_sec = int(cfg.options.get("timeout_sec") or 1800)
         quiet_after_sec = int(cfg.options.get("quiet_after_sec") or 15)
         argv += [*cfg.args, "--timeout-sec", str(timeout_sec), "--quiet-after-sec", str(quiet_after_sec)]
@@ -304,8 +381,8 @@ def _build_claude_code(cfg: HarnessConfig) -> Harness:
         argv += ["--model", model]
     if effort_flag:
         argv += ["--effort", effort_flag]
-    if ultracode_settings:
-        argv += ["--settings", ultracode_settings]
+    if claude_settings:
+        argv += ["--settings", claude_settings]
     argv += [*cfg.args, PROMPT_TOKEN]
 
     if backend == "vscode":
@@ -330,6 +407,7 @@ def _claude_resume_args(session_id: str) -> list[str]:
 
 def _build_codex(cfg: HarnessConfig) -> Harness:
     argv = ["codex", "exec", "--json", "--skip-git-repo-check"]
+    argv += _codex_attention_hook_args(cfg)
     if cfg.model:
         argv += ["-m", cfg.model]
     # `effort: default` (and other sentinels) leave Codex's own default rather

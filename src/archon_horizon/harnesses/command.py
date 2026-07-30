@@ -103,6 +103,7 @@ class _UsageFile:
     def __init__(self, path: Path | None) -> None:
         self._path = path
         self._totals = {
+            "schema_version": 2,
             "tokens_in": 0,
             "tokens_out": 0,
             "cached_tokens_in": 0,
@@ -114,19 +115,30 @@ class _UsageFile:
         }
         self._dirty = False
         self._written_at = 0.0
+        self._last_cumulative_cost: float | None = None
 
     def add(self, event: TranscriptEvent) -> None:
-        if self._path is None or event.usage is None:
+        if (self._path is None or event.kind is not TranscriptKind.USAGE
+                or event.usage is None):
             return
         usage = event.usage
-        # Engines report per-turn usage; totals are the sum of turns.
+        # Only canonical USAGE events count. Text/tool rows may repeat the same
+        # native message usage on every derived content block.
         self._totals["tokens_in"] += int(usage.tokens_in or 0)
         self._totals["tokens_out"] += int(usage.tokens_out or 0)
         self._totals["cached_tokens_in"] += int(getattr(usage, "cached_tokens_in", 0) or 0)
         self._totals["reasoning_tokens_out"] += int(getattr(usage, "reasoning_tokens_out", 0) or 0)
         cost = getattr(usage, "cost_usd", None)
         if cost is not None:
-            self._totals["cost_usd"] = (self._totals["cost_usd"] or 0.0) + float(cost)
+            current = float(cost)
+            if event.data.get("cost_cumulative"):
+                delta = (current if self._last_cumulative_cost is None
+                         or current < self._last_cumulative_cost
+                         else current - self._last_cumulative_cost)
+                self._last_cumulative_cost = current
+            else:
+                delta = current
+            self._totals["cost_usd"] = (self._totals["cost_usd"] or 0.0) + max(delta, 0.0)
         self._totals["usage_events"] += 1
         self._dirty = True
         self.flush()

@@ -19,6 +19,9 @@ def test_reaches_horizon_rules() -> None:
     assert reaches_horizon(_item("project:ag-main"), "ag-main")
     assert not reaches_horizon(_item("ground"), "ag-main")
     assert not reaches_horizon(_item("human"), "ag-main")
+    assert reaches_horizon(
+        _item("human"), "ag-main", task="T-1", inbox_refs=("I-1",)
+    )
     assert not reaches_horizon(_item("project:other"), "ag-main")
     scoped = InboxItem(
         id="I-2",
@@ -30,6 +33,16 @@ def test_reaches_horizon_rules() -> None:
         audience="horizon",
     )
     assert not reaches_horizon(scoped, "ag-main")
+    # An explicit inbox_refs grant OVERRIDES the project-scope veto: a task that
+    # linked an item to itself must be able to read it even when it is scoped to
+    # (or addressed to) another project (I-0489).
+    assert reaches_horizon(scoped, "ag-main", inbox_refs=("I-2",))
+    human_scoped = InboxItem(
+        id="I-3", provider="local", kind=InboxKind.ISSUE, body="x", labels=(),
+        scope=InboxScope(projects=("other",)), audience="human",
+    )
+    assert not reaches_horizon(human_scoped, "ag-main", task="T-9")
+    assert reaches_horizon(human_scoped, "ag-main", task="T-9", inbox_refs=("I-3",))
 
 
 _CONFIG = """

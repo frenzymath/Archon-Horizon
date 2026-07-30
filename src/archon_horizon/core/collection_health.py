@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from .clock import utc_now
-from .inbox import InboxItem, InboxKind, InboxStatus
+from .inbox import InboxItem, InboxKind, InboxStatus, is_conversation
 from .roadmap import RoadmapItem, RoadmapStatus
 from .tasks import HorizonTask, TaskStatus
 
@@ -24,6 +24,7 @@ class AdvisoryHealthLimits:
 
     open_memories: int = 10
     open_info: int = 4
+    open_conversations: int = 8
     open_inbox: int = 30
     open_tasks: int = 12
     active_roadmap: int = 8
@@ -61,6 +62,14 @@ def inbox_health_warnings(
             f"Inbox has {counts[InboxKind.INFO]} open info items "
             f"(recommended maximum {limits.open_info}) — archive notices that "
             "have been consumed if this is not intentional."
+        )
+    open_conversations = sum(is_conversation(item) for item in open_items)
+    if open_conversations > limits.open_conversations:
+        warnings.append(
+            f"Inbox has {open_conversations} open conversations "
+            f"(recommended maximum {limits.open_conversations}) — reply on an existing "
+            "thread instead of opening a duplicate, and archive conversations you "
+            "started once their conclusion has been consumed."
         )
     working_set = [item for item in open_items if item.kind is not InboxKind.PROTECTION]
     if len(working_set) > limits.open_inbox:

@@ -23,6 +23,11 @@ fixing it yourself.
   consistent with project size, and `complete` items that are clearly done
   (use the `horizon-inbox` skill). Start with the CLI's advisory health warnings;
   they provide the shared baseline, then apply judgment for the workspace's size.
+- **Roadmap and task health** — run the roadmap/task listings and reconcile
+  stale status transitions, completed children with open parents, deferred
+  milestones still marked active, and running tasks with no live session. Mark
+  only clearly resolved work done/closed, archive consumed items, and file an
+  issue when intent is ambiguous instead of guessing.
 - **Divergence** — anything that has drifted from the expected workspace shape.
   Read parts of `Archon Horizon`'s own code/skills if you need to know what the
   expected shape is.
@@ -34,3 +39,6 @@ fixing it yourself.
   factoring out across projects, a structural change needing real reasoning, a
   Lean/blueprint mismatch — file an inbox `issue`. File a `memory` item for a
   recurring or non-obvious lesson worth keeping.
+
+After cleanup, rerun the health/list commands and include the before/after
+counts in your report so the parent agent can see what changed and what remains.

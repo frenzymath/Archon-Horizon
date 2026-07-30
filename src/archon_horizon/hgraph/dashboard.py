@@ -10,10 +10,11 @@ JSON, written by `hgraph site` or served live by `hgraph serve`.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 from .graph import Graph
-from .sync import load_config, parse_document, read_blueprint
+from .sync import DISPLAY_ENVS, load_config, parse_document, read_blueprint
 
 
 # --------------------------------------------------------------------------- #
@@ -64,9 +65,11 @@ def _entry(n, formalizes, deps, nodes, g) -> dict:
     return {
         "id": n.id, "label": n.meta.get("label"), "title": n.title,
         "chapter": n.meta.get("chapter"), "kind": n.meta.get("content_type") or "statement",
-        # granularity axis (authored/AI wins; _assign_groups_levels fills the rest)
+        # Horizon still exposes semantic groups in its graph UI. Upstream hgraph
+        # now only consumes levels, so grouping remains a local compatibility field.
         "group": n.meta.get("group"), "level": n.meta.get("level"),
         "ref": n.meta.get("ref"),      # source-book provenance (\dcref{…})
+        "sketch": bool(n.meta.get("sketch")),   # \sketch — proof deliberately incomplete
         "body": re.sub(r"(?<!\\)%.*", "", n.content),
         "lean_status": n.meta.get("lean_status") or "empty",
         "mathlib_name": n.meta.get("mathlib_name"), "status": n.meta.get("status"),
@@ -81,143 +84,27 @@ def _entry(n, formalizes, deps, nodes, g) -> dict:
 _MED_KINDS = {"theorem", "proposition", "lemma"}
 
 
-def _assign_groups_levels(entries: list) -> None:
-    """Attach a ``group`` (cluster id) and ``level`` (``coarse|medium|fine``) to
-    every entry, in place. Values authored on the node (or written by a future
-    ``hgraph extract`` AI pass) always win; anything missing gets a **heuristic
-    stub** so the graph's group-collapse + level filter have something to render.
+def _assign_levels(entries: list) -> None:
+    """Attach a ``level`` (``coarse|medium|fine``) to every entry, in place.
 
-    The stub is deliberately cheap and self-contained (no deps): ``group`` by
-    label-propagation community detection over the hard-dependency graph (falling
-    back to chapter when that degenerates), ``level`` by how foundational a node is
-    (``coarse`` = the most-depended-on ~12%; ``medium`` = a main-result kind;
-    ``fine`` = the rest). It is a placeholder for AI-assigned values, not a claim
-    of good clustering. Because it is computed at build time from the synced graph
-    (not persisted to node files), it survives ``build.sh``'s wipe-and-resync.
+    A value authored on the node (or written by a future ``hgraph extract`` AI
+    pass) always wins; anything missing gets a **heuristic stub** so the graph's
+    level filter has something to render: ``coarse`` = the most-depended-on ~12%,
+    ``medium`` = a main-result kind, ``fine`` = the rest. Because it is computed
+    at build time from the synced graph (not persisted to node files), it
+    survives ``build.sh``'s wipe-and-resync.
     """
     n = len(entries)
     if not n:
         return
     idx = {e["id"]: i for i, e in enumerate(entries)}
-    adj: list[list[int]] = [[] for _ in range(n)]
     usedby = [0] * n
     for i, e in enumerate(entries):
         for d in (e.get("deps") or []):
             j = idx.get(d["id"])
-            if j is None or j == i:
-                continue
-            adj[i].append(j)
-            adj[j].append(i)
-            usedby[j] += 1                       # e depends on d ⇒ d is used by e
+            if j is not None and j != i:
+                usedby[j] += 1                   # e depends on d ⇒ d is used by e
 
-    # ── group: single-level Louvain (modularity local-moving), deterministic. ──
-    # More stable than label propagation, whose ΔQ-free updates tend to collapse a
-    # dense dep graph into one monster community. The modularity term penalises that
-    # (it grows with Σtot), and an adaptive resolution guarantees a usable split.
-    deg = [len(a) for a in adj]
-    two_m = sum(deg) or 1
-
-    def louvain(gamma: float) -> list[int]:
-        comm = list(range(n))
-        sigma = deg[:]                                    # Σtot (degree sum) per community
-        for _ in range(20):
-            moved = False
-            for i in range(n):
-                if not adj[i]:
-                    continue
-                ci = comm[i]
-                sigma[ci] -= deg[i]
-                nw: dict[int, int] = {}
-                for j in adj[i]:
-                    nw[comm[j]] = nw.get(comm[j], 0) + 1
-                best_c = ci
-                best_gain = nw.get(ci, 0) - gamma * deg[i] * sigma[ci] / two_m
-                for c, wic in nw.items():
-                    if c == ci:
-                        continue
-                    gain = wic - gamma * deg[i] * sigma[c] / two_m
-                    if gain > best_gain + 1e-12 or (abs(gain - best_gain) <= 1e-12 and c < best_c):
-                        best_gain, best_c = gain, c
-                comm[i] = best_c
-                sigma[best_c] += deg[i]
-                if best_c != ci:
-                    moved = True
-            if not moved:
-                break
-        return comm
-
-    def spread(cm: list[int]) -> tuple[float, int]:
-        sz: dict[int, int] = {}
-        for i in range(n):
-            if adj[i]:
-                sz[cm[i]] = sz.get(cm[i], 0) + 1
-        tot = sum(sz.values())
-        return ((max(sz.values()) / tot) if tot else 1.0), len(sz)
-
-    comm = louvain(1.0)
-    for gamma in (1.6, 2.6, 4.0):                          # raise resolution if one blob dominates
-        frac, k = spread(comm)
-        if frac <= 0.4 and k >= 3:
-            break
-        comm = louvain(gamma)
-
-    # isolated nodes carry no signal ⇒ bucket them by chapter; connected keep community
-    gid = ["ch:" + (entries[i].get("chapter") or "·") if not adj[i] else "c%d" % comm[i]
-           for i in range(n)]
-    # absorb tiny communities into the neighbouring group they touch most
-    MIN = 5
-    for _ in range(3):
-        gsz: dict[str, int] = {}
-        for x in gid:
-            gsz[x] = gsz.get(x, 0) + 1
-        moved = False
-        for i in range(n):
-            if not adj[i] or gsz.get(gid[i], 0) >= MIN:
-                continue
-            cnt: dict[str, int] = {}
-            for j in adj[i]:
-                if gid[j] != gid[i]:
-                    cnt[gid[j]] = cnt.get(gid[j], 0) + 1
-            if cnt:
-                gid[i] = min(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[0]
-                moved = True
-        if not moved:
-            break
-
-    # cap the count so the group overview stays readable: repeatedly fold the
-    # smallest community that still touches another community into that neighbour.
-    CAP = 30
-    for _ in range(n):
-        csz: dict[str, int] = {}
-        for i in range(n):
-            if adj[i]:
-                csz[gid[i]] = csz.get(gid[i], 0) + 1
-        if len(csz) <= CAP:
-            break
-        merged = False
-        for small, _sz in sorted(csz.items(), key=lambda kv: (kv[1], kv[0])):
-            w: dict[str, int] = {}
-            for i in range(n):
-                if gid[i] != small:
-                    continue
-                for j in adj[i]:
-                    if gid[j] != small:
-                        w[gid[j]] = w.get(gid[j], 0) + 1
-            if not w:
-                continue                           # island: try the next-smallest
-            tgt = max(w.items(), key=lambda kv: (kv[1], kv[0]))[0]
-            for i in range(n):
-                if gid[i] == small:
-                    gid[i] = tgt
-            merged = True
-            break
-        if not merged:
-            break
-
-    def stub_group(i: int) -> str:
-        return gid[i]
-
-    # ── level: coarse = most-depended-on ~12%; medium = main-result kind; else fine
     order = sorted(range(n), key=lambda i: usedby[i], reverse=True)
     coarse = set(order[:max(1, round(n * 0.12))])
 
@@ -229,10 +116,136 @@ def _assign_groups_levels(entries: list) -> None:
         return "fine"
 
     for i, e in enumerate(entries):
-        if not e.get("group"):
-            e["group"] = stub_group(i)
         if e.get("level") not in ("coarse", "medium", "fine"):
             e["level"] = stub_level(i)
+
+
+def _assign_groups_levels(entries: list) -> None:
+    """Assign upstream levels plus Horizon's retained semantic graph groups.
+
+    Authored groups win. Missing groups use the deterministic, single-level
+    Louvain heuristic that Horizon already exposed before upstream hgraph
+    retired group rendering from its standalone frontend.
+    """
+    _assign_levels(entries)
+    n = len(entries)
+    if not n:
+        return
+    idx = {e["id"]: i for i, e in enumerate(entries)}
+    adj: list[list[int]] = [[] for _ in range(n)]
+    for i, entry in enumerate(entries):
+        for dependency in entry.get("deps") or []:
+            j = idx.get(dependency["id"])
+            if j is None or j == i:
+                continue
+            adj[i].append(j)
+            adj[j].append(i)
+
+    degree = [len(neighbours) for neighbours in adj]
+    two_m = sum(degree) or 1
+
+    def louvain(gamma: float) -> list[int]:
+        community = list(range(n))
+        sigma = degree[:]
+        for _ in range(20):
+            moved = False
+            for i in range(n):
+                if not adj[i]:
+                    continue
+                current = community[i]
+                sigma[current] -= degree[i]
+                neighbour_weights: dict[int, int] = {}
+                for j in adj[i]:
+                    neighbour = community[j]
+                    neighbour_weights[neighbour] = neighbour_weights.get(neighbour, 0) + 1
+                best = current
+                best_gain = (neighbour_weights.get(current, 0)
+                             - gamma * degree[i] * sigma[current] / two_m)
+                for candidate, weight in neighbour_weights.items():
+                    if candidate == current:
+                        continue
+                    gain = weight - gamma * degree[i] * sigma[candidate] / two_m
+                    if (gain > best_gain + 1e-12
+                            or (abs(gain - best_gain) <= 1e-12 and candidate < best)):
+                        best_gain, best = gain, candidate
+                community[i] = best
+                sigma[best] += degree[i]
+                moved |= best != current
+            if not moved:
+                break
+        return community
+
+    def spread(community: list[int]) -> tuple[float, int]:
+        sizes: dict[int, int] = {}
+        for i in range(n):
+            if adj[i]:
+                sizes[community[i]] = sizes.get(community[i], 0) + 1
+        total = sum(sizes.values())
+        return ((max(sizes.values()) / total) if total else 1.0), len(sizes)
+
+    community = louvain(1.0)
+    for gamma in (1.6, 2.6, 4.0):
+        largest, count = spread(community)
+        if largest <= 0.4 and count >= 3:
+            break
+        community = louvain(gamma)
+
+    group_ids = [
+        "ch:" + (entries[i].get("chapter") or "·") if not adj[i]
+        else f"c{community[i]}"
+        for i in range(n)
+    ]
+
+    # Fold tiny communities into the neighbouring group they touch most.
+    for _ in range(3):
+        sizes: dict[str, int] = {}
+        for group_id in group_ids:
+            sizes[group_id] = sizes.get(group_id, 0) + 1
+        moved = False
+        for i in range(n):
+            if not adj[i] or sizes.get(group_ids[i], 0) >= 5:
+                continue
+            neighbours: dict[str, int] = {}
+            for j in adj[i]:
+                if group_ids[j] != group_ids[i]:
+                    neighbours[group_ids[j]] = neighbours.get(group_ids[j], 0) + 1
+            if neighbours:
+                group_ids[i] = min(neighbours.items(), key=lambda item: (-item[1], item[0]))[0]
+                moved = True
+        if not moved:
+            break
+
+    # Keep the overview readable by capping connected communities at 30.
+    for _ in range(n):
+        sizes: dict[str, int] = {}
+        for i in range(n):
+            if adj[i]:
+                sizes[group_ids[i]] = sizes.get(group_ids[i], 0) + 1
+        if len(sizes) <= 30:
+            break
+        merged = False
+        for smallest, _ in sorted(sizes.items(), key=lambda item: (item[1], item[0])):
+            weights: dict[str, int] = {}
+            for i in range(n):
+                if group_ids[i] != smallest:
+                    continue
+                for j in adj[i]:
+                    if group_ids[j] != smallest:
+                        weights[group_ids[j]] = weights.get(group_ids[j], 0) + 1
+            if not weights:
+                continue
+            target = max(weights.items(), key=lambda item: (item[1], item[0]))[0]
+            for i in range(n):
+                if group_ids[i] == smallest:
+                    group_ids[i] = target
+            merged = True
+            break
+        if not merged:
+            break
+
+    for i, entry in enumerate(entries):
+        if not entry.get("group"):
+            entry["group"] = group_ids[i]
 
 
 def collect(g: Graph, *, title: str = "Blueprint") -> dict:
@@ -259,50 +272,209 @@ _ABBR = {"definition": "Def", "lemma": "Lem", "theorem": "Thm", "proposition": "
          "claim": "Claim", "fact": "Fact"}
 
 
+def _chapter_label(n: int, lettered: bool) -> str:
+    """``1, 2, 3 …`` normally; ``A, B, … Z, AA`` after ``\\appendix``."""
+    if not lettered:
+        return str(n)
+    out = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        out = chr(ord("A") + r) + out
+    return out
+
+
+def _join_num(prefix: str | None, *parts: str) -> str:
+    """``2.3`` under a numbered chapter, ``A.3`` under an appendix — and just
+    ``3`` under a ``\\chapter*``, which has no number to hang it off."""
+    return ".".join(([prefix] if prefix else []) + list(parts))
+
+
+# Display-math environments LaTeX numbers; the starred forms it does not, which
+# is why the pattern refuses a `*`.
+_EQ_RE = re.compile(r"\\begin\{(" + "|".join(DISPLAY_ENVS[:-1]) + r")\}(.*?)\\end\{\1\}",
+                    re.DOTALL)
+_ONE_ROW = ("equation", "multline")          # one number for the whole body
+_ROW_SEP = re.compile(r"(\\\\(?:\s*\[[^\]]*\])?)")
+_NESTED_ENV = re.compile(r"\\begin\{([a-zA-Z]+\*?)\}.*?\\end\{\1\}", re.DOTALL)
+_TAG_RE = re.compile(r"\\tag\*?\{([^{}]*)\}")
+
+
+def _number_equations(tex: str, prefix: str | None, count: int, ci: int,
+                      refs: dict) -> tuple[str, int]:
+    """Number the display equations in ``tex`` and register their ``\\label``\\s.
+
+    The number is written back into the TeX as ``\\tag{…}`` rather than rendered
+    beside it: KaTeX puts a ``\\tag`` exactly where LaTeX puts an equation
+    number — including once per row inside ``align`` — so the number the reader
+    sees and the one ``\\cref`` resolves to cannot drift apart. An author's own
+    ``\\tag`` wins and consumes no number, as in LaTeX; ``\\nonumber``/``\\notag``
+    rows are skipped. Returns the rewritten TeX and the new counter.
+    """
+    def one_env(m: "re.Match") -> str:
+        nonlocal count
+        env, body = m.group(1), m.group(2)
+        hidden: list[str] = []
+
+        def hide(h: "re.Match") -> str:
+            hidden.append(h.group(0))
+            return "\x00%d\x00" % (len(hidden) - 1)
+
+        # a nested {cases}/{matrix} has \\ row breaks of its own — not ours
+        masked = body if env in _ONE_ROW else _NESTED_ENV.sub(hide, body)
+        parts = [masked] if env in _ONE_ROW else _ROW_SEP.split(masked)
+        for i in range(0, len(parts), 2):      # odd indices are the separators
+            row = parts[i]
+            if not row.strip() or re.search(r"\\(?:nonumber|notag)\b", row):
+                continue
+            tag = _TAG_RE.search(row)
+            if tag:
+                num = tag.group(1)
+            else:
+                count += 1
+                num = _join_num(prefix, str(count))
+                parts[i] = row = row.rstrip() + "\\tag{%s}" % num
+            # only a plain number makes a usable element id — an author's
+            # `\tag{$\star$}` still resolves, it just lands on the chapter
+            anchor = "eq-" + num if re.fullmatch(r"[\w.]+", num) else ""
+            for lbl in re.findall(r"\\label\{([^}]*)\}", row):
+                refs[lbl.strip()] = {"num": num, "id": None, "abbr": "Eq.",
+                                     "kind": "eq", "ch": ci, "anchor": anchor}
+        out = "".join(parts)
+        out = re.sub(r"\x00(\d+)\x00", lambda h: hidden[int(h.group(1))], out)
+        return "\\begin{%s}%s\\end{%s}" % (env, out, env)
+
+    return _EQ_RE.sub(one_env, tex), count
+
+
+def number_document(chapters: list[dict]) -> dict:
+    """Stamp ``num`` on every chapter, heading, statement and display equation,
+    in place, and return the label → cross-reference table for everything that
+    is *not* a statement (chapters, sections, equations) — what ``\\cref`` needs
+    to resolve beyond the theorem-like environments the graph knows about.
+
+    LaTeX's own numbering controls are honoured, so a blueprint that reads
+    correctly when compiled reads correctly here:
+
+    * ``\\chapter*{…}`` / ``\\section*{…}`` take no number and do not advance the
+      counter — their statements simply drop the chapter prefix (``1``, ``2``).
+    * ``\\appendix`` restarts the chapter counter in letters: ``A``, ``B``, … so
+      the appendices stop reading as chapters 13, 14, 15.
+    """
+    refs: dict = {}
+    counter, lettered = 0, False
+    for ci, ch in enumerate(chapters):
+        if ch.get("appendix") and not lettered:
+            lettered, counter = True, 0
+        if ch.get("starred"):
+            ch["num"] = None
+        else:
+            counter += 1
+            ch["num"] = _chapter_label(counter, lettered)
+        for lbl in ch.get("labels") or ():
+            refs[lbl] = {"num": ch["num"], "id": None,
+                         "abbr": "Appendix" if ch.get("appendix") else "Chapter",
+                         "kind": "chap", "ch": ci, "anchor": ""}
+        sec = {2: 0, 3: 0, 4: 0}
+        cnt = 0
+        eqs = 0                        # equations are numbered per chapter, as in LaTeX
+        for b in ch["blocks"]:
+            if b["t"] == "head" and b["level"] <= 4:
+                if b.get("starred"):
+                    b["num"] = None
+                    continue
+                lvl = b["level"]
+                sec[lvl] += 1
+                for d in (3, 4):
+                    if d > lvl:
+                        sec[d] = 0
+                b["num"] = _join_num(ch["num"], *(str(sec[l]) for l in range(2, lvl + 1)))
+                for lbl in b.get("labels") or ():
+                    refs[lbl] = {"num": b["num"], "id": None, "abbr": "Section",
+                                 "kind": "sec", "ch": ci, "anchor": "sec-" + b["num"]}
+                continue
+            if b["t"] == "stmt":
+                cnt += 1
+                b["num"] = _join_num(ch["num"], str(cnt))
+                b["abbr"] = _ABBR.get(b["content_type"], b["content_type"].title())
+            key = "body" if b["t"] == "stmt" else "tex"
+            if b.get(key):
+                b[key], eqs = _number_equations(b[key], ch["num"], eqs, ci, refs)
+    return refs
+
+
 def build_document(g: Graph, blueprint: str | Path, *, title: str) -> dict:
     """The full blueprint document, numbered, + a by-id map of enriched statements,
     a label→number cross-reference table, and a statement→chapter location map."""
     nodes, formalizes, deps = _index(g)
     entries = {n.meta.get("label"): _entry(n, formalizes, deps, nodes, g)
                for n in nodes.values() if n.meta.get("generated") == "blueprint"}
-    # assign group/level stubs BEFORE the chapter walk snapshots b["enrich"]
-    # below — assigning after left enrich.group null on every entry without
-    # an authored group, so the doc view's group tags silently vanished
+    # Assign Horizon's group plus upstream's level stubs before snapshotting enrich.
     _assign_groups_levels(list(entries.values()))
     chapters = parse_document(read_blueprint(blueprint))
     by_id, refs, loc = {}, {}, {}
     keys = ("lean_status", "mathlib_name", "reviewed", "maths_verdict", "lean_verdict",
-            "lean", "deps", "reviews", "comments", "status", "tags", "ref", "group")
-    for ci, ch in enumerate(chapters, 1):
-        ch["num"] = str(ci)
-        sec = {2: 0, 3: 0, 4: 0}
-        cnt = 0
+            "lean", "deps", "reviews", "comments", "status", "tags", "ref", "sketch",
+            "group")
+    # chapter/section/equation cross-references first; the statements below
+    # overwrite any label they share (a statement is the more useful target)
+    refs.update(number_document(chapters))
+    for ci, ch in enumerate(chapters):
         for b in ch["blocks"]:
-            if b["t"] == "head" and b["level"] <= 4:
-                lvl = b["level"]
-                sec[lvl] += 1
-                for d in (3, 4):
-                    if d > lvl:
-                        sec[d] = 0
-                b["num"] = "%d.%s" % (ci, ".".join(str(sec[l]) for l in range(2, lvl + 1)))
-            elif b["t"] == "stmt":
-                cnt += 1
-                b["num"] = f"{ci}.{cnt}"
-                b["abbr"] = _ABBR.get(b["content_type"], b["content_type"].title())
+            if b["t"] == "stmt":
                 lbl = b.get("label")
                 e = entries.get(lbl) if lbl else None
                 if e:
                     b["id"] = e["id"]
                     b["enrich"] = {k: e[k] for k in keys}
                     by_id[e["id"]] = e
-                    loc[e["id"]] = ci - 1
+                    loc[e["id"]] = ci
                 # register every \label alias (canonical + legacy book labels) so
                 # a \ref{} to any of them resolves, not just the canonical one
                 for alias in (b.get("labels") or ([lbl] if lbl else [])):
-                    refs[alias] = {"num": b["num"], "id": (e["id"] if e else None), "abbr": b["abbr"]}
+                    refs[alias] = {"num": b["num"], "id": (e["id"] if e else None),
+                                   "abbr": b["abbr"], "kind": "stmt", "ch": ci,
+                                   "anchor": ("stmt-" + e["id"]) if e else ""}
     graph_entries = list(by_id.values())   # groups/levels already assigned above
     return {"title": title, "mode": "doc", "chapters": chapters,
             "entries": graph_entries, "refs": refs, "loc": loc}
+
+
+# `\citeext{Handle}{label}` (cross-project cite) or bare `\citeext{Handle}`. The
+# second brace group is optional; unlike the leanblueprint macros it survives
+# into the body verbatim and is rendered client-side (see frontend/src/latex.ts),
+# exactly like `\ref`/`\cite`. Here we only pre-resolve the *target numbers*,
+# which live in another project and so cannot be looked up in the browser.
+_CITEEXT_RE = re.compile(r"\\citeext\{([^{}]*)\}(?:\{([^{}]*)\})?")
+
+
+def resolve_extrefs(chapters, index: dict) -> dict:
+    """Resolve every ``\\citeext{handle}{label}`` in a document's prose against a
+    cross-project ``index`` (``{handle: {"root", "name", "refs"}}``), returning
+    the ``extrefs`` payload the frontend renders from::
+
+        {handle: {"root", "name", "refs": {label: {"num", "abbr"}}}}
+
+    Only the handles and labels actually cited are included, so the map a project
+    ships stays small. An unknown handle is skipped (the frontend then renders the
+    citation as muted text); a known handle with an unresolved label still ships
+    its ``root``/``name`` so the link works, just without a number."""
+    out: dict = {}
+    for ch in chapters or []:
+        for b in ch.get("blocks", []):
+            text = " ".join(s for s in (b.get("tex"), b.get("body"), b.get("title")) if s)
+            for m in _CITEEXT_RE.finditer(text):
+                handle = (m.group(1) or "").strip()
+                label = (m.group(2) or "").strip()
+                proj = index.get(handle)
+                if not proj:
+                    continue
+                entry = out.setdefault(
+                    handle, {"root": proj["root"], "name": proj["name"], "refs": {}})
+                if label:
+                    r = (proj.get("refs") or {}).get(label)
+                    if r:
+                        entry["refs"][label] = {"num": r["num"], "abbr": r["abbr"]}
+    return out
 
 
 def _resolve_blueprint(blueprint, root):
@@ -323,8 +495,10 @@ def _normalize_repo(repo):
     s = re.sub(r"^(?:https?://|git@)(?:www\.)?github\.com[:/]", "", s)
     s = re.sub(r"\.git$", "", s)
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", s):
+        # stderr, not stdout: callers of this module render payloads to stdout,
+        # and a warning mixed into that would corrupt machine-readable output.
         print(f"warning: repo: {repo!r} is not `owner/name` (nor a GitHub URL) — "
-              f"review links disabled for this project")
+              f"review links disabled for this project", file=sys.stderr)
         return None
     return s
 
@@ -338,7 +512,7 @@ def _resolve_repo(repo, root):
 
 
 def project_data(g: Graph, *, title: str, blueprint=None, macros_from=None,
-                 root: str = ".", repo=None) -> dict:
+                 root: str = ".", repo=None, theme: dict | None = None) -> dict:
     """One project's full data payload — everything the React `ProjectView`
     needs: the numbered document (chapters/prose/cross-refs) if a blueprint
     is configured, else a flat statement list; entries (statements + Lean +
@@ -355,7 +529,6 @@ def project_data(g: Graph, *, title: str, blueprint=None, macros_from=None,
     same way `hgraph frontier`/`hgraph stats` compute it independently via
     their own `Analysis(g)` call."""
     from .layout import render_svgs
-
     bp = _resolve_blueprint(blueprint, root)
     data = build_document(g, bp, title=title) if bp else {**collect(g, title=title), "mode": "list"}
     ta = discover_titleauthor(bp) if bp else {}
@@ -365,6 +538,7 @@ def project_data(g: Graph, *, title: str, blueprint=None, macros_from=None,
         "docAuthor": ta.get("author"),
         "macros": resolve_macros(bp, macros_from),
         "repo": _resolve_repo(repo, root),
+        "theme": theme,
         "gvsvg": render_svgs(data),
     })
     return data

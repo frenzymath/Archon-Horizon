@@ -31,6 +31,10 @@ class TranscriptKind(StrEnum):
     # visible when work was delegated and when that delegated turn stopped.
     SUBAGENT_START = "subagent_start"
     SUBAGENT_END = "subagent_end"
+    # Aggregate lifecycle for native multi-agent workflows. Interactive Claude
+    # stores the live agent counters outside the parent conversation, so the
+    # tailer periodically snapshots them into this append-only event stream.
+    WORKFLOW_PROGRESS = "workflow_progress"
     USAGE = "usage"
     # A transient, non-fatal notice (e.g. "retrying after a 529") — surfaced in
     # the transcript but NEVER counted as a session failure. Distinct from ERROR

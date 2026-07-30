@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 from archon_horizon.config.loader import build_workspace, load_config
+from archon_horizon.core.provenance import agent_provenance
 from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 from archon_horizon.inboxes.github import GithubInboxProvider
 
@@ -61,22 +63,42 @@ def agent_author(default: str | None = None) -> str | None:
     return default
 
 
-def agent_provenance() -> dict | None:
-    """Structured provenance for an agent-authored write, from the run env.
+def ensure_concise_agent_message(
+    body: str,
+    noun: str,
+    *,
+    author: str | None = None,
+    soft_limit: int = 600,
+    hard_limit: int = 1200,
+) -> None:
+    """Bound operational prose written by agents while leaving humans free-form.
 
-    The orchestrator exports ``ARCHON_HORIZON_RUN`` / ``ARCHON_HORIZON_SESSION``
-    (and ``ARCHON_HORIZON_AGENT_ROLE``) for the agent it runs; a native subagent
-    may additionally export ``ARCHON_HORIZON_SUBAGENT``. Returns ``None`` outside
-    a run (e.g. a human at the CLI), so nothing is stamped.
+    Normal updates fit below ``soft_limit``. A genuinely detailed finding may
+    exceed it when structured as Markdown, but operational state is not a report
+    archive: beyond ``hard_limit`` the detail belongs in a commit summary,
+    report, source file, or a narrowly scoped attachment.
     """
-    fields = {
-        "run": os.environ.get("ARCHON_HORIZON_RUN", "").strip(),
-        "session": os.environ.get("ARCHON_HORIZON_SESSION", "").strip(),
-        "role": os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower(),
-        "subagent": os.environ.get("ARCHON_HORIZON_SUBAGENT", "").strip(),
-    }
-    prov = {k: v for k, v in fields.items() if v}
-    return prov or None
+    # A running agent cannot bypass the bound by passing `--author human`.
+    # Outside a run, explicit human authorship remains unrestricted.
+    if agent_author() != "horizon" and author != "horizon":
+        return
+    text = str(body or "").strip()
+    if len(text) > hard_limit:
+        raise ValueError(
+            f"agent {noun} is too long ({len(text)} characters; maximum {hard_limit}); "
+            "record only the conclusion, evidence delta, and next action here"
+        )
+    if len(text) <= soft_limit:
+        return
+    structured = re.search(
+        r"\n\s*\n|(?:^|\n)\s*(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s*|```|\|)",
+        text,
+    )
+    if not structured:
+        raise ValueError(
+            f"long agent {noun} needs scannable Markdown; use short paragraphs "
+            "or at most three concise bullets"
+        )
 
 
 def with_provenance(metadata: dict | None = None) -> dict:
@@ -88,18 +110,75 @@ def with_provenance(metadata: dict | None = None) -> dict:
     return merged
 
 
-def history_entry(actor: str | None, field: str, *, before: str = "", after: str = "", note: str = "") -> dict:
-    """Build one append-only history transition for roadmap/task/inbox items."""
-    from archon_horizon.core.clock import utc_now
+def provenance_task(default: str | None = None) -> str | None:
+    """The task id of the running session, if any (``ARCHON_HORIZON_TASK``)."""
+    return os.environ.get("ARCHON_HORIZON_TASK", "").strip() or default
 
-    return {
+
+def provenance_project(default: str | None = None) -> str | None:
+    """The first project of the running session (``ARCHON_HORIZON_PROJECTS``).
+
+    Used to default ``--project`` so an agent rarely needs to pass it. A comma or
+    space separated list keeps only the first — the session's primary project.
+    """
+    raw = os.environ.get("ARCHON_HORIZON_PROJECTS", "").strip()
+    if not raw:
+        return default
+    first = raw.replace(",", " ").split()
+    return first[0] if first else default
+
+
+def reader_id() -> str:
+    """Stable identity of who is reading, for inbox read-state.
+
+    A team is a task, so prefer the task id; fall back to the run, then the agent
+    role, then ``"human"`` for a person at the CLI. This is the id recorded in an
+    item's ``read_by`` list and used to compute "unread for me".
+    """
+    for var in ("ARCHON_HORIZON_TASK", "ARCHON_HORIZON_RUN"):
+        val = os.environ.get(var, "").strip()
+        if val:
+            return val
+    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
+    return role or "human"
+
+
+def conversation_sender() -> str:
+    """Canonical route target for the participant starting a conversation."""
+    task = os.environ.get("ARCHON_HORIZON_TASK", "").strip()
+    if task:
+        return f"task:{task}"
+    run = os.environ.get("ARCHON_HORIZON_RUN", "").strip()
+    if run:
+        return f"run:{run}"
+    role = os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip().lower()
+    return role or "human"
+
+
+def history_entry(actor: str | None, field: str, *, before: str = "", after: str = "", note: str = "") -> dict:
+    """Build one append-only history transition for roadmap/task/inbox items.
+
+    When the write happens inside an agent session and the actor is that session's
+    role, the run/session provenance is stamped onto the entry — mirroring the
+    inbox provider's own history recorder. This is what lets the dashboard
+    attribute a roadmap/task status change to the session that made it (the
+    per-session "Roadmap activity" feed), rather than only creations and comments."""
+    from archon_horizon.core.clock import utc_now
+    from archon_horizon.core.provenance import agent_provenance
+
+    actor_name = (actor or "").strip() or "system"
+    entry: dict[str, object] = {
         "at": utc_now().isoformat(),
-        "actor": (actor or "").strip() or "system",
+        "actor": actor_name,
         "field": field,
         "from": before,
         "to": after,
         "note": note,
     }
+    provenance = agent_provenance()
+    if provenance and actor_name.lower() == provenance.get("role"):
+        entry["provenance"] = provenance
+    return entry
 
 
 def load_workspace(root: Path):
@@ -129,6 +208,16 @@ def task_store(workspace):
     from archon_horizon.config.loader import build_stores
 
     return build_stores(workspace).tasks
+
+
+def task_inbox_refs(workspace, task_id: str | None) -> tuple[str, ...]:
+    """Inbox items explicitly linked to ``task_id``, or none for unknown tasks."""
+    if not task_id:
+        return ()
+    try:
+        return task_store(workspace).get(task_id).inbox_refs
+    except (FileNotFoundError, KeyError):
+        return ()
 
 
 def inbox_providers(cfg, workspace):

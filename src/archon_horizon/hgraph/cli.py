@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -102,6 +103,100 @@ def _filter_nodes(g: Graph, args) -> list:
     return out
 
 
+def _count(value: int, singular: str, plural: str | None = None) -> str:
+    return f"{value:,} {singular if value == 1 else (plural or singular + 's')}"
+
+
+def _sync_line(result: dict) -> str:
+    """Compact sync result, matching the current hgraph report."""
+    parts = [
+        _count(result["blueprint"], "blueprint node"),
+        _count(result["lean"], "Lean declaration"),
+        _count(result["edges"], "generated edge"),
+    ]
+    if result["stale"]:
+        parts.append(_count(result["stale"], "node marked stale", "nodes marked stale"))
+    return " | ".join(parts)
+
+
+class _SyncStyle:
+    """Small ANSI formatter with an opt-out for redirected and CI output."""
+
+    _codes = {"green": "32", "yellow": "33"}
+
+    def __init__(self, mode: str = "auto", stream=None):
+        stream = stream or sys.stdout
+        is_tty = bool(getattr(stream, "isatty", lambda: False)())
+        self.enabled = (mode == "always" or
+                        (mode == "auto" and is_tty and
+                         "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"))
+
+    def __call__(self, text: str, color: str) -> str:
+        if not self.enabled:
+            return text
+        return f"\033[{self._codes[color]}m{text}\033[0m"
+
+    def green(self, text: str) -> str:
+        return self(text, "green")
+
+    def yellow(self, text: str) -> str:
+        return self(text, "yellow")
+
+
+_WARNING_LABELS = {
+    "lean": "Lean references not found in scanned sources",
+    "coverage": "Lean declarations not attached to blueprint nodes",
+    "lean_duplicate": "duplicate Lean declarations",
+    "dependency": "blueprint dependencies not found",
+    "blueprint": "blueprint structure issues",
+    "status": "blueprint formalization status inconsistencies",
+    "edge": "generated edge conflicts",
+    "other": "other sync warnings",
+}
+
+
+def _warning_kind(warning: str) -> str:
+    if "Lean declaration is not referenced by any blueprint" in warning:
+        return "coverage"
+    if "Lean declaration appears more than once" in warning:
+        return "lean_duplicate"
+    if r"\lean{" in warning and warning.endswith("not found in Lean sources"):
+        return "lean"
+    if "has no blueprint node" in warning:
+        return "blueprint" if warning.startswith("proof at byte ") else "dependency"
+    if ("unlabeled blueprint statement" in warning
+            or "blueprint label is used by more than one statement" in warning
+            or r"duplicate \label{" in warning
+            or "proof metadata ignored" in warning):
+        return "blueprint"
+    if r"\leanok" in warning or r"\mathlibok" in warning:
+        return "status"
+    if warning.startswith("edge ") and "authored edge present" in warning:
+        return "edge"
+    return "other"
+
+
+def _render_warning_summary(warnings: list[str], *, stream, style: _SyncStyle,
+                            indent: str = "  ", verbose: bool = False,
+                            lean_count: int | None = None) -> int:
+    """Group noisy sync diagnostics while retaining samples and verbose output."""
+    groups: dict[str, list[str]] = {}
+    for warning in warnings:
+        groups.setdefault(_warning_kind(warning), []).append(warning)
+    for kind, rows in groups.items():
+        label = _WARNING_LABELS[kind]
+        if kind == "lean" and lean_count == 0:
+            label += " (no Lean declarations scanned)"
+        print(f"{indent}{style.yellow('[warning]')} {len(rows):,} {label}", file=stream)
+        shown = rows if verbose else rows[:3]
+        for warning in shown:
+            print(f"{indent}  - {warning}", file=stream)
+        if len(rows) > len(shown):
+            print(f"{indent}  ... {len(rows) - len(shown):,} more; "
+                  "use --verbose to show all", file=stream)
+    return len(warnings)
+
+
 def build_parser(*, prog: str = "horizon graph") -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog=prog, description="Horizon's plain-files semantic graph")
     # Internal transport from the Horizon wrapper; project selection is exposed
@@ -184,7 +279,7 @@ def build_parser(*, prog: str = "horizon graph") -> argparse.ArgumentParser:
     ls.add_argument("--type", help="tex, lean, …")
     ls.add_argument("--status", help="filter by the authored `status` field")
     ls.add_argument("--lean-status", dest="lean_status",
-                    help="mathlib_ok | lean_ok | sorry | empty")
+                    help="mathlib_ok | lean_ok | linked | sorry | empty")
     ls.add_argument("--tag", help="only nodes carrying this tag")
     ls.add_argument("--match", help="case-insensitive substring in title or content")
     ls.add_argument("--stale", action="store_true", help="only nodes whose source vanished")
@@ -233,6 +328,29 @@ def build_parser(*, prog: str = "horizon graph") -> argparse.ArgumentParser:
     sy.add_argument("--blueprint", help="path to the leanblueprint .tex")
     sy.add_argument("--lean", action="append", default=[], metavar="PATH",
                     help="a .lean file or a directory of them (repeatable)")
+    sy.add_argument("-v", "--verbose", action="store_true",
+                    help="show every sync warning instead of three samples per category")
+    sy.add_argument("--color", choices=["auto", "always", "never"], default="auto",
+                    help="color sync status labels (default: auto)")
+
+    review = sub.add_parser(
+        "review", help="share local reviews/comments with collaborators through GitHub"
+    ).add_subparsers(dest="what", required=True)
+    send = review.add_parser(
+        "send", help="open one issue containing feedback absent from the GitHub baseline")
+    send.add_argument("--repo", help="GitHub owner/name (default: site.repo or current gh repo)")
+    send.add_argument("--base", metavar="BRANCH",
+                      help="remote branch to compare with (default: repository default branch)")
+    send.add_argument("--title", help="override the generated issue title")
+    send.add_argument("--label", action="append", default=[], metavar="NAME",
+                      help="label to add to the issue (repeatable; label must already exist)")
+    kinds = send.add_mutually_exclusive_group()
+    kinds.add_argument("--reviews-only", action="store_true",
+                       help="send review attachments, excluding freeform comments")
+    kinds.add_argument("--comments-only", action="store_true",
+                       help="send freeform comments, excluding reviews")
+    send.add_argument("--dry-run", action="store_true",
+                      help="print the issue and comment bodies without creating anything")
 
     return p
 
@@ -410,11 +528,35 @@ def main(argv=None, *, prog: str = "horizon graph") -> int:
                       file=sys.stderr)
                 return 2
             r = sync(g, blueprint=blueprint, lean_paths=lean, root=args.root)
-            print(f"synced: {r['blueprint']} blueprint node(s), "
-                  f"{r['lean']} lean node(s), {r['edges']} generated edge(s)"
-                  + (f", {r['stale']} marked stale" if r['stale'] else ""))
-            for w in r["warnings"]:
-                print(f"  warning: {w}", file=sys.stderr)
+            style = _SyncStyle(args.color, sys.stdout)
+            print(f"{style.green('[synced]')} {_sync_line(r)}")
+            _render_warning_summary(r["warnings"], stream=sys.stdout, style=style,
+                                    verbose=args.verbose, lean_count=r["lean"])
+
+        elif args.cmd == "review" and args.what == "send":
+            from .collaboration import send_review_batch
+            kinds = ({"review"} if args.reviews_only else
+                     {"comment"} if args.comments_only else
+                     {"review", "comment"})
+            result = send_review_batch(
+                args.root, repo=args.repo, base=args.base, kinds=kinds,
+                title=args.title, labels=args.label, dry_run=args.dry_run)
+            pending = result["pending"]
+            if not pending:
+                print(f"No local reviews/comments differ from "
+                      f"{result['repo']}@{result['branch']}.")
+            elif args.dry_run:
+                print(f"Would send {len(pending)} attachment(s) to "
+                      f"{result['repo']}@{result['branch']}:\n")
+                print(f"ISSUE TITLE\n{result['title']}\n\nISSUE BODY\n{result['body']}")
+                for index, comment in enumerate(result["comments"], 1):
+                    print(f"\nISSUE COMMENT {index}/{len(pending)}\n{comment}")
+            else:
+                reviews = sum(attachment.kind == "review" for attachment in pending)
+                comments = sum(attachment.kind == "comment" for attachment in pending)
+                print(f"Created {result['issue']}")
+                print(f"  posted {_count(reviews, 'review')} and "
+                      f"{_count(comments, 'comment')} as separate issue comments")
 
     except HGraphError as e:
         print(f"error: {e}", file=sys.stderr)

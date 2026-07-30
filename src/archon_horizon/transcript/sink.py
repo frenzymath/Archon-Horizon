@@ -66,9 +66,91 @@ def read_transcript(path: Path) -> list[TranscriptEvent]:
     events: list[TranscriptEvent] = []
     for line in path.read_text("utf-8").splitlines():
         line = line.strip()
-        if line:
+        if not line:
+            continue
+        # A crashed or killed writer can leave a single malformed record; skip
+        # it rather than take down every reader of the whole transcript (the
+        # paginated read_transcript_page tolerates the same way).
+        try:
             events.append(event_from_dict(json.loads(line)))
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, ValueError):
+            continue
     return events
+
+
+def read_transcript_page(
+    path: Path,
+    *,
+    before: int | None = None,
+    limit: int = 120,
+) -> dict[str, Any]:
+    """Read one newest-first page without loading the whole JSONL file.
+
+    ``before`` is the byte offset of the oldest event already held by the
+    caller. The response events remain in canonical chronological order; the UI
+    reverses them for newest-first display. Each event carries a response-only
+    ``_cursor`` byte offset so live polling can merge appended events without
+    duplicating older pages.
+    """
+    limit = max(1, min(500, int(limit)))
+    try:
+        file_size = path.stat().st_size
+    except OSError:
+        return {"events": [], "before": None, "has_more": False}
+    end = file_size if before is None else max(0, min(int(before), file_size))
+    if end == 0:
+        return {"events": [], "before": None, "has_more": False}
+
+    chunk_size = 64 * 1024
+    start = end
+    blob = b""
+    try:
+        with path.open("rb") as handle:
+            while start > 0:
+                chunk_start = max(0, start - chunk_size)
+                handle.seek(chunk_start)
+                blob = handle.read(start - chunk_start) + blob
+                start = chunk_start
+                # One delimiter may end a partial first line and another may be
+                # the trailing newline, hence the extra delimiter.
+                if blob.count(b"\n") >= limit + 1:
+                    break
+            first_is_partial = False
+            if start > 0:
+                handle.seek(start - 1)
+                first_is_partial = handle.read(1) != b"\n"
+    except OSError:
+        return {"events": [], "before": None, "has_more": False}
+
+    records: list[tuple[int, dict[str, Any]]] = []
+    relative = 0
+    fragments = blob.split(b"\n")
+    for index, raw in enumerate(fragments):
+        offset = start + relative
+        relative += len(raw) + 1
+        if index == 0 and first_is_partial:
+            continue
+        # A live writer may be between bytes of its final JSON object. The sink
+        # always terminates completed events with a newline, so ignore that tail.
+        if index == len(fragments) - 1 and blob and not blob.endswith(b"\n"):
+            continue
+        if not raw.strip():
+            continue
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            records.append((offset, value))
+
+    selected = records[-limit:]
+    events = [{**value, "_cursor": offset} for offset, value in selected]
+    cursor = selected[0][0] if selected else None
+    return {
+        "events": events,
+        "before": cursor,
+        "has_more": bool(cursor is not None and cursor > 0),
+    }
 
 
 def latest_report_text(path: Path) -> str:

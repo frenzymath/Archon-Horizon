@@ -10,7 +10,9 @@ Archon Horizon manages complex mathematical formalization through structured orc
   - [Dry Runs and Resumption](#dry-runs-and-resumption)
 - [2. Collaboration Rounds](#2-collaboration-rounds)
 - [3. Roadmaps vs. Tasks](#3-roadmaps-vs-tasks)
+  - [The Roadmap as a Project Board](#the-roadmap-as-a-project-board)
   - [Common Roadmap Commands](#common-roadmap-commands)
+  - [Linking Tasks to Roadmap & Inbox](#linking-tasks-to-roadmap--inbox)
 - [4. Reports, Events & Memory](#4-reports-events--memory)
 
 ---
@@ -88,15 +90,52 @@ When a run is initiated, Horizon executes a structured loop of proof sessions an
 
 Horizon keeps a sharp distinction between the human's tasks and the agent-maintained roadmap:
 
-- **Tasks (`horizon task`)**: the human's lever for launching sessions — objectives with project scope, write-set, and target files. **Human-authored only**: agents may read and `comment` (to suggest an edit) but cannot `add`/`set`/`remove` (the CLI refuses when `ARCHON_HORIZON_AGENT_ROLE` is set); to propose work an agent opens an inbox item for the human. Modeled in [`core/tasks.py`](../../src/archon_horizon/core/tasks.py), commands in [`commands/task.py`](../../src/archon_horizon/commands/task.py).
+- **Tasks (`horizon task`)**: the human's lever for launching sessions — objectives with project scope, write-set, and target files. Open to agents and humans alike: both may `add`, `set` (including status and roadmap/inbox refs), `comment`, and `remove`. The machine (scheduler/orchestrator) only ever writes `queued`/`running`; every terminal status (`done`/`blocked`/`failed`) is the agent's own word, and an agent declares `done` only when the work is *fully* complete. Modeled in [`core/tasks.py`](../../src/archon_horizon/core/tasks.py), commands in [`commands/task.py`](../../src/archon_horizon/commands/task.py).
 - **Roadmap (`horizon roadmap`)**: the project's **mathematical status** — the main theorems and infrastructure formalized and still to build. Horizon maintains it against the real Lean/blueprint state, while Ground checkpoints audit it from fresh context. It is a map that guides the work, **not** a work queue. Marking an item active does not launch anything and the orchestrator never turns roadmap items into tasks on its own. A human launches a milestone with `horizon run <roadmap-id>`, which **infers** a task from the item's scope on demand. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
+
+### The Roadmap as a Project Board
+
+Beyond its status and hierarchy, each roadmap item carries lightweight board metadata (backed by [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py) — `item_owner`/`item_milestone`/`item_pinned_commits`, folded in by `_apply_board_meta` in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py)):
+
+- **`owner`** — the team or agent responsible for the item, a categorization aid rather than an assignment lock. Who is *currently* running an item is **derived live** from running tasks' `roadmap_refs`, never stored on the item itself.
+- **`milestone`** — a free string label for grouping and filtering. It is **not** a due date and carries no schedule; it simply buckets related items together.
+- **`pinned_commits`** — commit SHAs pinned to the item as concrete deliverables (newest first).
+
+Set these when adding or editing an item:
+
+```bash
+# Add an item already scoped to an owner and milestone
+horizon roadmap add --id A.4 --title "..." --owner algebra-team --milestone "phase-1"
+
+# Edit board fields on an existing item; pin/unpin deliverable commits
+horizon roadmap set A.4 --owner algebra-team --milestone "phase-1" \
+    --pin-commit <sha> --unpin-commit <sha>
+
+# Filter the outline by milestone or owner
+horizon roadmap list --milestone "phase-1"
+horizon roadmap list --owner algebra-team
+```
+
+The same board also surfaces in the web dashboard as a milestone-grouped [`/board` view](../dashboard-and-search/README.md), where items with a live running task pulse as "live".
 
 ### Common Roadmap Commands
 
 | Command | Description |
 | :--- | :--- |
-| `horizon roadmap list` | List active workspace milestones and progress metrics. |
-| `horizon roadmap show <id>` | Inspect specific roadmap milestones and associated items. |
+| `horizon roadmap list` | List roadmap items as an indented outline; filter with `--milestone <label>` / `--owner <t>`. |
+| `horizon roadmap show <id>` | Inspect a specific roadmap item and its associated details. |
+| `horizon roadmap add --id <id> --title <t>` | Add an item; `--project` defaults from the session's `ARCHON_HORIZON_PROJECTS` when omitted. |
+| `horizon roadmap set <id> --owner <t> --milestone <label>` | Set board metadata; `--pin-commit`/`--unpin-commit` manage deliverable SHAs. |
+
+### Linking Tasks to Roadmap & Inbox
+
+A task records which roadmap items and inbox items it advances via its `roadmap_refs`/`inbox_refs`. Set or repair these through the safe CLI (see [`commands/task.py`](../../src/archon_horizon/commands/task.py) — `set_task`):
+
+```bash
+horizon task set <id> --roadmap-ref <rid> --inbox-ref <iid>   # both repeatable
+```
+
+Both flags are repeatable and replace the existing refs. These links are what let the board derive its "live" status and what drives roadmap status-sync when a linked task reaches a terminal state. Like `roadmap add`, `horizon task add` defaults `--project` from the session's `ARCHON_HORIZON_PROJECTS` when omitted (`provenance_project` in [`commands/shared.py`](../../src/archon_horizon/commands/shared.py)).
 
 ---
 

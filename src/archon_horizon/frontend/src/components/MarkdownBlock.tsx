@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import katex from 'katex';
 import { highlightLeanLines } from '../utils/leanHighlight';
+import { useRefLinks, refChipClickHandler, type RefResolver } from '../refs';
 import styles from './MarkdownBlock.module.css';
 
 interface MarkdownBlockProps {
@@ -24,9 +25,12 @@ interface MarkdownBlockProps {
  * expensive on a large body (reports reach a couple of MB), and a live-tailed
  * log re-renders its panels on every poll while the text is unchanged. */
 export default function MarkdownBlock({ content, className }: MarkdownBlockProps) {
-  const html = useMemo(() => markdownToHtml(content), [content]);
+  const links = useRefLinks();
+  const resolve = links?.resolve;
+  const html = useMemo(() => markdownToHtml(content, resolve), [content, resolve]);
   const cls = className ? `${styles.markdown} ${className}` : styles.markdown;
-  return <div className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
+  const onClick = links ? refChipClickHandler(links.go) : undefined;
+  return <div className={cls} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /** Minimal markdown → HTML converter.
@@ -41,7 +45,7 @@ export default function MarkdownBlock({ content, className }: MarkdownBlockProps
  * Supports: ATX headings (# through ######), bullet and ordered lists,
  * blockquotes, horizontal rules, fenced code blocks, inline code, tables,
  * bold, italic, strikethrough, links, images, and math. */
-export function markdownToHtml(content: string): string {
+export function markdownToHtml(content: string, resolve?: RefResolver): string {
   if (!content) return '';
 
   // 0. Strip HTML comments — authoring guidance only.
@@ -139,10 +143,54 @@ export function markdownToHtml(content: string): string {
     .flatMap(splitOnBlockBoundaries);
   result = paragraphs.map(renderBlock).filter(Boolean).join('\n');
 
+  // 2b. Linkify local references. Runs while block code/math/tables are still
+  //     placeholders (so KaTeX/code output is untouched) but after inline() has
+  //     emitted its <a>/<code> spans — which linkifyRefs skips over.
+  if (resolve) result = linkifyRefs(result, resolve);
+
   // 3. Restore extracted blocks.
   result = result.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => blocks[parseInt(i)]);
 
   return result;
+}
+
+/** Wrap tokens that resolve to a known local entity in a clickable chip anchor.
+ *
+ * Operates on the assembled inline HTML: it splits into tags vs. text and only
+ * transforms text that is not inside an `<a>`, `<code>`, or `<pre>` element and
+ * carries no stashed-block placeholder. Only tokens the resolver recognizes are
+ * wrapped, so ordinary prose can't produce false chips. Trailing punctuation is
+ * trimmed off a token before resolving (so `A.3.` still links `A.3`). */
+function linkifyRefs(html: string, resolve: RefResolver): string {
+  const parts = html.split(/(<[^>]+>)/);
+  const openSkip = /^<(a|code|pre)\b/i;
+  const closeSkip = /^<\/(a|code|pre)>/i;
+  let skip = 0;
+  return parts
+    .map((part) => {
+      if (part.startsWith('<')) {
+        if (closeSkip.test(part)) skip = Math.max(0, skip - 1);
+        else if (openSkip.test(part) && !part.endsWith('/>')) skip += 1;
+        return part;
+      }
+      if (skip > 0 || !part || part.includes('\x00')) return part;
+      return part.replace(/[A-Za-z0-9][\w./:-]*/g, (token) => {
+        let core = token;
+        let tail = '';
+        while (core && !resolve(core)) {
+          const ch = core[core.length - 1];
+          if (ch === '.' || ch === ':' || ch === '-' || ch === '/') {
+            tail = ch + tail;
+            core = core.slice(0, -1);
+          } else break;
+        }
+        const ref = core ? resolve(core) : null;
+        if (!ref) return token;
+        const title = escapeHtml(ref.title);
+        return `<a class="tag-chip tag-ref-${ref.kind} ref-chip" href="${ref.href}" data-ref="${ref.kind}" title="${title}">${core}</a>${tail}`;
+      });
+    })
+    .join('');
 }
 
 /** Split a paragraph block on lines that should always start a new block,

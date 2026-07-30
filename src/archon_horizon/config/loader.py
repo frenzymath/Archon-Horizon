@@ -45,7 +45,7 @@ from archon_horizon.store.filesystem import (
 from .harnesses import HarnessRegistry
 from .env import load_env_file
 from .manifest import find_package_revs
-from .schema import WorkspaceConfig
+from .schema import ConfigError, WorkspaceConfig
 
 CONFIG_FILENAME = "config.yaml"
 _WARNED_LIBRARY_MISMATCHES: set[tuple[str, str, str, tuple[str, ...], str]] = set()
@@ -123,16 +123,63 @@ def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:
 def build_freeze(cfg: WorkspaceConfig) -> FreezeSet:
     rules: list[FreezeRule] = []
     # Workspace-level freeze (top-level `freeze:` section).
-    rules.extend(FreezeRule(level=FreezeLevel.AGENT, pattern=a) for a in cfg.freeze_agents)
-    rules.extend(FreezeRule(level=FreezeLevel.PROJECT, pattern=p) for p in cfg.freeze_projects)
-    rules.extend(FreezeRule(level=FreezeLevel.FILE, pattern=f) for f in cfg.freeze_files)
-    rules.extend(FreezeRule(level=FreezeLevel.DECLARATION, pattern=d) for d in cfg.freeze_declarations)
-    rules.extend(FreezeRule(level=FreezeLevel.BLUEPRINT_NODE, pattern=n) for n in cfg.freeze_blueprint_nodes)
+    rules.extend(
+        FreezeRule(
+            level=FreezeLevel.AGENT,
+            pattern=agent,
+            metadata={"config_key": "freeze.agents"},
+        )
+        for agent in cfg.freeze_agents
+    )
+    rules.extend(
+        FreezeRule(
+            level=FreezeLevel.PROJECT,
+            pattern=project,
+            metadata={"config_key": "freeze.projects"},
+        )
+        for project in cfg.freeze_projects
+    )
+    rules.extend(
+        FreezeRule(
+            level=FreezeLevel.FILE,
+            pattern=file,
+            metadata={"config_key": "freeze.files"},
+        )
+        for file in cfg.freeze_files
+    )
+    rules.extend(
+        FreezeRule(
+            level=FreezeLevel.DECLARATION,
+            pattern=declaration,
+            metadata={"config_key": "freeze.declarations"},
+        )
+        for declaration in cfg.freeze_declarations
+    )
+    rules.extend(
+        FreezeRule(
+            level=FreezeLevel.BLUEPRINT_NODE,
+            pattern=node,
+            metadata={"config_key": "freeze.blueprint_nodes"},
+        )
+        for node in cfg.freeze_blueprint_nodes
+    )
     # Per-project freeze.
     for pc in cfg.projects.values():
-        rules.extend(FreezeRule(level=FreezeLevel.FILE, pattern=f) for f in pc.freeze_files)
         rules.extend(
-            FreezeRule(level=FreezeLevel.DECLARATION, pattern=d) for d in pc.freeze_declarations
+            FreezeRule(
+                level=FreezeLevel.FILE,
+                pattern=f,
+                metadata={"config_key": f"projects.{pc.name}.freeze.files"},
+            )
+            for f in pc.freeze_files
+        )
+        rules.extend(
+            FreezeRule(
+                level=FreezeLevel.DECLARATION,
+                pattern=d,
+                metadata={"config_key": f"projects.{pc.name}.freeze.declarations"},
+            )
+            for d in pc.freeze_declarations
         )
     return FreezeSet(tuple(rules))
 
@@ -167,11 +214,11 @@ def _resolve_harness(
     harnesses: dict[str, Harness], name: str | None, role: str
 ) -> Harness:
     if name is None:
-        raise ValueError(f"config does not set a harness for the {role} agent")
+        raise ConfigError(f"config does not set a harness for the {role} agent")
     try:
         return harnesses[name]
     except KeyError as exc:
-        raise ValueError(
+        raise ConfigError(
             f"{role} agent references harness {name!r}, which is not defined "
             f"under 'harnesses' (defined: {sorted(harnesses)})"
         ) from exc

@@ -26,17 +26,28 @@ def has_recorded_terminal_status(task: HorizonTask) -> bool:
 
     Orchestrator-owned Horizon results update task files directly, without
     appending a user/CLI history entry. Dashboard and CLI edits do append
-    history. Focused multi-round runs use this distinction to keep retrying
-    agent-owned results while respecting an external close/cancel.
+    history. Use ``terminal_status_actor`` when orchestration needs to distinguish
+    an agent-owned completion from an external close/cancel.
+    """
+    return terminal_status_actor(task) is not None
+
+
+def terminal_status_actor(task: HorizonTask) -> str | None:
+    """Return the actor that recorded the task's current terminal transition.
+
+    ``None`` means the status is not terminal or the transition has no history
+    entry. The actor lets orchestration distinguish an agent's own final
+    declaration from an external human close while the harness is still live.
     """
     if task.status not in TASK_TERMINAL_STATUSES:
-        return False
+        return None
     history = task.metadata.get("history")
     if not isinstance(history, list):
-        return False
+        return None
     for entry in reversed(history):
         if not isinstance(entry, dict):
             continue
         if entry.get("field") == "status" and entry.get("to") == task.status.value:
-            return True
-    return False
+            actor = str(entry.get("actor") or "").strip().lower()
+            return actor or "system"
+    return None

@@ -39,17 +39,54 @@ def _task_block(context: HorizonContext) -> str:
     )
 
 
+def _stale_skill_guard(context: HorizonContext) -> str:
+    """Supply current minimum gates when an old editable skill is installed.
+
+    Horizon deliberately does not overwrite workspace skill edits at run start.
+    This small package-owned fallback prevents an old copy from silently losing
+    critical LSP, delegation, and collection-hygiene behavior.
+    """
+    try:
+        from archon_horizon.skills.registry import stale_skills
+
+        names = stale_skills(context.workspace.root)
+    except Exception:
+        return ""
+    if not names:
+        return ""
+    return (
+        "\n\nThe installed workspace skills are stale ("
+        + ", ".join(names)
+        + "). Do not overwrite deliberate local edits automatically, but do not ignore "
+        "the drift. Until it is reconciled: use the `lean-check` LSP loop before "
+        "and after Lean edits; spawn and wait for a bounded native subagent on "
+        "multi-file/multi-proof work; and dispatch `janitor` (`ground` fallback) "
+        "for inbox/roadmap/task health warnings and before terminal completion."
+    )
+
+
 def horizon_task_prompt(context: HorizonContext) -> str:
     """Prompt for one automated Horizon session: directive + skill pointer."""
+    skill_path = (
+        context.workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md"
+    ).resolve()
     return (
         f"You are in an **Archon Horizon** workspace at `{context.workspace.root}`.\n\n"
-        "Load the **`horizon`** skill FIRST — it explains where the state lives, the\n"
-        "tools, and this workspace's conventions (one-shot discipline, git commits,\n"
-        "the final report). If your engine has no skill mechanism, read\n"
-        "`.claude/skills/horizon/SKILL.md` directly.\n\n"
+        "Load the **`horizon`** skill FIRST. Read it at the ABSOLUTE path\n"
+        f"`{skill_path}` (also exported as `$ARCHON_HORIZON_SKILL`) — do NOT use a\n"
+        "relative path like `.claude/skills/horizon/SKILL.md`, which fails when your\n"
+        "shell starts in a member project rather than the workspace root. The skill\n"
+        "explains where the state lives, the tools, and this workspace's conventions\n"
+        "(one-shot discipline, git commits, the final report)."
+        f"{_stale_skill_guard(context)}\n\n"
+        "Before modifying files, inspect the required and conversational inbox lanes:\n"
+        "`\"$HORIZON_BIN\" inbox list --mine --status open --kind protection --json`\n"
+        "then `\"$HORIZON_BIN\" inbox list --mine --unread --kind conversation --json`.\n"
+        "Protections are standing constraints even when already read. Address or explicitly\n"
+        "acknowledge unread conversations before ordinary advisory inbox material.\n\n"
         "# Task\n"
         f"{_task_block(context)}\n\n"
-        "This is a headless, one-shot session: work the task's REAL objective as far\n"
-        "as you genuinely can, committing progress as you go, then finish with the\n"
-        "brief final report the skill specifies."
+        "This is a headless, one-shot session: advance the REAL objective, commit each\n"
+        "verified unit and any final edits, keep operational comments to the delta,\n"
+        "then write the skill's brief final report."
     )

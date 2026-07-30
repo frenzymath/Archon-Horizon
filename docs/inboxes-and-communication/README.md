@@ -9,6 +9,11 @@ Communication between humans, orchestration agents, and individual member projec
 - [1. Local Filesystem Inbox](#1-local-filesystem-inbox)
   - [Inbox Kinds](#inbox-kinds)
   - [Common Local Inbox Commands](#common-local-inbox-commands)
+  - [Audiences and Direct Messages](#audiences-and-direct-messages)
+  - [Ownership Tiers: Shared vs. a Task's Inbox](#ownership-tiers-shared-vs-a-tasks-inbox)
+  - [Per-Team Read-State](#per-team-read-state)
+  - [Provenance Defaults Inside a Run](#provenance-defaults-inside-a-run)
+  - [Concurrent-Safe IDs and One-Shot Items](#concurrent-safe-ids-and-one-shot-items)
 - [2. Standing Protections (Soft Freeze)](#2-standing-protections-soft-freeze)
 - [3. GitHub Inbox Integration](#3-github-inbox-integration)
   - [Label Gating](#label-gating)
@@ -18,7 +23,7 @@ Communication between humans, orchestration agents, and individual member projec
 
 ## 1. Local Filesystem Inbox
 
-The local inbox stores persistent communication items directly inside `.archon-horizon/inboxes/`. Items are categorized by semantic kind and can be scoped to specific projects, files, or declarations. The filesystem backend is [`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py) (with a sharded variant in [`inboxes/sharded.py`](../../src/archon_horizon/inboxes/sharded.py)); the CLI lives in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py).
+The local inbox stores persistent communication items directly inside `.archon-horizon/inbox/local/`. Items are categorized by semantic kind and can be scoped to specific projects, files, declarations, or blueprint nodes. The filesystem backend is [`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py); the CLI lives in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py).
 
 ### Inbox Kinds
 
@@ -27,14 +32,15 @@ The local inbox stores persistent communication items directly inside `.archon-h
 | `hint` | Guidance or proof sketches suggested by humans or agents to assist complex proof searches. |
 | `issue` | Bug reports, build failures, or architectural inconsistencies requiring resolution. |
 | `protection` | Standing constraints preventing modifications to specific files, declarations, or signatures. |
+| `conversation` | A direct or group thread that agents should open and acknowledge before advisory inbox material. |
 | `info` | General contextual notes or notifications. |
 | `memory` | Long-term knowledge items retained across runs to inform future formalization strategies. |
 
 ### Common Local Inbox Commands
 
 ```bash
-# Create a new inbox item
-horizon inbox create --kind hint --title "Use Mathlib lemma X" --body "Detailed explanation..."
+# Create a new inbox item (first paragraph is the title)
+horizon inbox add --kind hint --body $'Use Mathlib lemma X\n\nDetailed explanation...'
 
 # List active inbox items
 horizon inbox list
@@ -46,6 +52,131 @@ horizon inbox show <id>
 horizon inbox comment <id> --body "Investigating dependency failure..."
 ```
 
+### Audiences and Direct Messages
+
+Where a `scope` says what an item is *about*, its **audience** says who it is
+*for*. The recognized recipients are `horizon`, `human`, `project:<name>`,
+`task:<id>`, and `run:<id>`. `horizon inbox dm` accepts one or several recipients,
+so the same durable thread supports direct and group conversations. The general
+audiences broadcast; task/run recipients and the originating team are the
+conversation participants. New threads persist the full set in
+`metadata.participants` and identify the initiator in `metadata.started_by`, so
+the author receives later replies and owns thread closure. Delivery is decided by `reaches_horizon` in
+[`core/inbox.py`](../../src/archon_horizon/core/inbox.py): a session reading its
+own inbox never sees a direct message meant for a different task or run. A
+caller without a matching task/run identity does not receive private messages;
+the human dashboard remains the workspace-wide administrative view.
+
+```bash
+# Message another project's Horizon agent
+horizon inbox add --kind info --to project:mathlib-port --body $'Renamed lemma\n\nFoo.bar is now Foo.baz.'
+
+# Direct message to one task (a private hand-off)
+horizon inbox dm task:T-0042 --body $'Try induction\n\nInduct on the recursion depth.'
+
+# Group conversation between two running teams and the human
+horizon inbox dm task:T-0042 task:T-0047 human --body $'Split the proof\n\nWhich side should each team own?'
+```
+
+The opening message and later comments form one `conversation` item. An agent
+opens it with `horizon inbox show <id> --json` (which acknowledges it as read)
+and replies with `horizon inbox comment <id> --body ...`; the human replies in
+the live dashboard. A reply marks the thread unread for every participant except
+its sender, so an active thread reappears as an `ACTION` synchronizer line instead
+of silently remaining read forever.
+
+Conversations are bounded coordination, not one-way notices. Search and reuse an
+open thread before creating another for the same topic. The initiator archives
+the conversation after consuming the answer (normally after a concise conclusion
+comment); recipients reply but leave closure to the initiator. Human-started
+threads remain open until the human consumes/archives them unless closure was
+explicitly delegated. The CLI warns when the open conversation set grows beyond
+the recommended working limit.
+
+Active `protection` items occupy the stronger `REQUIRED` lane and are surfaced
+even after they have been read. Other inbox kinds are advisory. In JSON mode the
+same ordering is emitted in the leading `attention` object; the human-readable
+synchronizer remains on stderr, so shell code that uses `2>/dev/null` suppresses
+only that duplicate digest, not the JSON attention data.
+
+### Ownership Tiers: Shared vs. a Task's Inbox
+
+Every item sits in one of two ownership tiers. By default it is **shared** —
+visible to every team. Alternatively it can be **owned by a single task**, which
+gives that task a private per-team inbox (e.g. a memory note only that team
+keeps). Ownership is stored as `metadata.owner_task` (empty/absent means "owned
+by everyone"), read via `item_owner`, and enforced in `reaches_horizon`: an owned
+item reaches only its owning task.
+
+```bash
+# Create an item owned by a task (its private inbox)
+horizon inbox add --kind memory --owner T-0042 --body $'Local convention\n\nUse `simp` sets, not ad-hoc rewrites.'
+
+# ...or owned by my own task, inferred from the session
+horizon inbox add --kind memory --mine --body $'Note to self\n\n...'
+
+# Move an existing item between tiers
+horizon inbox own <id> --owner T-0042   # into that task's inbox
+horizon inbox own <id> --mine           # into my task's inbox
+horizon inbox own <id> --shared         # back to everyone
+```
+
+A **task's inbox** is the union of the items it owns *plus* all shared items:
+
+```bash
+horizon inbox list --task T-0042   # T-0042's owned items + shared items
+horizon inbox list --mine          # same, for my task (from the session)
+```
+
+The union is what `InboxFilter.owner_task` computes — it keeps an item when it is
+shared *or* owned by the requested task. Ownership lives in
+[`core/inbox.py`](../../src/archon_horizon/core/inbox.py) (`item_owner`,
+`InboxFilter.owner_task`) and is set on the store by `set_owner` in
+[`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py).
+
+### Per-Team Read-State
+
+Read/unread is tracked **per reader**, not globally, so a shared item several
+teams see records who has already read it. Each reader — a task, a run, or a
+human — is stored in `metadata.read_by`, and "unread for me" is computed from
+that list. The reader id is inferred from the session by `reader_id` (task id,
+else run id, else agent role, else `human`).
+
+```bash
+horizon inbox read <id>      # mark read by me
+horizon inbox unread <id>    # revert (e.g. still relevant / unactioned)
+horizon inbox list --unread  # only what I have not read
+```
+
+The primitives are `item_readers` / `is_read_by` and `InboxFilter.unread_for` in
+[`core/inbox.py`](../../src/archon_horizon/core/inbox.py), with `set_read` in
+[`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py).
+
+### Provenance Defaults Inside a Run
+
+Inside a run the orchestrator exports `ARCHON_HORIZON_*` environment variables, so
+an agent rarely needs to pass the author, owner, reader, or project explicitly —
+they default from the session. `provenance_task` supplies `--mine`/`--task`,
+`reader_id` supplies the read-state identity, and `provenance_project` supplies
+`--project` (the session's primary project); see
+[`commands/shared.py`](../../src/archon_horizon/commands/shared.py). A human at the
+CLI with no run environment simply passes the flags as needed.
+
+### Concurrent-Safe IDs and One-Shot Items
+
+`create_item` allocates the next `I-NNNN` id under an OS `flock` (`_create_lock`
+in [`inboxes/filesystem.py`](../../src/archon_horizon/inboxes/filesystem.py)), so
+parallel `horizon inbox add` calls get distinct ids instead of colliding on the
+same slot. The guard fails *open* — on a platform without `fcntl` or after a lock
+timeout it proceeds unlocked rather than refuse the write.
+
+Items tagged `[temporary]` (via `horizon inbox add --temporary`) are one-shot
+notes meant to be consumed within a single run. Any that remain open from *before*
+the current run are soft-archived when the run finishes, by
+`_archive_consumed_temporaries` in
+[`orchestration/orchestrator.py`](../../src/archon_horizon/orchestration/orchestrator.py);
+items the agent created during the run are kept for the next one.
+
 ---
 
 ## 2. Standing Protections (Soft Freeze)
@@ -56,7 +187,22 @@ When coordinating automated proof searches across large mathbases, certain found
 horizon inbox protect --declaration Foo.bar --body "Do not modify the signature of Foo.bar during autoformalization."
 ```
 
-Protections are persistent inbox items rendered directly into the Horizon agent's prompt context as non-negotiable constraints. Enforcement of write-set boundaries is handled by [`core/freeze.py`](../../src/archon_horizon/core/freeze.py).
+Protections are persistent inbox items the Horizon agent pulls at session start.
+They can express semantic constraints, but are not mechanically enforced. For an
+exact file, declaration, blueprint node, project, or agent that must be blocked
+before dispatch, use the config-backed freeze commands:
+
+```bash
+horizon freeze add file 'Core/API.lean'
+horizon freeze add declaration 'Core.Api.signature'
+horizon freeze add blueprint-node 'thm:stable-api'
+horizon freeze list
+horizon freeze remove file 'Core/API.lean'
+```
+
+These commands maintain the top-level `freeze:` section in `config.yaml`;
+enforcement of declared task write sets is handled by
+[`core/freeze.py`](../../src/archon_horizon/core/freeze.py).
 
 ---
 

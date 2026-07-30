@@ -17,11 +17,14 @@ from typer.main import get_command
 
 from archon_horizon import __version__
 from archon_horizon.commands import blueprint as blueprint_cmd
+from archon_horizon.commands import agent_hook as agent_hook_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
+from archon_horizon.commands import freeze as freeze_cmd
 from archon_horizon.commands import inbox as inbox_cmd
 from archon_horizon.commands import init as init_cmd
 from archon_horizon.commands import graph as graph_cmd
+from archon_horizon.commands import permissions as permissions_cmd
 from archon_horizon.commands import project as project_cmd
 from archon_horizon.commands import ps as ps_cmd
 from archon_horizon.commands import roadmap as roadmap_cmd
@@ -34,6 +37,7 @@ from archon_horizon.commands import skills as skills_cmd
 from archon_horizon.commands import sync as sync_cmd
 from archon_horizon.commands import update as update_cmd
 from archon_horizon.commands import usage as usage_cmd
+from archon_horizon.config.schema import ConfigError
 from archon_horizon.log import log
 
 
@@ -117,6 +121,12 @@ def callback(
         from archon_horizon.core.version import warn_if_newer_available
 
         warn_if_newer_available(json_mode=json_mode)
+    # The pre-command synchronizer: a short, stderr-only digest (unread inbox,
+    # session runtime/tokens, other live runs) so an agent is aware of anything it
+    # should react to. Best-effort and agent-session-gated; never touches stdout.
+    from archon_horizon.core.synchronizer import synchronize
+
+    synchronize(root)
 
 
 # ── register commands ────────────────────────────────────────────────
@@ -130,6 +140,7 @@ app.add_typer(inbox_cmd.app, name="inbox")
 app.add_typer(roadmap_cmd.app, name="roadmap")
 app.add_typer(task_cmd.app, name="task")
 app.add_typer(project_cmd.app, name="project")
+app.add_typer(freeze_cmd.app, name="freeze")
 app.add_typer(skills_cmd.app, name="skills")
 app.command("blueprint")(blueprint_cmd.blueprint)
 app.command(
@@ -145,9 +156,11 @@ app.command(
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
 app.command("usage")(usage_cmd.usage)
+app.command("permissions")(permissions_cmd.permissions)
 app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)
 app.command("subagent", hidden=True)(subagent_cmd.subagent)
+app.command("agent-hook", hidden=True)(agent_hook_cmd.agent_hook)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -179,6 +192,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except FileNotFoundError as exc:
         # Almost always "not a workspace / missing config" — surface the
         # actionable message cleanly instead of dumping a traceback.
+        log.error(str(exc))
+        return 1
+    except ConfigError as exc:
+        # A malformed config.yaml is user error, not a crash: print the
+        # actionable message rather than a traceback.
         log.error(str(exc))
         return 1
     except Exception as exc:

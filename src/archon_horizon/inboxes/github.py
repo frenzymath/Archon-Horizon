@@ -307,7 +307,13 @@ class GithubInboxProvider(InboxProvider):
         self._runner([entity, verb, number, "--repo", self._repo])
         self.sync()
 
-    def add_comment(self, item_id: str, body: str, author: str | None = None) -> None:
+    def add_comment(
+        self,
+        item_id: str,
+        body: str,
+        author: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
         entity, number = self._entity_and_number(item_id)
         self._runner([entity, "comment", number, "--repo", self._repo, "--body", body])
         self.sync()

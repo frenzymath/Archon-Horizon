@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from archon_horizon.cli import main
+from archon_horizon.commands.run import RunCommand
 from archon_horizon.config.loader import build_orchestrator
 from archon_horizon.config.mcp import (
     codex_mcp_toml_block,
@@ -138,6 +140,18 @@ def test_install_mcp_for_harnesses_writes_codex_project_config(tmp_path: Path) -
     assert "claude-code" not in " ".join(out)  # claude not registered here
     assert set(out["codex"]) == set(default_mcp_servers())
     assert (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_run_start_refreshes_project_mcp_config(tmp_path: Path) -> None:
+    cfg = SimpleNamespace(
+        harnesses={"codex": HarnessConfig(name="codex", kind="codex")}
+    )
+    workspace = SimpleNamespace(root=tmp_path)
+
+    RunCommand(tmp_path)._refresh_mcp_config(cfg, workspace)
+
+    assert json.loads((tmp_path / ".mcp.json").read_text("utf-8"))["mcpServers"]["lean-lsp"]
+    assert "[mcp_servers.lean-lsp]" in (tmp_path / ".codex" / "config.toml").read_text("utf-8")
 
 
 def test_write_mcp_config_roundtrip(tmp_path: Path) -> None:

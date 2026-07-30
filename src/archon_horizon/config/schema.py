@@ -15,6 +15,13 @@ from typing import Any
 from archon_horizon.core.types import Metadata
 
 
+class ConfigError(ValueError):
+    """A ``config.yaml`` is malformed in a way the user must fix.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` call sites keep
+    working; the CLI catches it to print the message instead of a traceback.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class HarnessConfig:
@@ -27,9 +34,28 @@ class HarnessConfig:
 
     @classmethod
     def from_raw(cls, name: str, data: dict[str, Any]) -> "HarnessConfig":
+        # ``kind`` is the one required key. Validate it here so a malformed
+        # config yields an actionable message on *every* command instead of a
+        # KeyError traceback (missing) or a late UnknownHarnessKind deep in the
+        # registry (unquoted YAML ``null``, which parses as None -- exactly what
+        # copying the documented ``kind: null`` example produces).
+        if "kind" not in data:
+            raise ConfigError(
+                f"harness {name!r} is missing the required 'kind' key "
+                "(expected one of: claude-code, codex, command, external-agent, \"null\")"
+            )
+        raw_kind = data["kind"]
+        if raw_kind is None:
+            raise ConfigError(
+                f"harness {name!r} has kind: null, which YAML parses as an empty value. "
+                'Quote it as kind: "null" to select the in-process null harness.'
+            )
+        kind = str(raw_kind).strip()
+        if not kind:
+            raise ConfigError(f"harness {name!r} has an empty 'kind'")
         return cls(
             name=name,
-            kind=data["kind"],
+            kind=kind,
             command=data.get("command"),
             args=tuple(data.get("args", ())),
             model=data.get("model"),
@@ -214,6 +240,42 @@ class ProjectConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DelegationConfig:
+    """Whether and how a running agent (a "team") may delegate by launching more
+    work — new tasks, and if permitted, whole new ``horizon run`` sessions.
+
+    The default is fully closed: an agent may NOT create tasks or launch runs.
+    This block is the user's standing *consent record* that an agent reads before
+    delegating. It is intentionally free-form — ``raw`` preserves every key the
+    user wrote (e.g. account notes, limit-reset times, api-key hints) so the agent
+    can read and reason about them — while only the load-bearing fields are typed.
+
+    Reading this config never authorizes anything on its own; it is inert data.
+    Any actuator that acts on it (spawning a run, selecting an account) is a
+    separate, deliberately-gated capability.
+    """
+    allow_launch_tasks: bool = False   # may the agent create new tasks in the store
+    allow_launch_runs: bool = False    # may the agent spawn a new `horizon run`
+    max_parallel_sessions: int = 0     # cap on agent-launched concurrent runs (0 = none)
+    accounts: tuple[Metadata, ...] = ()  # free-form account/api descriptors to choose among
+    raw: Metadata = field(default_factory=dict)  # the whole block, verbatim, for the agent to read
+
+    @classmethod
+    def from_raw(cls, data: dict[str, Any]) -> "DelegationConfig":
+        data = dict(data or {})
+        accounts = tuple(
+            dict(a) for a in (data.get("accounts") or ()) if isinstance(a, dict)
+        )
+        return cls(
+            allow_launch_tasks=bool(data.get("allow_launch_tasks", False)),
+            allow_launch_runs=bool(data.get("allow_launch_runs", False)),
+            max_parallel_sessions=int(data.get("max_parallel_sessions", 0) or 0),
+            accounts=accounts,
+            raw=data,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceConfig:
     name: str
     state_dir: str = ".archon-horizon"
@@ -221,6 +283,7 @@ class WorkspaceConfig:
     horizon_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+    delegation: DelegationConfig = field(default_factory=DelegationConfig)
     external_libraries: tuple[ExternalLibrary, ...] = ()
     harnesses: dict[str, HarnessConfig] = field(default_factory=dict)
     projects: dict[str, ProjectConfig] = field(default_factory=dict)
@@ -242,6 +305,7 @@ class WorkspaceConfig:
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
             budget=BudgetConfig.from_raw(ws.get("budget", {}) or {}),
+            delegation=DelegationConfig.from_raw(ws.get("delegation", {}) or {}),
             external_libraries=tuple(
                 ExternalLibrary.from_raw(e) for e in (data.get("external_libraries") or ())
             ),

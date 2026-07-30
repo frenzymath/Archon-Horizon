@@ -25,6 +25,33 @@ from archon_horizon.log import log
 from .service import WorkspaceService
 
 
+def dashboard_policy_rows(service: WorkspaceService | None) -> dict[str, str]:
+    """Compact scheduling/write-policy metadata for the startup table."""
+    if service is None:
+        return {}
+    cfg = service.cfg
+    project_file_rules = sum(len(project.freeze_files) for project in cfg.projects.values())
+    project_declaration_rules = sum(
+        len(project.freeze_declarations) for project in cfg.projects.values()
+    )
+    other: list[str] = []
+    if cfg.freeze_agents:
+        other.append(f"agents: {', '.join(cfg.freeze_agents)}")
+    file_count = len(cfg.freeze_files) + project_file_rules
+    if file_count:
+        other.append(f"files: {file_count}")
+    declaration_count = len(cfg.freeze_declarations) + project_declaration_rules
+    if declaration_count:
+        other.append(f"declarations: {declaration_count}")
+    if cfg.freeze_blueprint_nodes:
+        other.append(f"blueprint nodes: {len(cfg.freeze_blueprint_nodes)}")
+    return {
+        "Frozen projects": ", ".join(cfg.freeze_projects) or "none",
+        "Other freezes": " · ".join(other) or "none",
+        "Max parallel": str(cfg.scheduler.max_parallel_sessions),
+    }
+
+
 def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -209,10 +236,42 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
             except Exception as exc:
                 self._json({"error": str(exc)}, 400)
 
+        def _origin_ok(self) -> bool:
+            """Reject cross-site writes.
+
+            These endpoints mutate the workspace (inbox, roadmap, tasks) with no
+            credentials of any kind, so the browser's same-origin policy is the
+            only thing standing between them and any page the user happens to
+            have open. It is not enough on its own: a ``text/plain`` POST is a
+            CORS "simple request", so it is sent cross-origin with no preflight
+            and the attacker never needs to read the response to have already
+            written to the inbox — which agents consume as instructions.
+
+            A same-origin fetch from the dashboard sends ``Origin`` matching the
+            host we are serving. Anything else (a foreign Origin) is refused. A
+            *missing* Origin is allowed: non-browser clients (curl, the tests)
+            omit it, and they were never the threat here.
+            """
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True
+            parsed = urlparse(origin)
+            if parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+                return False
+            # Same host family, but a different port is still a different origin.
+            # Compare against the port we were actually reached on (the Host
+            # header), so this holds whichever --port the dashboard bound.
+            host_header = self.headers.get("Host") or ""
+            expected = urlparse(f"//{host_header}").port
+            return parsed.port == expected or (parsed.port is None and expected in (None, 80))
+
         def do_POST(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             if route not in ("/api/inbox", "/api/roadmap", "/api/tasks", "/api/blueprint/sync"):
                 self._json({"error": "not found"}, 404)
+                return
+            if not self._origin_ok():
+                self._json({"error": "cross-origin request refused"}, 403)
                 return
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -295,10 +354,12 @@ def serve_server(
         log.warn(f"Port {requested_port} was busy; serving dashboard on {actual_port}.")
     url = dashboard_url(host, actual_port)
     log.header("Archon Horizon Dashboard")
+    service = getattr(server, "_horizon_service", None)
     rows = {
         "Mode": mode,
         "URL": url,
         "Workspace": str(root),
+        **dashboard_policy_rows(service),
     }
     if host in ("0.0.0.0", "::"):
         rows["Bind"] = f"{host}:{actual_port}"
@@ -314,7 +375,6 @@ def serve_server(
             "may fail; rerun with `horizon dashboard --public --port "
             f"{actual_port}` if the dashboard does not open."
         )
-    service = getattr(server, "_horizon_service", None)
     if service is not None:
         # Build the search index ahead of the first query so search is snappy.
         threading.Thread(target=service.warm_search_index, daemon=True).start()

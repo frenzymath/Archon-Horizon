@@ -9,7 +9,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from archon_horizon.cli import main
+from archon_horizon.commands.shared import load_workspace
+from archon_horizon.config.loader import build_stores
 from archon_horizon.commands.run import RunCommand
 from archon_horizon.commands.interactive import (
     InteractiveLaunch,
@@ -17,6 +21,8 @@ from archon_horizon.commands.interactive import (
     run_interactive_captured,
 )
 from archon_horizon.server.service import WorkspaceService
+from archon_horizon.core.sessions import Focus, RunRecord
+from archon_horizon.core.tasks import HorizonTask
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 from archon_horizon.transcript.sink import JsonlTranscriptSink, read_transcript
 
@@ -57,6 +63,23 @@ def test_tailer_locates_and_parses_claude_session(tmp_path: Path) -> None:
     assert any(e.tool == "Bash" for e in sink.events)
 
 
+def test_tailer_start_stop_is_joinable(tmp_path: Path) -> None:
+    """The stop flag must not shadow ``threading.Thread._stop``.
+
+    ``Thread.join()`` calls the real ``_stop()`` internally, so naming the Event
+    ``_stop`` makes every ``stop()`` raise ``TypeError: 'Event' object is not
+    callable`` — i.e. interactive runs crash on shutdown, not just in tests.
+    """
+    cfg = tmp_path / "cfg"
+    (cfg / "projects" / "-home-x").mkdir(parents=True)
+    launch = InteractiveLaunch([], {"CLAUDE_CONFIG_DIR": str(cfg)}, "x", engine="claude", session_id="SID-JOIN")
+    tailer = _InteractiveTailer(launch, _ListSink())
+
+    tailer.start()
+    tailer.stop()  # must not raise
+    assert not tailer.is_alive()
+
+
 def test_tailer_is_partial_line_safe(tmp_path: Path) -> None:
     cfg = tmp_path / "cfg"
     proj = cfg / "projects" / "p"
@@ -76,6 +99,64 @@ def test_tailer_is_partial_line_safe(tmp_path: Path) -> None:
         handle.write("\n")  # complete the line
     tailer._drain()
     assert any(e.kind is TranscriptKind.TEXT and e.text == "partial" for e in sink.events)
+
+
+def test_claude_tailer_surfaces_live_workflow_progress(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg"
+    proj = cfg / "projects" / "p"
+    proj.mkdir(parents=True)
+    session = proj / "SID-WORKFLOW.jsonl"
+    session.write_text(json.dumps({
+        "type": "user",
+        "timestamp": "2026-07-27T02:11:01Z",
+        "message": {"content": []},
+        "toolUseResult": {
+            "status": "async_launched", "taskId": "task-1",
+            "taskType": "local_workflow", "workflowName": "state-audit",
+            "runId": "wf_123", "summary": "Audit the current state",
+            "transcriptDir": str(proj / "SID-WORKFLOW" / "subagents" / "workflows" / "wf_123"),
+        },
+    }) + "\n", "utf-8")
+    workflow = proj / "SID-WORKFLOW" / "subagents" / "workflows" / "wf_123"
+    workflow.mkdir(parents=True)
+    journal = workflow / "journal.jsonl"
+    journal.write_text("\n".join([
+        json.dumps({"type": "started", "agentId": "a1", "key": "k1"}),
+        json.dumps({"type": "started", "agentId": "a2", "key": "k2"}),
+        json.dumps({"type": "result", "agentId": "a1", "key": "k1", "result": {}}),
+    ]) + "\n", "utf-8")
+    (workflow / "agent-a1.jsonl").write_text(json.dumps({
+        "type": "assistant", "timestamp": "2026-07-27T02:11:02Z",
+        "message": {"usage": {
+            "input_tokens": 3, "cache_creation_input_tokens": 7,
+            "cache_read_input_tokens": 90, "output_tokens": 5,
+        }},
+    }) + "\n", "utf-8")
+
+    launch = InteractiveLaunch(
+        [], {"CLAUDE_CONFIG_DIR": str(cfg)}, "x",
+        engine="claude", session_id="SID-WORKFLOW",
+    )
+    sink = _ListSink()
+    tailer = _InteractiveTailer(launch, sink)
+    tailer._file = session
+    tailer._drain()
+
+    progress = [event for event in sink.events if event.kind is TranscriptKind.WORKFLOW_PROGRESS]
+    assert progress[-1].data["name"] == "state-audit"
+    assert progress[-1].data["completed_agents"] == 1
+    assert progress[-1].data["total_agents"] == 2
+    assert progress[-1].data["subagent_tokens"] == 105
+    assert progress[-1].data["status"] == "running"
+
+    with journal.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "result", "agentId": "a2", "key": "k2", "result": {},
+        }) + "\n")
+    tailer._drain()
+    progress = [event for event in sink.events if event.kind is TranscriptKind.WORKFLOW_PROGRESS]
+    assert progress[-1].data["completed_agents"] == 2
+    assert progress[-1].data["status"] == "completed"
 
 
 def test_codex_tailer_detects_new_rollout(tmp_path: Path) -> None:
@@ -224,6 +305,7 @@ def test_interactive_run_tags_and_integrates_agent_commits(
         assert actual.env["ARCHON_HORIZON_SESSION"] == "0001-horizon-interactive"
         assert actual.env["ARCHON_HORIZON_AGENT_ROLE"] == "horizon"
         assert actual.env["ARCHON_HORIZON_PROJECTS"] == "proj"
+        assert (workspace / ".archon-horizon" / "runs" / "0001" / "process.json").exists()
         lean = workspace / "projects" / "proj" / "Demo.lean"
         lean.write_text("theorem demo : True := by trivial\n", "utf-8")
         subprocess.run(
@@ -250,6 +332,7 @@ def test_interactive_run_tags_and_integrates_agent_commits(
         backend="interactive",
         dashboard=False,
     ).run()
+    assert not (workspace / ".archon-horizon" / "runs" / "0001" / "process.json").exists()
 
     service = WorkspaceService(workspace)
     view = service.session_commits_view("0001", "0001-horizon-interactive")
@@ -265,3 +348,108 @@ def test_interactive_run_tags_and_integrates_agent_commits(
     integration = service._session_integrations("0001")["0001-horizon-interactive"]
     assert integration["projects"] == ["proj"]
     assert integration["workspace_commit"]
+
+
+@pytest.mark.parametrize(
+    ("store_old_session", "expected_captured", "fallback_reason"),
+    [
+        (False, ["SID-fresh"], "conversation-not-found"),
+        (True, ["SID-old", "SID-fresh"], "native-resume-rejected"),
+    ],
+)
+def test_interactive_resume_retries_fresh_in_same_run_with_prior_context(
+    tmp_path: Path,
+    monkeypatch,
+    store_old_session: bool,
+    expected_captured: list[str],
+    fallback_reason: str,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    main(["--root", str(workspace_root), "init", "--no-interactive"])
+    main([
+        "--root", str(workspace_root), "project", "add", "proj", "projects/proj",
+    ])
+    _, workspace = load_workspace(workspace_root)
+    stores = build_stores(workspace)
+    stores.tasks.put(HorizonTask(
+        id="T-1", project="proj", objective="continue prior work", title="Prior task",
+    ))
+    runlog = stores.run_logs.allocate()
+    stores.runs.put(RunRecord(
+        id=runlog.id,
+        focus=Focus(projects=("proj",), task="T-1", tasks=("T-1",)),
+        rounds_requested=2,
+    ))
+    previous = runlog.new_session("horizon-T-1")
+    previous.write_meta({
+        "role": "horizon",
+        "project": "proj",
+        "projects": ["proj"],
+        "task_id": "T-1",
+        "engine_session_id": "SID-old",
+        "status": "failed",
+    })
+
+    claude_config = tmp_path / "claude"
+    stored = claude_config / "projects" / "-workspace-projects-proj" / "SID-old.jsonl"
+    if store_old_session:
+        stored.parent.mkdir(parents=True)
+        stored.write_text(_claude_line(type="text", text="prior work") + "\n", "utf-8")
+
+    import archon_horizon.commands.interactive as interactive_module
+
+    launch_requests: list[str | None] = []
+
+    def fake_launch(*args, resume_session_id=None, **kwargs):
+        launch_requests.append(resume_session_id)
+        session_id = resume_session_id or "SID-fresh"
+        return InteractiveLaunch(
+            ["fake-engine"],
+            {
+                "CLAUDE_CONFIG_DIR": str(claude_config),
+                "PATH": os.environ.get("PATH", ""),
+                "GIT_AUTHOR_NAME": "interactive test",
+                "GIT_AUTHOR_EMAIL": "interactive@example.com",
+                "GIT_COMMITTER_NAME": "interactive test",
+                "GIT_COMMITTER_EMAIL": "interactive@example.com",
+            },
+            f"fake claude session {session_id}",
+            engine="claude",
+            session_id=session_id,
+        )
+
+    monkeypatch.setattr(interactive_module, "interactive_launch_for_role", fake_launch)
+    captured: list[tuple[InteractiveLaunch, Path, dict]] = []
+
+    def fake_captured(actual, cwd, **kwargs):
+        captured.append((actual, cwd, kwargs))
+        assert actual.env["ARCHON_HORIZON_RUN"] == "0001"
+        assert "$ARCHON_HORIZON_SESSION_DIR/.." in kwargs["seed_prompt"]
+        if actual.session_id == "SID-old":
+            return 1  # Claude rejected --resume without touching its stored session.
+        sink = JsonlTranscriptSink(kwargs["transcript_path"])
+        sink.emit(TranscriptEvent(TranscriptKind.TEXT, text="Fresh fallback is ready."))
+        return 0
+
+    monkeypatch.setattr(interactive_module, "run_interactive_captured", fake_captured)
+
+    RunCommand(
+        workspace_root,
+        resume="1",
+        bare=True,
+        dashboard=False,
+    ).run()
+
+    assert launch_requests == ["SID-old", None]
+    assert [item[0].session_id for item in captured] == expected_captured
+    assert all(item[1] == workspace_root / "projects" / "proj" for item in captured)
+    assert stores.run_logs.ids() == ["0001"]
+    sessions = stores.run_logs.get("0001").sessions()
+    assert [session.name for session in sessions] == [
+        "0001-horizon-T-1", "0002-horizon-interactive",
+    ]
+    meta = sessions[-1].read_meta()
+    assert meta["status"] == "ok"
+    assert meta["engine_session_id"] == "SID-fresh"
+    assert meta["resumed_engine_session_id"] == "SID-old"
+    assert meta["resume_fallback_reason"] == fallback_reason

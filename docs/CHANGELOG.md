@@ -9,11 +9,19 @@ minor releases; `horizon init --update` migrates a workspace's managed files.
 
 ## [Unreleased]
 
-v0.1.2 work-in-progress — the "lightweight harness, finished" release. Full
-rationale and measurements in
+## [0.1.2] — 2026-07
+
+The "lightweight harness, finished" release, extended with multi-team
+collaboration on a shared workspace. Full rationale and measurements in
 [`docs/design/v0.1.2-architecture-review.md`](./design/v0.1.2-architecture-review.md).
 
 ### Added
+
+- **Enforced freeze CLI** — `horizon freeze add/list/remove` maintains
+  config-backed agent/project/file/declaration/blueprint-node rules; semantic
+  `inbox protect` constraints remain clearly separate.
+- **Release version helper** — `scripts/version.py` updates and checks the Python
+  package, README badge, dashboard metadata, and demo workspace stamp together.
 
 - **`horizon usage`** — the agent-facing consumption gauge: this session's live
   token/cost burn (streamed by the harness into `<session>/usage.json`), run
@@ -40,8 +48,38 @@ rationale and measurements in
   self-orients without pushed prompt prose.
 - Dashboard: hgraph-style little-squares mini-map + segmented progress bars on
   the Blueprint table of contents; `/api/blueprints` split out of `/api/state`.
+- **Teams collaborating on one workspace** — each `horizon run` is a team;
+  parallel teams coordinate through shared state, not synchronous meetings.
+  Inbox items are now either shared (default) or **owned by one task** (a private
+  per-team inbox); **read-state is per-team** (`horizon inbox read`/`unread`,
+  `inbox list --mine/--unread/--task <id>`); and teams can **direct-message** one
+  another with `inbox add --to task:<id>` / `run:<id>`.
+- **Roadmap as a project board** — roadmap items carry `owner`, a `milestone`
+  label (grouping/filtering, no due dates), and pinned commits
+  (`horizon roadmap set/add --owner --milestone`, `set --pin-commit/--unpin-commit`,
+  `list --milestone/--owner`); `horizon task set --roadmap-ref/--inbox-ref` links a
+  task to its milestone/inbox. A milestone-grouped **`/board`** dashboard view and
+  **clickable local-reference chips** (roadmap/task/inbox/node/commit ids in any
+  rendered text) surface it in the UI; new `GET /api/commit?sha=` resolves a SHA.
+- **`horizon permissions`** + **`workspace.delegation`** (default deny) — the
+  standing consent an agent reads before launching work for *other* teams (new
+  tasks, or a whole new `horizon run`); spawning subagent workers *within* a team
+  needs no permission.
+- **Pre-command synchronizer** — inside a session, every `horizon` command first
+  prints a cached, stderr-only digest (unread inbox for the task, session
+  runtime/tokens, other live runs) so an agent stays aware without polling;
+  `ARCHON_HORIZON_NO_SYNC=1` disables it and it never touches `--json` stdout.
+- **Provenance-defaulted flags** — `--author`, `--project`, inbox owner/reader,
+  and task default from the session's `ARCHON_HORIZON_*` env, so an agent rarely
+  passes them.
 
 ### Changed
+
+- Agent startup names the horizon skill by absolute path, agent-authored state
+  and hgraph comments retain run/session/task provenance, inbox triage defaults
+  to open items, and the session contract requires inbox/roadmap maintenance.
+- Formalization notes now belong on hgraph nodes rather than in mathematical
+  blueprint `.tex` sources.
 
 - **The automated prompt is now a task directive + "load the `horizon` skill".**
   All pushed role prose/policy/workspace state is gone; the skill is the
@@ -56,6 +94,24 @@ rationale and measurements in
   stderr; an advertised "retry after Xs" stretches the retry backoff.
 - `horizon run` has one launch path (`--supervisor`, `horizon run horizon`, and
   focused runs all reduce to a focus + RunRecord).
+- **The ledger secret guard now redacts instead of blocking.** A high-confidence,
+  key-prefixed, case-sensitive credential match is replaced with `XXXX` in the
+  staged content (and re-staged) with a warning to rotate it — the commit is never
+  blocked, and the scan fails open so a guard bug can't wedge commits. Being
+  case-sensitive, long camelCase identifiers no longer false-match.
+  `ARCHON_HORIZON_ALLOW_SECRETS=1` skips it; the separate silent-clobber/deletion
+  guard is unchanged.
+- **hgraph Lean declaration extraction** now covers `structure`/`inductive`/`class`
+  (not just `theorem`/`lemma`/`def`/`abbrev`/`instance`), allows Unicode/subscript
+  declaration names, and honours the `_root_.` escape (`theorem _root_.Foo.bar`
+  resolves to `Foo.bar`), so more `\lean{}` references resolve instead of going stale.
+- **`[temporary]` inbox items auto-archive** at run finish once they have been
+  visible for a full run (consumed one-shot notes); items created during the run
+  are kept for the next one.
+- Concurrent `horizon inbox add` calls get **distinct ids** (flock-serialised id
+  allocation, fail-open). The UI's per-session commit log is **latest-first**, and
+  the automated session prompt leads with the **absolute** skill path so a
+  non-interactive engine never guesses a failing relative `.claude/skills/...` path.
 
 ### Removed
 

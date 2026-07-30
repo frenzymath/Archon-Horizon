@@ -38,7 +38,7 @@ function DepList({ items, empty, onGoTo }: { items: string[]; empty: string; onG
   );
 }
 
-function DualRange({ label, max, value, onChange, infiniteTop }: {
+function DualRange({ label, max, value, onChange }: {
   label: string; max: number; value: [number, number]; onChange: (v: [number, number]) => void;
 }) {
   const [lo, hi] = value;
@@ -278,7 +278,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
               <span className="leg-box" style={{ background: '#ffcc80', borderColor: '#2e7d32' }} /><span className="leg-txt">sorry</span>
               <span className="leg-box" style={{ background: '#ede9fe', borderColor: '#7c3aed' }} /><span className="leg-txt">chapter</span>
             </span>
-            <button className="dv-sync" type="button" onClick={syncBlueprint} disabled={STATIC || syncing} title={STATIC ? 'Blueprint sync needs the live dashboard.' : 'Refresh the published rich blueprint DAG cache.'}>
+            <button className="dv-sync" type="button" onClick={syncBlueprint} disabled={STATIC || syncing} title={STATIC ? 'Blueprint sync needs the live dashboard.' : 'Refresh the published hgraph JSON cache.'}>
               {syncing ? 'Syncing...' : 'Sync blueprint'}
             </button>
             {syncMessage && <span className={`dv-sync-msg ${syncMessage.startsWith('fetch') || syncMessage.includes('->') ? 'error' : ''}`}>{syncMessage}</span>}
