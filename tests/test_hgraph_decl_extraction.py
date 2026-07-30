@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
-from archon_horizon.hgraph.sync import parse_lean
+from archon_horizon.hgraph.sync import _tex_lean_status, parse_lean
+
+
+def test_tex_lean_status_requires_leanok_for_lean_ok() -> None:
+    # I-0410: a node whose \lean target compiles sorry-free but that carries no
+    # \leanok must NOT be reported lean_ok — it is `linked` (attached, compiles,
+    # not certified). lean_ok requires BOTH \leanok and a sorry-free resolution.
+    resolved = {"Demo.foo": "lean_ok"}
+    base = {"lean": ["Demo.foo"], "mathlibok": False}
+    assert _tex_lean_status({**base, "leanok": True}, resolved)[0] == "lean_ok"
+    assert _tex_lean_status({**base, "leanok": False}, resolved)[0] == "linked"
+    # A lying \leanok over a sorry stays `sorry`; a missing target stays `empty`.
+    assert _tex_lean_status({**base, "leanok": True}, {"Demo.foo": "sorry"})[0] == "sorry"
+    assert _tex_lean_status({**base, "leanok": True}, {})[0] == "empty"
+    # \mathlibok still wins outright.
+    assert _tex_lean_status({**base, "leanok": False, "mathlibok": True}, resolved)[0] == "mathlib_ok"
 
 
 def _by_name(src: str) -> dict[str, str]:
@@ -39,3 +54,57 @@ def test_anonymous_instance_has_no_decl() -> None:
     # `instance : C` has no name; it must not produce a bogus decl.
     names = _by_name("instance : Inhabited Nat := ⟨0⟩\n")
     assert names == {}
+
+
+def test_docstring_prose_does_not_become_a_ghost_declaration() -> None:
+    # A module/decl docstring whose prose begins with a Lean keyword must not be
+    # parsed as a declaration: `class can carry ...` used to invent `class can`
+    # (I-0613), and a backticked cross-reference used to invent a decl (I-0472).
+    src = (
+        "/-- We ask whether the\n"
+        "class can carry an effective witness with `h1 = 0`.\n"
+        "See `def exists_generic_rank_comparison` for the real statement. -/\n"
+        "theorem realThing : True := trivial\n"
+    )
+    names = _by_name(src)
+    assert names == {"realThing": "theorem"}
+    assert "can" not in names
+    assert "exists_generic_rank_comparison" not in names
+
+
+def test_block_comment_hides_commented_out_code() -> None:
+    # Commented-out declarations (block and line comments) are not real nodes.
+    src = (
+        "/- theorem oldProof : False := sorry -/\n"
+        "-- def scratchpadHelper : Nat := 0\n"
+        "def keeper : Nat := 1\n"
+    )
+    names = _by_name(src)
+    assert names == {"keeper": "def"}
+
+
+def test_nested_block_comments_are_balanced() -> None:
+    src = (
+        "/- outer /- inner class Nope -/ still commented def AlsoNope -/\n"
+        "theorem after : True := trivial\n"
+    )
+    names = _by_name(src)
+    assert names == {"after": "theorem"}
+
+
+def test_declaration_with_trailing_line_comment_still_parses() -> None:
+    names = _by_name("def kept : Nat := 0  -- theorem NotReal\n")
+    assert names == {"kept": "def"}
+    assert "NotReal" not in names
+
+
+def test_private_declarations_are_identified_for_coverage_filtering() -> None:
+    declarations = parse_lean(
+        "namespace Demo\n"
+        "private theorem helper : True := by trivial\n"
+        "theorem publicResult : True := by trivial\n"
+        "end Demo\n"
+    )
+    by_name = {declaration["fqname"]: declaration for declaration in declarations}
+    assert by_name["Demo.helper"]["private"] is True
+    assert by_name["Demo.publicResult"]["private"] is False

@@ -31,7 +31,7 @@ from pathlib import Path
 
 import yaml
 
-from .graph import Graph, node_id
+from .graph import Graph, HGraphError, node_id
 
 
 def load_config(root: str | Path) -> dict:
@@ -46,6 +46,10 @@ def load_config(root: str | Path) -> dict:
           subtitle: ...
           overview: overview.md
           repo: owner/name
+          accent: '#B4530B'          # this project's colour (or a full theme:);
+                                      # applies to its card + blueprint view
+          tabs:                      # extra content tabs on its blueprint view
+            - {id: people, label: People, content: people.md}
 
     Returns ``{"blueprint": <abs path or None>, "lean": [<abs path>, ...],
     "site": <the site: block, verbatim, or {}>}``.
@@ -83,22 +87,20 @@ _OPT_TITLE = r"\[((?:[^\[\]]|\[[^\[\]]*\])*)\]"
 LEAN_KINDS = {
     "theorem": "theorem", "lemma": "lemma", "def": "definition",
     "abbrev": "definition", "instance": "instance",
-    "structure": "structure", "inductive": "inductive", "class": "class",
+    "structure": "structure", "class": "class", "inductive": "inductive",
 }
 # when several edges land on one ordered pair, the strongest type wins
 # (the hard `uses` edge subsumes the soft `formalizes` one); higher rank wins.
 _EDGE_RANK = {"uses": 2, "formalizes": 1}
-# The declaration name is matched as "everything up to whitespace or a binder/
-# type delimiter", so Unicode letters, subscripts (foo₁), and primes (foo') are
-# captured — not just ASCII. An anonymous `instance : C` has no name (the next
-# token is `:`), so it correctly fails to match.
 _DECL_RE = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)?"                      # optional attribute
     r"(?:private\s+|protected\s+|noncomputable\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|inductive|class)\s+"
-    r"([^\s:(){}\[\],]+)"
+    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive)\s+"
+    # Lean identifiers may contain Unicode letters and symbols.  Stop at the
+    # punctuation that starts a declaration's binders/type/body instead of
+    # restricting the name to ASCII (e.g. `curvatureOperator_ιMulti`).
+    r"([^\s(:=]+)"
 )
-_ROOT_PREFIX = "_root_."
 
 
 # --------------------------------------------------------------------------- #
@@ -112,10 +114,44 @@ def _macro_args(macro: str, text: str) -> list[str]:
     return out
 
 
+# Display-math environments. Their contents are *not* prose: a `\label` inside
+# one belongs to an equation, and is what `\cref{eq:…}` resolves against, so it
+# must survive the strippers below (and must not be mistaken for a statement's
+# own label). Starred forms are unnumbered but hold labels just the same.
+DISPLAY_ENVS = ("equation", "align", "alignat", "flalign", "gather",
+                "multline", "eqnarray", "displaymath")
+_MATH_SPAN_RE = re.compile(
+    r"\\begin\{(" + "|".join(DISPLAY_ENVS) + r")(\*?)\}.*?\\end\{\1\2\}", re.DOTALL)
+
+
+def _outside_math(text: str, fn) -> str:
+    """Apply ``fn`` to every part of ``text`` that sits outside display math."""
+    out, pos = [], 0
+    for m in _MATH_SPAN_RE.finditer(text):
+        out.append(fn(text[pos:m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(fn(text[pos:]))
+    return "".join(out)
+
+
+_LABEL_RE = re.compile(r"\\label\{.*?\}", re.DOTALL)
+
+
+def _strip_labels(text: str) -> str:
+    """Drop the ``\\label``\\s that are anchors for *this* block, keeping the ones
+    inside display math — those name equations, which are numbered and
+    cross-referenced in their own right."""
+    return _outside_math(text, lambda t: _LABEL_RE.sub("", t))
+
+
 def _strip_macros(text: str) -> str:
-    # structural / provenance markers — captured into metadata, never body text
-    text = re.sub(r"\\(label|lean|uses|proves|group|level|dcref|source)\{.*?\}", "", text, flags=re.DOTALL)
-    text = re.sub(r"\\(leanok|notready|mathlibok)\b", "", text)
+    # structural / provenance markers — captured into metadata, never body text.
+    # `\group{…}` is retired: it carries no meaning any more, but it is still
+    # swallowed here so a blueprint that hasn't dropped it yet shows no junk.
+    text = _strip_labels(text)
+    text = re.sub(r"\\(lean|uses|proves|group|level|dcref|source)\{.*?\}", "", text, flags=re.DOTALL)
+    text = re.sub(r"\\(leanok|notready|mathlibok|sketch)\b", "", text)
     return text.strip()
 
 
@@ -142,19 +178,8 @@ def parse_blueprint(text: str) -> tuple[list[dict], list[dict]]:
     environment with a ``\\label``; a *proof* carries proof-side ``\\uses``."""
     # chapter headings, to attribute each statement to its chapter. Balanced-
     # brace scan so titles with nested braces (\texttt{…}, {\v C}) aren't cut off.
-    def _brace_body(i: int) -> str:
-        depth = 0
-        for k in range(i, len(text)):
-            if text[k] == "{":
-                depth += 1
-            elif text[k] == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[i + 1:k]
-        return text[i + 1:]
-
-    headings = [(mh.start(), re.sub(r"\s+", " ", _brace_body(mh.end() - 1)).strip())
-                for mh in re.finditer(r"\\chapter\*?\s*\{", text)]
+    headings = [(mh.start(), re.sub(r"\s+", " ", _brace_span(text, mh.end() - 1)[0]).strip())
+                for mh in _HEAD_RE.finditer(text) if mh.group(1) == "chapter"]
 
     def chapter_at(pos: int) -> str | None:
         prev = [h for h in headings if h[0] < pos]
@@ -183,6 +208,7 @@ def parse_blueprint(text: str) -> tuple[list[dict], list[dict]]:
             "uses": _macro_args("uses", inner),     # proof deps → uses
             "leanok": bool(re.search(r"\\leanok\b", inner)),
             "mathlibok": bool(re.search(r"\\mathlibok\b", inner)),
+            "sketch": bool(re.search(r"\\sketch\b", inner)),
         })
     return statements, proofs
 
@@ -212,13 +238,14 @@ def _brace_span(text: str, i: int) -> tuple[str, int]:
 
 def _first_arg(macro: str, text: str) -> str | None:
     """The raw (un-split) argument of the first ``\\macro{…}`` — for markers whose
-    argument is a single value that may contain commas (``\\group{Comparison, …}``)."""
+    argument is a single value that may contain commas (``\\source{Lee, p. 42}``)."""
     m = re.search(r"\\" + macro + r"\{(.*?)\}", text, re.DOTALL)
     return m.group(1).strip() if m else None
 
 
 def _statement_fields(env: str, title, inner: str) -> dict:
-    labels = _macro_args("label", inner)
+    # a \label inside display math names an equation, not the statement
+    labels = _macro_args("label", _MATH_SPAN_RE.sub("", inner))
     body = _strip_macros(inner)
     title, body = _lift_title(title, body)
     return {
@@ -233,7 +260,12 @@ def _statement_fields(env: str, title, inner: str) -> dict:
         "uses": _macro_args("uses", inner),
         "leanok": bool(re.search(r"\\leanok\b", inner)),
         "mathlibok": bool(re.search(r"\\mathlibok\b", inner)),
-        "group": _first_arg("group", inner),     # \group{…} → semantic-cluster field
+        # Standalone hgraph retired groups, but Horizon still renders this axis.
+        "group": _first_arg("group", inner),
+        # \sketch → the argument is deliberately incomplete (a proof sketch, an
+        # omitted routine verification). Not a status to be fixed by syncing —
+        # an author's statement about the maths, surfaced to the reader as-is.
+        "sketch": bool(re.search(r"\\sketch\b", inner)),
         "level": _first_arg("level", inner),      # \level{coarse|medium|fine} → granularity
         # Source-book provenance. `\dcref{…}` is the original spelling;
         # `\source{slug:page-0001}` is what downstream blueprints are authored
@@ -247,6 +279,74 @@ def _statement_fields(env: str, title, inner: str) -> dict:
 
 
 _HEAD = {"chapter": 1, "section": 2, "subsection": 3, "subsubsection": 4, "paragraph": 5}
+# A sectioning command, with LaTeX's two modifiers: the ``*`` form (unnumbered)
+# and the optional short title (``\chapter[Short]{The long one}``) — which used
+# to make the heading unrecognisable, so the whole chapter leaked into prose.
+_HEAD_RE = re.compile(
+    r"\\(" + "|".join(_HEAD) + r")(\*?)\s*(?:\[(?:[^\[\]]|\[[^\[\]]*\])*\]\s*)?\{")
+
+# Preamble-only commands: definitions and layout switches that are never part of
+# the document's text. A blueprint whose entry file \input{macros} (rather than
+# wrapping its body in \begin{document}) otherwise dumps the whole macro file
+# into the first chapter as prose. The macros themselves are collected
+# separately for KaTeX — see hgraph.dashboard.discover_macros.
+_PREAMBLE_CMDS = (
+    "newcommand", "renewcommand", "providecommand", "DeclareMathOperator",
+    "def", "newtheorem", "theoremstyle", "declaretheorem", "usepackage",
+    "documentclass", "newenvironment", "renewenvironment", "setlength",
+    "newlength", "definecolor", "bibliographystyle", "title", "author", "date",
+)
+_PREAMBLE_RE = re.compile(r"\\(" + "|".join(_PREAMBLE_CMDS) + r")(?![A-Za-z])")
+# standalone switches — no arguments to consume
+_SWITCH_RE = re.compile(
+    r"\\(maketitle|tableofcontents|newpage|clearpage|printbibliography"
+    r"|frontmatter|mainmatter|backmatter)\b")
+
+
+def _skip_ws(text: str, i: int) -> int:
+    while i < len(text) and text[i] in " \t\r\n":
+        i += 1
+    return i
+
+
+def _strip_definitions(chunk: str) -> str:
+    """Drop every ``\\newcommand``-like definition, arguments and all.
+
+    The arguments have to be *scanned* rather than matched: a macro body is
+    brace-balanced and routinely spans lines, so a regex either stops at the
+    first ``}`` (leaking the tail as prose — the ``\\newcommand[1]S^#1`` garbage)
+    or runs away. At most four argument tokens are consumed, which is what the
+    longest of these commands takes (``\\newtheorem{env}[shared]{Title}[section]``).
+    """
+    out, pos = [], 0
+    for m in _PREAMBLE_RE.finditer(chunk):
+        if m.start() < pos:
+            continue
+        i = _skip_ws(chunk, m.end())
+        if i < len(chunk) and chunk[i] == "*":       # \DeclareMathOperator*
+            i = _skip_ws(chunk, i + 1)
+        for n in range(4):
+            if i < len(chunk) and chunk[i] == "{":
+                _, i = _brace_span(chunk, i)
+            elif i < len(chunk) and chunk[i] == "[":
+                j = chunk.find("]", i)
+                if j < 0:
+                    break
+                i = j + 1
+            elif n == 0 and i < len(chunk) and chunk[i] == "\\":
+                # the unbraced spelling, \newcommand\R{\mathbb R} — only ever the
+                # first token, so a following ordinary macro is never swallowed
+                k = i + 1
+                while k < len(chunk) and chunk[k].isalpha():
+                    k += 1
+                i = max(k, i + 2)
+            else:
+                break
+            i = _skip_ws(chunk, i)
+        out.append(chunk[pos:m.start()])
+        pos = i
+    out.append(chunk[pos:])
+    return _SWITCH_RE.sub("", "".join(out))
 
 
 def parse_document(text: str) -> list[dict]:
@@ -260,10 +360,21 @@ def parse_document(text: str) -> list[dict]:
     env_alt = "|".join(map(re.escape, THM_ENVS))
 
     markers = []
-    for m in re.finditer(r"\\(chapter|section|subsection|subsubsection|paragraph)\*?\s*\{", text):
+    for m in _HEAD_RE.finditer(text):
         content, end = _brace_span(text, m.end() - 1)
+        # a heading's \label(s) follow it, so `\cref{sec:…}`/`\cref{chap:…}`
+        # can resolve to this heading's number
+        labels: list[str] = []
+        while True:
+            lm = re.match(r"\s*\\label\{([^}]*)\}", text[end:])
+            if not lm:
+                break
+            labels.append(lm.group(1).strip())
+            end += lm.end()
         markers.append((m.start(), end, "head", _HEAD[m.group(1)],
-                        re.sub(r"\s+", " ", content).strip()))
+                        (re.sub(r"\s+", " ", content).strip(), bool(m.group(2)), labels)))
+    for m in re.finditer(r"\\appendix\b", text):
+        markers.append((m.start(), m.end(), "appendix", None, None))
     for m in re.finditer(r"\\begin\{(" + env_alt + r")\}(?:" + _OPT_TITLE + r")?(.*?)\\end\{\1\}", text, re.DOTALL):
         markers.append((m.start(), m.end(), "stmt", m.group(1), (m.group(2), m.group(3))))
     for m in re.finditer(r"\\begin\{proof\}(.*?)\\end\{proof\}", text, re.DOTALL):
@@ -271,12 +382,16 @@ def parse_document(text: str) -> list[dict]:
     markers.sort(key=lambda x: x[0])
 
     chapters: list[dict] = []
+    # anything before the first \chapter — a real introduction, or (when the
+    # blueprint has no \begin{document}) just the preamble, in which case
+    # _strip_definitions empties it and no phantom chapter is emitted at all.
     cur = {"title": "Introduction", "blocks": []}
+    appendix = False
 
     def prose(a: int, b: int):
         chunk = re.sub(r"(?<!\\)%.*", "", text[a:b])           # drop LaTeX line-comments
-        chunk = re.sub(r"\\label\{[^}]*\}", "", chunk)         # anchors, not content
-        chunk = re.sub(r"\\(maketitle|tableofcontents|newpage|clearpage)\b", "", chunk).strip()
+        chunk = _strip_labels(chunk)          # anchors, not content (equations keep theirs)
+        chunk = _strip_definitions(chunk).strip()
         if chunk:
             cur["blocks"].append({"t": "prose", "tex": chunk})
 
@@ -285,18 +400,32 @@ def parse_document(text: str) -> list[dict]:
         if s < pos:                     # inside an already-consumed span
             continue
         prose(pos, s)
-        if kind == "head" and meta == 1:
+        if kind == "appendix":
+            appendix = True             # applies from the next \chapter on
+        elif kind == "head" and meta == 1:
             if cur["blocks"]:
                 chapters.append(cur)
-            cur = {"title": data, "blocks": []}
+            title, starred, labels = data
+            cur = {"title": title, "blocks": []}
+            if starred:
+                cur["starred"] = True
+            if appendix:
+                cur["appendix"] = True
+            if labels:
+                cur["labels"] = labels
         elif kind == "head":
-            cur["blocks"].append({"t": "head", "level": meta, "title": data})
+            title, starred, labels = data
+            cur["blocks"].append({"t": "head", "level": meta, "title": title,
+                                  **({"starred": True} if starred else {}),
+                                  **({"labels": labels} if labels else {})})
         elif kind == "stmt":
             env, (opt, inner) = meta, data
             cur["blocks"].append({"t": "stmt", **_statement_fields(env, opt, inner)})
         elif kind == "proof":
-            cur["blocks"].append({"t": "proof", "tex": _strip_macros(
-                re.sub(r"(?<!\\)%.*", "", data)).strip()})
+            cur["blocks"].append({"t": "proof",
+                                  **({"sketch": True} if re.search(r"\\sketch\b", data) else {}),
+                                  "tex": _strip_macros(
+                                      re.sub(r"(?<!\\)%.*", "", data)).strip()})
         pos = e
     prose(pos, len(text))
     if cur["blocks"]:
@@ -304,12 +433,13 @@ def parse_document(text: str) -> list[dict]:
     return chapters
 
 
-def _assoc_proofs(statements: list[dict], proofs: list[dict]) -> dict[str, set[str]]:
+def _assoc_proofs(statements: list[dict], proofs: list[dict],
+                  warnings: list[str] | None = None) -> dict[str, set[str]]:
     """Map each statement label → the set of labels its proof ``\\uses``, folding
-    each proof's ``\\leanok`` / ``\\mathlibok`` back into its statement. A proof
-    with ``\\proves{lbl}`` binds to that label — any of the statement's labels,
-    canonical or legacy alias, resolved to the canonical one — otherwise to the
-    nearest preceding statement."""
+    each proof's ``\\leanok`` / ``\\mathlibok`` / ``\\sketch`` back into its
+    statement. A proof with ``\\proves{lbl}`` binds to that label — any of the
+    statement's labels, canonical or legacy alias, resolved to the canonical one
+    — otherwise to the nearest preceding statement."""
     by_label = {s["label"]: s for s in statements}
     # \proves{} may name a legacy alias (a statement's 2nd+ \label); fold it
     # to the canonical label or the proof's uses/leanok silently vanish
@@ -320,49 +450,170 @@ def _assoc_proofs(statements: list[dict], proofs: list[dict]) -> dict[str, set[s
         if label is None:
             preceding = [s for s in statements if s["pos"] < pr["pos"]]
             if not preceding:
+                if warnings is not None and (pr["uses"] or pr["leanok"]
+                                             or pr["mathlibok"] or pr["sketch"]):
+                    warnings.append(
+                        f"proof at byte {pr['pos']}: has no preceding statement "
+                        r"and no \proves{...}; proof metadata ignored")
                 continue
             label = max(preceding, key=lambda s: s["pos"])["label"]
         else:
+            raw_label = label
             label = canonical.get(label, label)
+            if label not in by_label and warnings is not None:
+                warnings.append(
+                    f"proof at byte {pr['pos']}: \\proves{{{raw_label}}} has no blueprint node")
         proof_uses.setdefault(label, set()).update(pr["uses"])
         if label in by_label:
             by_label[label]["leanok"] |= pr["leanok"]
             by_label[label]["mathlibok"] |= pr["mathlibok"]
+            by_label[label]["sketch"] |= pr["sketch"]
     return proof_uses
 
 
 def _tex_lean_status(s: dict, lean_status: dict[str, str]) -> tuple[str, list[str]]:
-    """A blueprint item's formalization state, derived from the *actual* Lean —
-    an author's ``\\leanok`` is not trusted on its own.
+    """A blueprint item's formalization state, from BOTH the author's assertion
+    and the *actual* Lean — neither is trusted on its own.
 
     ``\\mathlibok`` → ``mathlib_ok`` (its ``\\lean`` targets live in Mathlib, which
-    we don't scan, so this stays an asserted link). Otherwise the state is
-    ground-truth: ``lean_ok`` only when the item has ``\\lean`` targets and *every*
-    one resolves to a real, ``sorry``-free declaration in the scanned sources;
-    ``sorry`` when some Lean exists but is incomplete or a target is missing; and
-    ``empty`` when no target resolves — a forward reference to Lean not yet written."""
+    we don't scan, so this stays an asserted link). Otherwise:
+
+    * ``lean_ok`` requires the author's ``\\leanok`` **and** every ``\\lean`` target
+      resolving to a real, ``sorry``-free declaration in the scanned sources. The
+      ``\\leanok`` is required, not merely trusted: a node whose Lean happens to
+      compile but whose author deliberately withheld ``\\leanok`` (because a
+      review found it incomplete) must not be reported done (I-0410). The Lean
+      scan still guards against a lying ``\\leanok`` sitting over a ``sorry``.
+    * ``linked`` — every target resolves ``sorry``-free but the item carries no
+      ``\\leanok``: the Lean is attached and compiles, but the blueprint has not
+      certified it complete. A distinct, honest state between "done" and "has a
+      sorry", counted as *not done* everywhere ``lean_ok``/``mathlib_ok`` are.
+    * ``sorry`` when some Lean exists but is incomplete or a target is missing.
+    * ``empty`` when no target resolves — a forward reference to Lean not yet
+      written."""
     if s["mathlibok"]:
         return "mathlib_ok", list(s["lean"])
     targets = s["lean"]
     resolved = [lean_status[n] for n in targets if n in lean_status]
-    if targets and len(resolved) == len(targets) and "sorry" not in resolved:
+    all_sorry_free = bool(targets) and len(resolved) == len(targets) and "sorry" not in resolved
+    if all_sorry_free and s["leanok"]:
         return "lean_ok", []
+    if all_sorry_free:                 # compiles, but the author has not asserted \leanok
+        return "linked", []
     if resolved:                       # some Lean exists, but incomplete or partial
         return "sorry", []
     return "empty", []                 # nothing resolves — Lean not written yet
 
 
+def _unlabeled_statement_warnings(text: str) -> list[str]:
+    """Warn when annotations sit on a theorem-like environment that cannot
+    become a graph node because it has no statement label."""
+    env_alt = "|".join(map(re.escape, THM_ENVS))
+    warnings: list[str] = []
+    for m in re.finditer(
+        r"\\begin\{(" + env_alt + r")\}(?:" + _OPT_TITLE + r")?(.*?)\\end\{\1\}",
+        text, re.DOTALL,
+    ):
+        env, inner = m.group(1), m.group(3)
+        annotated = (_macro_args("lean", inner) or _macro_args("uses", inner)
+                     or re.search(r"\\(leanok|mathlibok|sketch)\b", inner))
+        if annotated and not _macro_args("label", _MATH_SPAN_RE.sub("", inner)):
+            warnings.append(
+                f"{env} at byte {m.start()}: unlabeled blueprint statement "
+                "is not imported as a graph node")
+    return warnings
+
+
+def _label_warnings(statements: list[dict]) -> list[str]:
+    warnings: list[str] = []
+    owner: dict[str, str] = {}
+    for s in statements:
+        seen_here: set[str] = set()
+        for label in s["labels"]:
+            if label in seen_here:
+                warnings.append(f"{s['label']}: duplicate \\label{{{label}}} on the same statement")
+            elif label in owner and owner[label] != s["label"]:
+                warnings.append(
+                    f"{label}: blueprint label is used by more than one statement "
+                    f"({owner[label]}, {s['label']})")
+            else:
+                owner[label] = s["label"]
+            seen_here.add(label)
+    return warnings
+
+
+def _status_warnings(s: dict, lean_status: dict[str, str]) -> list[str]:
+    warnings: list[str] = []
+    if s["leanok"] and not s["lean"] and not s["mathlibok"]:
+        warnings.append(f"{s['label']}: \\leanok present but no \\lean{{...}} target is attached")
+    if s["mathlibok"] and not s["lean"]:
+        warnings.append(f"{s['label']}: \\mathlibok present but no \\lean{{...}} target is attached")
+    if s["mathlibok"]:
+        for name in s["lean"]:
+            if name in lean_status:
+                warnings.append(
+                    f"{s['label']}: \\mathlibok marks \\lean{{{name}}} as external, "
+                    "but that declaration exists in scanned Lean sources")
+    return warnings
+
+
 # --------------------------------------------------------------------------- #
 # Lean parsing
 # --------------------------------------------------------------------------- #
+def _lean_code_lines(lines: list[str]) -> list[str]:
+    """Return a parallel list of ``lines`` with every comment span blanked to
+    spaces, preserving length and column positions.
+
+    Lean's grammar for keywords is context-free of comments, but the graph
+    scanner works line-by-line, so a docstring or ``/- … -/`` block whose prose
+    happens to begin with ``class``/``def``/``theorem`` used to be parsed as a
+    real declaration — inventing ghost nodes like ``class can`` from a sentence
+    ``…whether the class can carry a witness…`` (I-0472, I-0613). Blanking
+    comments first means only genuine code is scanned for ``namespace``/``end``
+    and declarations, while the original lines are still used for the body and
+    the ``/-- … -/`` docstring capture. Handles nested ``/- … -/``, doc
+    comments (``/-- … -/`` opens the same nesting), and ``--`` line comments;
+    string literals are not special-cased (they were not before either)."""
+    out: list[str] = []
+    depth = 0  # block-comment nesting depth carried across lines
+    for line in lines:
+        chars = list(line)
+        i, n = 0, len(line)
+        while i < n:
+            pair = line[i:i + 2]
+            if depth == 0 and pair == "--":
+                for k in range(i, n):     # line comment: blank to end of line
+                    chars[k] = " "
+                break
+            if pair == "/-":
+                depth += 1
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                continue
+            if pair == "-/" and depth > 0:
+                depth -= 1
+                chars[i] = chars[i + 1] = " "
+                i += 2
+                continue
+            if depth > 0:
+                chars[i] = " "
+            i += 1
+        out.append("".join(chars))
+    return out
+
+
 def parse_lean(text: str) -> list[dict]:
     """Extract declarations from Lean source. Tracks ``namespace``/``end`` to
     build the fully-qualified name; captures a preceding ``/-- … -/`` doc
     comment as part of the body; flags a ``sorry``."""
     lines = text.splitlines()
+    # Scan structure and declarations on comment-blanked lines so prose inside a
+    # docstring/comment can never masquerade as a declaration; body and doc
+    # capture below still read the original `lines`.
+    code_lines = _lean_code_lines(lines)
     ns: list[str] = []
-    decls: list[tuple[int, str, str]] = []   # (line index, fqname, kind)
-    for i, line in enumerate(lines):
+    decls: list[tuple[int, str, str, bool]] = []   # (line index, fqname, kind, private)
+    for i, line in enumerate(code_lines):
         s = line.strip()
         m_ns = re.match(r"namespace\s+([A-Za-z0-9_.]+)", s)
         if m_ns:
@@ -375,18 +626,17 @@ def parse_lean(text: str) -> list[dict]:
         m = _DECL_RE.match(line)
         if m:
             kind, name = m.group(1), m.group(2)
-            # `_root_.foo` escapes the enclosing namespace: the name is absolute,
-            # so drop the prefix AND ignore the namespace stack (otherwise it
-            # would resolve to `Ns._root_.foo` and never match `\lean{foo}`).
-            if name.startswith(_ROOT_PREFIX):
-                fq = name[len(_ROOT_PREFIX):]
-            else:
-                fq = ".".join(ns + [name])
-            decls.append((i, fq, kind))
+            is_private = bool(re.search(r"\bprivate\s+", line[:m.start(1)]))
+            # `_root_.Foo` is explicitly outside the surrounding namespace;
+            # retaining the marker would create a name that Lean cannot refer
+            # to (`MorganTianLib._root_.Foo`).
+            fqname = name.removeprefix("_root_.") if name.startswith("_root_.") \
+                else ".".join(ns + [name])
+            decls.append((i, fqname, kind, is_private))
 
     # for each decl, find the top of a /-- … -/ doc comment sitting above it
     tops: list[int] = []
-    for i, _fq, _kind in decls:
+    for i, _fq, _kind, _private in decls:
         top, j = i, i - 1
         while j >= 0 and lines[j].strip() == "":
             j -= 1
@@ -398,7 +648,7 @@ def parse_lean(text: str) -> list[dict]:
         tops.append(top)
 
     out: list[dict] = []
-    for k, (i, fq, kind) in enumerate(decls):
+    for k, (i, fq, kind, is_private) in enumerate(decls):
         # a decl's code stops where the NEXT decl's doc comment begins, so an
         # adjacent decl's doc doesn't leak into this one's body.
         end = tops[k + 1] if k + 1 < len(decls) else len(lines)
@@ -419,6 +669,7 @@ def parse_lean(text: str) -> list[dict]:
             "body": body,
             "doc": doc,
             "sorry": bool(re.search(r"\bsorry\b", body)),
+            "private": is_private,
         })
     return out
 
@@ -455,24 +706,53 @@ def _read_and_parse_lean(args: tuple[Path, Path]) -> tuple[str, list[dict]]:
 # the reconcile driver
 # --------------------------------------------------------------------------- #
 def _upsert(g: Graph, nid: str, *, title: str, type: str, content: str,
-            owned: dict) -> None:
+            owned: dict, dry_run: bool = False) -> bool:
     """Create the node, or overwrite exactly the owned fields — leaving every
     authored field (origin, tags, status, …) in place, clearing ``stale``, and
-    unsetting any owned field that is now empty (e.g. a doc comment removed)."""
+    unsetting any owned field that is now empty (e.g. a doc comment removed).
+
+    Return whether the graph differs from the requested state.  ``dry_run``
+    performs the same comparison without writing, which lets ``serve`` detect
+    pending sync work using the reconciliation rules themselves.
+    """
     clean = {k: v for k, v in owned.items() if v is not None}
     empty = [k for k, v in owned.items() if v is None]
     if g.has_node(nid):
-        g.modify_node(nid, title=title, type=type, content=content,
-                      set_meta=clean, unset=["stale", *empty])
+        n = g.get_node(nid)
+        changed = n.title != title or n.type != type or n.content != content
+        changed |= any(n.meta.get(k) != v for k, v in clean.items())
+        changed |= any(k in n.meta for k in ("stale", *empty))
+        if changed and not dry_run:
+            g.modify_node(nid, title=title, type=type, content=content,
+                          set_meta=clean, unset=["stale", *empty])
     else:
-        g.add_node(title, type=type, id=nid, content=content, **clean)
+        changed = True
+        if not dry_run:
+            g.add_node(title, type=type, id=nid, content=content, **clean)
+    return changed
 
 
 def sync(g: Graph, *, blueprint: str | None = None, lean_paths=(),
-         root: str | Path = ".") -> dict:
+         root: str | Path = ".", dry_run: bool = False) -> dict:
+    """Reconcile configured sources into ``g``.
+
+    With ``dry_run=True`` all sources are parsed and the exact pending changes
+    are counted, but the graph is left untouched.  The returned ``changes``
+    count is zero precisely when a real sync would be a no-op.
+    """
     warnings: list[str] = []
     seen = {"blueprint": set(), "lean": set()}
     root_abs = Path(root).resolve()
+    lean_paths = tuple(lean_paths)
+
+    if blueprint and not Path(blueprint).is_file():
+        raise HGraphError(f"blueprint source not found: {blueprint}")
+    missing_lean = [str(p) for p in lean_paths if not Path(p).exists()]
+    if missing_lean:
+        raise HGraphError("Lean source path(s) not found: " + ", ".join(missing_lean))
+
+    node_changes = 0
+    edge_changes = 0
 
     # 1. Lean nodes (keyed by fully-qualified name) ------------------------- #
     # reading + regex-parsing each file is independent of every other file,
@@ -488,44 +768,65 @@ def sync(g: Graph, *, blueprint: str | None = None, lean_paths=(),
 
     lean_id: dict[str, str] = {}
     lean_status: dict[str, str] = {}          # fqname → lean_ok | sorry
+    lean_seen_at: dict[str, str] = {}
+    lean_private: dict[str, bool] = {}
     for rel, decls in parsed:
         for d in decls:
+            if d["fqname"] in lean_seen_at:
+                warnings.append(
+                    f"{d['fqname']}: Lean declaration appears more than once "
+                    f"({lean_seen_at[d['fqname']]}, {rel})")
+            else:
+                lean_seen_at[d["fqname"]] = rel
             nid = node_id("lean", d["fqname"])
             lean_id[d["fqname"]] = nid
             lean_status[d["fqname"]] = "sorry" if d["sorry"] else "lean_ok"
-            _upsert(g, nid, title=d["fqname"], type="lean", content=d["body"],
-                    owned={"content_type": LEAN_KINDS.get(d["kind"], d["kind"]),
-                           "generated": "lean", "author": "sync", "decl": d["fqname"],
-                           "lean_status": lean_status[d["fqname"]],
-                           "file": rel, "docstring": d["doc"] or None})
+            lean_private[d["fqname"]] = bool(d.get("private"))
+            node_changes += _upsert(
+                g, nid, title=d["fqname"], type="lean", content=d["body"],
+                owned={"content_type": LEAN_KINDS.get(d["kind"], d["kind"]),
+                       "generated": "lean", "author": "sync", "decl": d["fqname"],
+                       "lean_status": lean_status[d["fqname"]],
+                       "file": rel, "docstring": d["doc"] or None,
+                       "private": True if d.get("private") else None},
+                dry_run=dry_run)
             seen["lean"].add(nid)
 
     # 2. Blueprint nodes (keyed by \label) ---------------------------------- #
     gen_edges: list[tuple[str, str, str]] = []
     if blueprint:
-        statements, proofs = parse_blueprint(read_blueprint(blueprint))
-        proof_uses = _assoc_proofs(statements, proofs)
+        blueprint_text = read_blueprint(blueprint)
+        warnings.extend(_unlabeled_statement_warnings(blueprint_text))
+        statements, proofs = parse_blueprint(blueprint_text)
+        warnings.extend(_label_warnings(statements))
+        proof_uses = _assoc_proofs(statements, proofs, warnings)
         # every \label on a statement (canonical + any legacy aliases) resolves
         # to the same node id, so \uses{}/\lean{} can target either one
         bp_id = {lbl: node_id("bp", s["label"]) for s in statements for lbl in s["labels"]}
 
         for i, s in enumerate(statements):
             status, mathlib_names = _tex_lean_status(s, lean_status)
-            _upsert(g, bp_id[s["label"]], title=s["title"], type="tex",
-                    content=s["body"],
-                    owned={"content_type": s["content_type"],
-                           "generated": "blueprint", "author": "sync",
-                           "label": s["label"], "chapter": s["chapter"],
-                           "order": i, "lean_status": status,
-                           "mathlib_name": mathlib_names or None,
-                           "group": s.get("group") or None,
-                           "level": s.get("level") or None,
-                           "ref": s.get("ref") or None})
+            node_changes += _upsert(
+                g, bp_id[s["label"]], title=s["title"], type="tex",
+                content=s["body"],
+                owned={"content_type": s["content_type"],
+                       "generated": "blueprint", "author": "sync",
+                       "label": s["label"], "chapter": s["chapter"],
+                       "order": i, "lean_status": status,
+                       "mathlib_name": mathlib_names or None,
+                       # Retained by Horizon's graph UI even though standalone
+                       # hgraph no longer consumes this metadata field.
+                       "group": s.get("group") or None,
+                       "sketch": True if s.get("sketch") else None,
+                       "level": s.get("level") or None,
+                       "ref": s.get("ref") or None},
+                dry_run=dry_run)
             seen["blueprint"].add(bp_id[s["label"]])
 
         # edges — every endpoint is derivable, so no lookup table is needed
         for s in statements:
             src = bp_id[s["label"]]
+            warnings.extend(_status_warnings(s, lean_status))
             for name in s["lean"]:                          # \lean → formalizes
                 if name in lean_id:
                     gen_edges.append((src, lean_id[name], "formalizes"))
@@ -541,6 +842,12 @@ def sync(g: Graph, *, blueprint: str | None = None, lean_paths=(),
                     gen_edges.append((src, bp_id[ref], "uses"))
                 else:
                     warnings.append(f"{s['label']}: \\uses{{{ref}}} (proof) has no blueprint node")
+
+        referenced_lean = {name for s in statements for name in s["lean"] if name in lean_id}
+        for name in sorted(lean_id):
+            if not lean_private.get(name) and name not in referenced_lean:
+                warnings.append(
+                    f"{name}: Lean declaration is not referenced by any blueprint \\lean{{...}}")
 
     # 3. reconcile generated edges: one per ordered pair, collapsed to the
     #    strongest type, never overwriting an authored edge on that pair —
@@ -565,18 +872,24 @@ def sync(g: Graph, *, blueprint: str | None = None, lean_paths=(),
                 authored.add((e.source, e.target))
         for pair, e in existing.items():
             if pair not in pair_type:            # vanished from the sources
-                g.delete_edge(e.id)
+                edge_changes += 1
+                if not dry_run:
+                    g.delete_edge(e.id)
         for (s, t), ty in pair_type.items():
             if (s, t) in authored:
                 warnings.append(f"edge {s}→{t}: authored edge present, kept over generated {ty}")
                 continue
             old = existing.get((s, t))
             if old is None:
-                g.add_edge(s, t, ty, generated="blueprint")
+                edge_changes += 1
+                if not dry_run:
+                    g.add_edge(s, t, ty, generated="blueprint")
             elif old.type != ty:
                 # type changed — rewrite, carrying authored extras through
-                extra = {k: v for k, v in old.attrs.items() if k != "generated"}
-                g.add_edge(s, t, ty, replace=True, generated="blueprint", **extra)
+                edge_changes += 1
+                if not dry_run:
+                    extra = {k: v for k, v in old.attrs.items() if k != "generated"}
+                    g.add_edge(s, t, ty, replace=True, generated="blueprint", **extra)
             made += 1
 
     # 4. mark vanished generated nodes stale (never delete) — only within the
@@ -588,8 +901,79 @@ def sync(g: Graph, *, blueprint: str | None = None, lean_paths=(),
         synced = (gen == "blueprint" and bool(blueprint)) or \
                  (gen == "lean" and bool(lean_paths))
         if synced and n.id not in seen[gen] and not n.meta.get("stale"):
-            g.modify_node(n.id, set_meta={"stale": True})
+            if not dry_run:
+                g.modify_node(n.id, set_meta={"stale": True})
             stale += 1
 
     return {"blueprint": len(seen["blueprint"]), "lean": len(seen["lean"]),
-            "edges": made, "stale": stale, "warnings": warnings}
+            "edges": made, "stale": stale, "warnings": warnings,
+            "node_changes": node_changes, "edge_changes": edge_changes,
+            "changes": node_changes + edge_changes + stale}
+
+
+def sync_from_config(root: str | Path, *, dry_run: bool = False) -> dict:
+    """Sync one project using its ``hgraph/config.yaml`` source settings."""
+    cfg = load_config(root)
+    if not cfg["blueprint"] and not cfg["lean"]:
+        raise HGraphError(
+            f"no blueprint or Lean sources configured in {Path(root) / 'hgraph/config.yaml'}")
+    return sync(Graph.open(root), blueprint=cfg["blueprint"], lean_paths=cfg["lean"],
+                root=root, dry_run=dry_run)
+
+
+def project_sync_status(root: str | Path) -> dict:
+    """Describe whether one project's generated graph matches its sources.
+
+    Hand-authored graphs need no sync and are reported as ``manual``.  Missing,
+    empty, unconfigured generated, and invalid projects are kept distinct so a
+    workspace ``serve`` warning can tell the user what needs attention.
+    """
+    root = Path(root)
+    graph_dir = root / "hgraph"
+    if not graph_dir.is_dir():
+        return {"state": "missing", "message": "no hgraph/ directory"}
+
+    try:
+        nodes = list(Graph.open(root).nodes())
+    except Exception as e:
+        return {"state": "error", "message": str(e)}
+
+    try:
+        cfg = load_config(root)
+    except Exception as e:
+        return {"state": "error", "message": str(e)}
+    if not cfg["blueprint"] and not cfg["lean"]:
+        if any(n.meta.get("generated") in ("blueprint", "lean") for n in nodes):
+            return {"state": "unconfigured",
+                    "message": "generated nodes exist, but no sync sources are configured"}
+        if not nodes:
+            return {"state": "empty", "message": "the graph has no nodes"}
+        return {"state": "manual", "message": "authored graph (no sync configured)"}
+
+    try:
+        result = sync(Graph.open(root), blueprint=cfg["blueprint"],
+                      lean_paths=cfg["lean"], root=root, dry_run=True)
+    except Exception as e:
+        return {"state": "error", "message": str(e)}
+    return {
+        "state": "out_of_sync" if result["changes"] else "in_sync",
+        "message": (f"{result['changes']} generated graph change(s) pending"
+                    if result["changes"] else "generated graph is current"),
+        "result": result,
+    }
+
+
+def workspace_sync_status(manifest: dict, base: str | Path) -> list[dict]:
+    """Return :func:`project_sync_status` for every project in a manifest."""
+    projects = manifest.get("projects") if isinstance(manifest, dict) else None
+    if not isinstance(projects, list):
+        raise HGraphError("workspace manifest needs a projects: list")
+    out = []
+    for project in projects:
+        if not isinstance(project, dict) or project.get("root") is None:
+            raise HGraphError("each workspace project needs a root:")
+        root = Path(base) / str(project["root"])
+        out.append({"name": project.get("name") or str(project["root"]),
+                    "root": str(project["root"]),
+                    **project_sync_status(root)})
+    return out

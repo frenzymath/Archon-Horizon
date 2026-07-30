@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from archon_horizon.core.clock import utc_now
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind, TranscriptUsage
 from archon_horizon.transcript.parsers import (
     aggregate,
+    aggregate_usage,
     claude_session_id,
     codex_session_id,
     parse_claude_line,
@@ -20,7 +24,7 @@ from archon_horizon.transcript.pricing import (
     estimate_cost_usd,
     with_usage_pricing,
 )
-from archon_horizon.transcript.sink import JsonlTranscriptSink, read_transcript
+from archon_horizon.transcript.sink import JsonlTranscriptSink, read_transcript, read_transcript_page
 
 
 def test_plain_parser() -> None:
@@ -174,6 +178,37 @@ def test_sink_round_trip(tmp_path: Path) -> None:
     assert events[1].usage == TranscriptUsage(tokens_in=1)
 
 
+def test_transcript_pages_read_newest_then_older_without_full_file(tmp_path: Path) -> None:
+    path = tmp_path / "transcript.jsonl"
+    sink = JsonlTranscriptSink(path)
+    for index in range(10):
+        sink.emit(TranscriptEvent(TranscriptKind.TEXT, text=f"entry {index} · λ"))
+
+    newest = read_transcript_page(path, limit=3)
+    assert [event["text"] for event in newest["events"]] == [
+        "entry 7 · λ", "entry 8 · λ", "entry 9 · λ",
+    ]
+    assert newest["has_more"] is True
+    assert newest["before"] == newest["events"][0]["_cursor"]
+
+    older = read_transcript_page(path, before=newest["before"], limit=3)
+    assert [event["text"] for event in older["events"]] == [
+        "entry 4 · λ", "entry 5 · λ", "entry 6 · λ",
+    ]
+    oldest = read_transcript_page(path, before=older["before"], limit=10)
+    assert [event["text"] for event in oldest["events"]] == [
+        "entry 0 · λ", "entry 1 · λ", "entry 2 · λ", "entry 3 · λ",
+    ]
+    assert oldest["has_more"] is False
+
+    # A live sink may be between writes. Only newline-terminated events are
+    # complete and therefore eligible for the latest page.
+    with path.open("ab") as handle:
+        handle.write(b'{"kind":"text","text":"unfinished')
+    live = read_transcript_page(path, limit=2)
+    assert [event["text"] for event in live["events"]] == ["entry 8 · λ", "entry 9 · λ"]
+
+
 def test_aggregate_reads_legacy_data_usage() -> None:
     event = TranscriptEvent(
         TranscriptKind.USAGE,
@@ -206,3 +241,46 @@ def test_usage_pricing_estimates_missing_cost() -> None:
     assert event.usage is not None
     assert event.usage.cost_usd == 17.75
     assert event.data["cost_estimated"] is True
+
+
+def test_claude_cumulative_cost_snapshots_are_deltad_not_summed() -> None:
+    events = []
+    for tokens_in, tokens_out, total_cost in (
+        (84_405_146, 88_599, 532.434175),
+        (2_110_735, 1_462, 551.279465),
+        (6_503_353, 4_346, 624.421365),
+        (2_273_401, 1_661, 708.464895),
+    ):
+        parsed = parse_claude_line(json.dumps({
+            "type": "result",
+            "usage": {"input_tokens": tokens_in, "output_tokens": tokens_out},
+            "total_cost_usd": total_cost,
+            "modelUsage": {"claude-opus-5": {
+                "inputTokens": tokens_in, "outputTokens": tokens_out,
+            }},
+        }))
+        usage_event = next(event for event in parsed if event.kind is TranscriptKind.USAGE)
+        assert usage_event.data["cost_cumulative"] is True
+        events.extend(parsed)
+
+    usage = aggregate_usage(events)
+    assert usage.tokens_in == 95_292_635
+    assert usage.tokens_out == 96_068
+    assert usage.cost_usd == pytest.approx(708.464895)
+
+
+def test_aggregate_usage_ignores_per_block_usage_when_explicit_usage_exists() -> None:
+    repeated = TranscriptUsage(tokens_in=100, tokens_out=2)
+    at = utc_now()
+    events = [
+        TranscriptEvent(TranscriptKind.TEXT, at=at, text="one", usage=repeated),
+        TranscriptEvent(TranscriptKind.TOOL_CALL, at=at, tool="Bash", usage=repeated),
+        TranscriptEvent(
+            TranscriptKind.USAGE,
+            usage=TranscriptUsage(tokens_in=100, tokens_out=2, cost_usd=0.25),
+        ),
+    ]
+    usage = aggregate_usage(events)
+    assert usage.tokens_in == 100
+    assert usage.tokens_out == 2
+    assert usage.cost_usd == 0.25

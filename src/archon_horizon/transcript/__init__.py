@@ -6,6 +6,7 @@ from .model import TranscriptEvent, TranscriptKind, TranscriptUsage
 from .parsers import (
     TranscriptParser,
     aggregate,
+    aggregate_usage,
     parse_claude_line,
     parse_codex_line,
     parse_codex_rollout_line,
@@ -36,6 +37,7 @@ __all__ = [
     "TranscriptParser",
     "TranscriptSink",
     "aggregate",
+    "aggregate_usage",
     "estimate_cost_usd",
     "event_from_dict",
     "parse_claude_line",

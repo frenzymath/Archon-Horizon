@@ -97,6 +97,95 @@ def _subagent_end(
     return TranscriptEvent(TranscriptKind.SUBAGENT_END, text=f"{label} {status}", data=data)
 
 
+def _workflow_progress(
+    *, name: str | None = None, status: str = "running", attrs: dict | None = None,
+) -> TranscriptEvent:
+    label = name.strip() if isinstance(name, str) and name.strip() else "Workflow"
+    data: dict[str, object] = {
+        "lifecycle": "workflow",
+        "status": status,
+        "name": label,
+        "engine": "claude",
+    }
+    if attrs:
+        data.update({k: v for k, v in attrs.items() if v is not None and v != ""})
+    done = _int_or_zero(data.get("completed_agents"))
+    total = _int_or_zero(data.get("total_agents"))
+    progress = f": {done}/{total} agents done" if total else " started"
+    return TranscriptEvent(
+        TranscriptKind.WORKFLOW_PROGRESS,
+        text=f'{label}{progress}',
+        data=data,
+    )
+
+
+def _notification_text(obj: dict) -> str | None:
+    """Return Claude's task notification across its CLI persistence shapes."""
+    content = obj.get("content")
+    if isinstance(content, str):
+        return content
+    message = obj.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"]
+    attachment = obj.get("attachment")
+    if isinstance(attachment, dict) and isinstance(attachment.get("prompt"), str):
+        return attachment["prompt"]
+    return None
+
+
+def _claude_workflow_events(obj: dict) -> list[TranscriptEvent]:
+    """Read Workflow launch/completion metadata stored beside Claude messages.
+
+    ``Workflow`` itself is a tool call, but its useful identity is returned on
+    the following user row under ``toolUseResult``. Completion is delivered as
+    a task notification and includes the exact aggregate usage counters.
+    """
+    result = obj.get("toolUseResult")
+    if isinstance(result, dict) and result.get("taskType") == "local_workflow":
+        status = str(result.get("status") or "running")
+        return [_workflow_progress(
+            name=str(result.get("workflowName") or "Workflow"),
+            status="running" if status == "async_launched" else status,
+            attrs={
+                "workflow_id": result.get("runId"),
+                "run_id": result.get("runId"),
+                "task_id": result.get("taskId"),
+                "summary": result.get("summary"),
+                "transcript_dir": result.get("transcriptDir"),
+                "script_path": result.get("scriptPath"),
+                "completed_agents": 0,
+            },
+        )]
+
+    content = _notification_text(obj)
+    if not content or "<task-notification>" not in content:
+        return []
+    total = _tag_value(content, "agent_count")
+    done = _tag_value(content, "agents_done")
+    summary = _tag_value(content, "summary")
+    # Ordinary background commands and single Agent tasks use the same envelope.
+    if total is None and not (summary and summary.startswith("Dynamic workflow ")):
+        return []
+    duration_ms = _int_or_zero(_tag_value(content, "duration_ms"))
+    attrs: dict[str, object] = {
+        "task_id": _tag_value(content, "task-id"),
+        "tool_use_id": _tag_value(content, "tool-use-id"),
+        "summary": summary,
+        "completed_agents": _int_or_zero(done),
+        "total_agents": _int_or_zero(total),
+        "agents_error": _int_or_zero(_tag_value(content, "agents_error")),
+        "agents_skipped": _int_or_zero(_tag_value(content, "agents_skipped")),
+        "empty_results": _int_or_zero(_tag_value(content, "agents_empty_result")),
+        "subagent_tokens": _int_or_zero(_tag_value(content, "subagent_tokens")),
+        "tool_uses": _int_or_zero(_tag_value(content, "tool_uses")),
+        "duration_seconds": duration_ms / 1000 if duration_ms else None,
+    }
+    return [_workflow_progress(
+        status=(_tag_value(content, "status") or "completed").lower(),
+        attrs=attrs,
+    )]
+
+
 def _int_or_zero(value: object) -> int:
     try:
         return int(value or 0)
@@ -293,6 +382,11 @@ def parse_claude_line(line: str) -> list[TranscriptEvent]:
     elif kind == "result":
         usage = line_usage or TranscriptUsage()
         data = _usage_data(usage)
+        # Claude's `total_cost_usd` is a running session total, while its usage
+        # token fields describe this result. Consumers must delta the cost rather
+        # than add every snapshot ($532 + $551 + ... is not real spend).
+        if obj.get("total_cost_usd") is not None and obj.get("cost_usd") is None:
+            data["cost_cumulative"] = True
         model = _claude_model(obj)
         if model:
             data["model"] = model
@@ -331,6 +425,7 @@ def parse_claude_line(line: str) -> list[TranscriptEvent]:
                     engine="claude",
                     summary=summary,
                 ))
+    events.extend(_claude_workflow_events(obj))
     parent = obj.get("parent_tool_use_id")
     if parent:
         attr: dict[str, object] = {"parent_tool_use_id": parent}
@@ -649,6 +744,96 @@ def codex_session_id(line: str) -> str | None:
     return None
 
 
+def aggregate_usage(events: list[TranscriptEvent]) -> TranscriptUsage:
+    """Reduce canonical usage events to one session total.
+
+    Explicit ``USAGE`` rows are authoritative. Usage attached to text/tool rows
+    exists for per-event display and often repeats one native message's counters
+    on several derived blocks, so it is only a fallback when no explicit row
+    exists. Token counters are per result/turn and add; provider
+    ``total_cost_usd`` snapshots are cumulative and contribute only their delta.
+    """
+    def event_usage(event: TranscriptEvent) -> TranscriptUsage | None:
+        if event.usage is not None:
+            return event.usage
+        if event.kind is not TranscriptKind.USAGE:
+            return None
+        if not any(key in event.data for key in (
+            "tokens_in", "tokens_out", "cached_tokens_in",
+            "reasoning_tokens_out", "cost_usd",
+        )):
+            return None
+        return TranscriptUsage(
+            tokens_in=int(event.data.get("tokens_in") or 0),
+            tokens_out=int(event.data.get("tokens_out") or 0),
+            cached_tokens_in=int(event.data.get("cached_tokens_in") or 0),
+            reasoning_tokens_out=int(event.data.get("reasoning_tokens_out") or 0),
+            cost_usd=event.data.get("cost_usd"),
+        )
+
+    explicit = [event for event in events
+                if event.kind is TranscriptKind.USAGE and event_usage(event) is not None]
+    rows = explicit
+    if not rows:
+        # One native message can produce text + several tool rows with identical
+        # usage and timestamps. Count that native snapshot once.
+        seen: set[tuple[object, ...]] = set()
+        rows = []
+        for event in events:
+            usage = event_usage(event)
+            if usage is None:
+                continue
+            key = (
+                event.at, usage.tokens_in, usage.tokens_out,
+                usage.cached_tokens_in, usage.reasoning_tokens_out, usage.cost_usd,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(event)
+
+    tokens_in = tokens_out = cached_tokens_in = reasoning_tokens_out = 0
+    cost_usd = 0.0
+    has_cost = False
+    previous_cumulative_cost: float | None = None
+    for event in rows:
+        usage = event_usage(event)
+        if usage is None:
+            continue
+        tokens_in += int(usage.tokens_in or 0)
+        tokens_out += int(usage.tokens_out or 0)
+        cached_tokens_in += int(usage.cached_tokens_in or 0)
+        reasoning_tokens_out += int(usage.reasoning_tokens_out or 0)
+        if usage.cost_usd is None:
+            continue
+        current_cost = float(usage.cost_usd)
+        model = str(event.data.get("model") or "").lower()
+        cumulative = bool(event.data.get("cost_cumulative"))
+        # Compatibility for transcripts written before the parser stamped the
+        # explicit flag. Native Claude result costs came from total_cost_usd;
+        # locally estimated prices are incremental and say so.
+        if (not cumulative and event.kind is TranscriptKind.USAGE
+                and model.startswith("claude")
+                and not event.data.get("cost_estimated")):
+            cumulative = True
+        if cumulative:
+            delta = (current_cost if previous_cumulative_cost is None
+                     or current_cost < previous_cumulative_cost
+                     else current_cost - previous_cumulative_cost)
+            cost_usd += max(delta, 0.0)
+            previous_cumulative_cost = current_cost
+        else:
+            cost_usd += current_cost
+        has_cost = True
+    return TranscriptUsage(
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        cached_tokens_in=cached_tokens_in,
+        reasoning_tokens_out=reasoning_tokens_out,
+        cost_usd=cost_usd if has_cost else None,
+    )
+
+
 def aggregate(events: list[TranscriptEvent]) -> tuple[str, Usage]:
     """Reduce a transcript to (final_text, usage) for the HarnessResult.
 
@@ -661,19 +846,10 @@ def aggregate(events: list[TranscriptEvent]) -> tuple[str, Usage]:
     from archon_horizon.harnesses.base import Usage
 
     texts = [e.text for e in events if e.kind is TranscriptKind.TEXT and e.text]
-    usage = Usage()
-    for event in events:
-        if event.kind is TranscriptKind.USAGE:
-            if event.usage is not None:
-                usage = Usage(
-                    tokens_in=event.usage.tokens_in,
-                    tokens_out=event.usage.tokens_out,
-                    cost_usd=event.usage.cost_usd,
-                )
-                continue
-            usage = Usage(
-                tokens_in=int(event.data.get("tokens_in", 0)),
-                tokens_out=int(event.data.get("tokens_out", 0)),
-                cost_usd=event.data.get("cost_usd"),
-            )
+    transcript_usage = aggregate_usage(events)
+    usage = Usage(
+        tokens_in=transcript_usage.tokens_in,
+        tokens_out=transcript_usage.tokens_out,
+        cost_usd=transcript_usage.cost_usd,
+    )
     return (texts[-1] if texts else ""), usage
