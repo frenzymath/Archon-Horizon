@@ -22,10 +22,17 @@ from datetime import datetime, timezone
 from archon_horizon.log import log
 
 from archon_horizon.blueprint.chapters import project_chapters
-from archon_horizon.blueprint.checks import is_countable
 from archon_horizon.blueprint.workspace import published_dag, published_dags, workspace_dags
 from archon_horizon.config.loader import build_stores, build_workspace, load_config
-from archon_horizon.core.inbox import InboxDraft, InboxKind, InboxStatus
+from archon_horizon.core.inbox import (
+    PARTICIPANTS_KEY,
+    READ_BY_KEY,
+    STARTED_BY_KEY,
+    InboxDraft,
+    InboxKind,
+    InboxStatus,
+    audience_targets,
+)
 from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
 from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapKind, RoadmapStatus, apply_hierarchy, hierarchy_status_warnings, item_pinned_commits
 from archon_horizon.core.scope import ItemScope
@@ -36,8 +43,12 @@ from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 from archon_horizon.inboxes.github import GithubInboxProvider
 from archon_horizon.runlog import RunLog, SessionLog
 from archon_horizon.store import serde
-from archon_horizon.transcript.parsers import observed_effort, observed_model
-from archon_horizon.transcript.sink import latest_report_text, read_transcript
+from archon_horizon.transcript.parsers import aggregate_usage, observed_effort, observed_model
+from archon_horizon.transcript.sink import (
+    latest_report_text,
+    read_transcript,
+    read_transcript_page,
+)
 from archon_horizon.transcript.subagents import materialize_subagent_sessions
 from archon_horizon.server.git_api import get_git_log, get_git_diff
 from archon_horizon.server.source_api import file_stats, list_lean_files, read_lean_file
@@ -145,7 +156,10 @@ def _sum_usage(usages: Any) -> dict[str, Any]:
     return total
 
 
-_SESSION_CACHE_VERSION = 1
+# Bump whenever _compute_session_state changes derived fields. Version 2 fixes
+# historical Claude usage by deltaing cumulative cost snapshots instead of
+# preserving the previously cached sum of every transcript event's usage.
+_SESSION_CACHE_VERSION = 2
 
 
 class WorkspaceService:
@@ -365,6 +379,143 @@ class WorkspaceService:
             self._dags_sig = sig
         return self._dags_light
 
+    @staticmethod
+    def _activity_datetime(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value.strip():
+            try:
+                parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
+    def _metadata_activity_times(cls, metadata: dict[str, Any]) -> list[datetime]:
+        times = [
+            cls._activity_datetime(metadata.get("created_at")),
+            cls._activity_datetime(metadata.get("updated_at")),
+        ]
+        for key in ("comments", "history"):
+            for row in metadata.get(key, []):
+                if isinstance(row, dict):
+                    times.append(cls._activity_datetime(row.get("at")))
+        return [at for at in times if at is not None]
+
+    def _roadmap_state(self) -> dict[str, Any]:
+        """Serialize the roadmap with task-aware subtree activity timestamps.
+
+        Stored item timestamps remain untouched. ``activity`` is a dashboard
+        projection that also sees comments/history, tasks linked in either
+        direction, and child roadmap rows, so a parent reflects work below it.
+        """
+        roadmap = self.stores.roadmap.load()
+        tasks = self.stores.tasks.list()
+        items = {item.id: item for item in roadmap.items}
+        children: dict[str, list[str]] = {}
+        for item in roadmap.items:
+            parent = str(item.metadata.get("parent") or "").strip()
+            if parent in items and parent != item.id:
+                children.setdefault(parent, []).append(item.id)
+
+        direct_tasks: dict[str, list[HorizonTask]] = {item_id: [] for item_id in items}
+        for task in tasks:
+            refs = {str(ref) for ref in task.roadmap_refs}
+            for item in roadmap.items:
+                if item.id in refs or task.id in item.task_refs:
+                    direct_tasks[item.id].append(task)
+
+        memo: dict[str, dict[str, Any]] = {}
+
+        def derive(item_id: str, visiting: frozenset[str] = frozenset()) -> dict[str, Any]:
+            if item_id in memo:
+                return memo[item_id]
+            item = items[item_id]
+            metadata = item.metadata
+            explicit_created = self._activity_datetime(metadata.get("created_at"))
+            own_times = self._metadata_activity_times(metadata)
+            history_created = [
+                self._activity_datetime(row.get("at"))
+                for row in metadata.get("history", [])
+                if isinstance(row, dict) and row.get("field") == "created"
+            ]
+            history_created = [at for at in history_created if at is not None]
+
+            task_ids: set[str] = set()
+            task_created: list[datetime] = []
+            task_updated: list[datetime] = []
+            for task in direct_tasks[item_id]:
+                task_ids.add(task.id)
+                created = self._activity_datetime(task.created_at)
+                updated = self._activity_datetime(task.updated_at)
+                if created is not None:
+                    task_created.append(created)
+                    task_updated.append(created)
+                if updated is not None:
+                    task_updated.append(updated)
+                task_updated.extend(self._metadata_activity_times(task.metadata))
+
+            child_created: list[datetime] = []
+            child_updated: list[datetime] = []
+            child_task_updated: list[datetime] = []
+            if item_id not in visiting:
+                next_visiting = visiting | {item_id}
+                for child_id in children.get(item_id, []):
+                    if child_id in next_visiting:
+                        continue
+                    child = derive(child_id, next_visiting)
+                    task_ids.update(child["_task_ids"])
+                    for key, target in (
+                        ("created_at", child_created),
+                        ("updated_at", child_updated),
+                        ("task_updated_at", child_task_updated),
+                    ):
+                        parsed = self._activity_datetime(child.get(key))
+                        if parsed is not None:
+                            target.append(parsed)
+
+            inferred_creation = [*history_created, *task_created, *child_created, *own_times]
+            created_at = explicit_created or min(inferred_creation, default=None)
+            own_updated_at = max(own_times, default=created_at)
+            task_updated_at = max([*task_updated, *child_task_updated], default=None)
+            descendant_updated_at = max(child_updated, default=None)
+            updated_at = max(
+                [at for at in (own_updated_at, task_updated_at, descendant_updated_at) if at],
+                default=created_at,
+            )
+            result = {
+                "created_at": created_at.isoformat() if created_at else "",
+                "updated_at": updated_at.isoformat() if updated_at else "",
+                "own_updated_at": own_updated_at.isoformat() if own_updated_at else "",
+                "task_updated_at": task_updated_at.isoformat() if task_updated_at else "",
+                "task_count": len(task_ids),
+                "created_at_inferred": explicit_created is None and created_at is not None,
+                "updated_from_tasks": bool(
+                    task_updated_at
+                    and updated_at == task_updated_at
+                    and (own_updated_at is None or task_updated_at > own_updated_at)
+                ),
+                "updated_from_descendants": bool(
+                    descendant_updated_at
+                    and updated_at == descendant_updated_at
+                    and (own_updated_at is None or descendant_updated_at > own_updated_at)
+                ),
+                "_task_ids": task_ids,
+            }
+            memo[item_id] = result
+            return result
+
+        payload = serde.to_jsonable(roadmap)
+        for row in payload.get("items", []):
+            activity = dict(derive(str(row["id"])))
+            activity.pop("_task_ids", None)
+            row["activity"] = activity
+        return payload
+
     def state(self, *, events_tail: int = 50) -> dict[str, Any]:
         events = self._events_all_jsonable()
         return {
@@ -376,8 +527,11 @@ class WorkspaceService:
             "config_dir": self.workspace.state_path.as_posix(),
             "roadmap": self._cached_by_stamp(
                 "roadmap",
-                (self.workspace.state_path / "roadmap",),
-                lambda: serde.to_jsonable(self.stores.roadmap.load()),
+                (
+                    self.workspace.state_path / "roadmap",
+                    self.workspace.state_path / "tasks",
+                ),
+                self._roadmap_state,
             ),
             # Parent↔child status inconsistencies — surfaced, never auto-fixed
             # (matching the CLI's behavior; the editor decides).
@@ -505,41 +659,29 @@ class WorkspaceService:
             })
         return history
 
-    def projects_summary(self) -> dict[str, Any]:
-        """Per-project metrics for the overview: Lean LOC/sorries + blueprint size."""
-        dags = workspace_dags(self.workspace)
-        projects: list[dict[str, Any]] = []
-        for name in self._discover_projects():
-            try:
-                project_path = self._project_path(name)
-                files = list_lean_files(project_path)
-            except KeyError:
-                project_path = self.workspace.root / name
-                files = []
-            dag = dags.get(name) or {}
-            # Count only formalisation obligations (theorems/lemmas/defs, …);
-            # prose nodes like remarks carry no \lean obligation, so they must
-            # not inflate the blueprint "todo"/coverage totals.
-            nodes = [n for n in dag.get("nodes", []) if is_countable(n)]
-            projects.append({
-                "name": name,
-                "depends_on": list(self.workspace.projects.get(name).depends_on) if name in self.workspace.projects else [],
-                "lean_files": len(files),
-                "loc": sum(f["loc"] for f in files),
-                "loc_code": sum(f["loc_code"] for f in files),
-                "sorries": sum(f["sorries"] for f in files),
-                "blueprint_nodes": len(nodes),
-                "blueprint_leanok": sum(1 for n in nodes if n.get("proved")),
-            })
-        totals = {
-            "lean_files": sum(p["lean_files"] for p in projects),
-            "loc": sum(p["loc"] for p in projects),
-            "loc_code": sum(p["loc_code"] for p in projects),
-            "sorries": sum(p["sorries"] for p in projects),
-            "blueprint_nodes": sum(p["blueprint_nodes"] for p in projects),
-            "blueprint_leanok": sum(p["blueprint_leanok"] for p in projects),
+    def projects_index(self) -> dict[str, Any]:
+        """Cheap project rows used to paint the overview table immediately."""
+        return {
+            "projects": [
+                {
+                    "name": name,
+                    "depends_on": list(self.workspace.projects[name].depends_on)
+                    if name in self.workspace.projects else [],
+                }
+                for name in self._discover_projects()
+            ],
         }
-        return {"projects": projects, "totals": totals}
+
+    def project_metrics(self, name: str) -> dict[str, Any]:
+        """Current Lean metrics for one project, computed independently."""
+        files = list_lean_files(self._project_path(name))
+        return {
+            "name": name,
+            "lean_files": len(files),
+            "loc": sum(f["loc"] for f in files),
+            "loc_code": sum(f["loc_code"] for f in files),
+            "sorries": sum(f["sorries"] for f in files),
+        }
 
     def _harness_state(self) -> dict[str, Any]:
         return {
@@ -557,6 +699,15 @@ class WorkspaceService:
 
     def _runs_state(self, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         records = {run.id: serde.to_jsonable(run) for run in self.stores.runs.list()}
+        try:
+            from archon_horizon.commands.ps import live_runs
+
+            live_ids = {
+                str(row["run"])
+                for row in live_runs(self.workspace.state_path / "runs")
+            }
+        except Exception:
+            live_ids = set()
         run_events: dict[str, list[dict[str, Any]]] = {}
         for event in (events if events is not None else self._events_all_jsonable()):
             run_id = event.get("data", {}).get("run_id")
@@ -567,6 +718,7 @@ class WorkspaceService:
                 self.stores.run_logs.get(run_id),
                 records.get(run_id, {}),
                 run_events.get(run_id, []),
+                process_live=run_id in live_ids,
             )
             for run_id in reversed(self.stores.run_logs.ids())
         ]
@@ -578,6 +730,8 @@ class WorkspaceService:
         run: RunLog,
         record: dict[str, Any],
         events: list[dict[str, Any]],
+        *,
+        process_live: bool = False,
     ) -> dict[str, Any]:
         sessions = [self._session_state(run.id, session, "") for session in run.sessions()]
         baseline_session = self._baseline_session_state(run.id, events)
@@ -600,8 +754,8 @@ class WorkspaceService:
         flat = _flatten_sessions(sessions)
         # A terminal `run.stopped` event means the orchestrator is gone, so no
         # session is still live regardless of timing. Absent that (a hard crash),
-        # a run with "running" sessions is only truly active when a session
-        # emitted activity recently.
+        # a run with "running" sessions is only truly active when its registered
+        # process is alive or a session emitted activity recently.
         run_ended = any(event.get("type") == "run.stopped" for event in events)
         status_basis = _agentic_sessions(sessions) or flat
         latest_status_session = status_basis[-1] if status_basis else None
@@ -609,7 +763,7 @@ class WorkspaceService:
             latest_status_session is not None
             and latest_status_session["status"] == "running"
             and not run_ended
-            and _is_recent(latest_status_session.get("last_at", ""))
+            and (process_live or _is_recent(latest_status_session.get("last_at", "")))
         )
         active_session_id = id(latest_status_session) if active else None
         for session in flat:
@@ -689,7 +843,14 @@ class WorkspaceService:
             pass
         events = read_transcript(session.transcript_path) if session.transcript_path.exists() else []
         end = next((event for event in reversed(events) if event.kind == "session_end"), None)
-        usage = _sum_usage(event.usage for event in events if event.usage is not None)
+        transcript_usage = aggregate_usage(events)
+        usage = {
+            "tokens_in": transcript_usage.tokens_in,
+            "tokens_out": transcript_usage.tokens_out,
+            "cached_tokens_in": transcript_usage.cached_tokens_in,
+            "reasoning_tokens_out": transcript_usage.reasoning_tokens_out,
+            "cost_usd": transcript_usage.cost_usd,
+        }
         meta = session.read_meta()
 
         def _fail_status(reason: Any, timed_out: Any) -> str:
@@ -850,6 +1011,146 @@ class WorkspaceService:
                 recovered.append(row)
         return recovered
 
+    def _session_inbox_activity(self, run_id: str, session: str) -> dict[str, Any]:
+        """Inbox items, comments, and state actions written by one session.
+
+        Attribution uses the durable provenance stamped by agent CLI writes. It
+        deliberately does not guess from file mtimes: concurrent sessions can
+        edit the same inbox, so a timestamp-only attribution would be misleading.
+        """
+        rows: list[dict[str, Any]] = []
+        created_count = 0
+        comment_count = 0
+        action_count = 0
+
+        def from_session(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            return (
+                str(value.get("run") or "") == run_id
+                and str(value.get("session") or "") == session
+            )
+
+        for item in self.local.list_items():
+            created = from_session(item.metadata.get("provenance"))
+            comments = [
+                comment
+                for comment in item.metadata.get("comments", [])
+                if isinstance(comment, dict)
+                and from_session(comment.get("provenance"))
+            ]
+            actions = [
+                entry
+                for entry in item.metadata.get("history", [])
+                if isinstance(entry, dict)
+                and entry.get("field") != "created"
+                and from_session(entry.get("provenance"))
+            ]
+            if not created and not comments and not actions:
+                continue
+            created_count += int(created)
+            comment_count += len(comments)
+            action_count += len(actions)
+            title = str(item.body or "").split("\n", 1)[0].strip() or item.id
+            activity_times = [
+                str(comment.get("at") or "") for comment in comments
+                if str(comment.get("at") or "")
+            ]
+            if created:
+                activity_times.append(item.created_at.isoformat())
+            activity_times.extend(
+                str(entry.get("at") or "") for entry in actions
+                if str(entry.get("at") or "")
+            )
+            rows.append({
+                "id": item.id,
+                "title": title,
+                "kind": item.kind.value,
+                "status": item.status.value,
+                "created": created,
+                "comments": len(comments),
+                "actions": len(actions),
+                "last_activity_at": max(activity_times, default=""),
+            })
+        rows.sort(key=lambda row: (row["last_activity_at"], row["id"]), reverse=True)
+        return {
+            "items": rows,
+            "created": created_count,
+            "comments": comment_count,
+            "actions": action_count,
+            "total": len(rows),
+        }
+
+    def _session_roadmap_activity(self, run_id: str, session: str) -> dict[str, Any]:
+        """Roadmap items created, re-statused, or commented on by one session.
+
+        The per-session companion to :meth:`_session_inbox_activity`: the same
+        durable-provenance attribution (never file mtimes). ``created`` reads the
+        item's own creation provenance; ``status_changes`` reads the ``status``
+        history entries stamped by :func:`commands.shared.history_entry`; comments
+        read their own provenance. Status changes only surface for transitions
+        recorded after provenance stamping shipped — older history has no session
+        stamp and is deliberately not guessed at."""
+        rows: list[dict[str, Any]] = []
+        created_count = 0
+        status_count = 0
+        comment_count = 0
+
+        def from_session(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            return (
+                str(value.get("run") or "") == run_id
+                and str(value.get("session") or "") == session
+            )
+
+        for item in self.stores.roadmap.load().items:
+            created = from_session(item.metadata.get("provenance"))
+            comments = [
+                comment
+                for comment in item.metadata.get("comments", [])
+                if isinstance(comment, dict) and from_session(comment.get("provenance"))
+            ]
+            status_changes = [
+                entry
+                for entry in item.metadata.get("history", [])
+                if isinstance(entry, dict)
+                and entry.get("field") == "status"
+                and from_session(entry.get("provenance"))
+            ]
+            if not created and not comments and not status_changes:
+                continue
+            created_count += int(created)
+            status_count += len(status_changes)
+            comment_count += len(comments)
+            activity_times = [
+                str(comment.get("at") or "") for comment in comments if str(comment.get("at") or "")
+            ]
+            activity_times.extend(
+                str(entry.get("at") or "") for entry in status_changes if str(entry.get("at") or "")
+            )
+            if created:
+                activity_times.append(str(item.metadata.get("created_at") or ""))
+            latest_status = status_changes[-1] if status_changes else None
+            rows.append({
+                "id": item.id,
+                "title": item.title or item.id,
+                "status": item.status.value,
+                "created": created,
+                "status_changes": len(status_changes),
+                "status_to": str(latest_status.get("to") or "") if latest_status else "",
+                "comments": len(comments),
+                "last_activity_at": max((t for t in activity_times if t), default=""),
+            })
+        rows.sort(key=lambda row: (row["last_activity_at"], row["id"]), reverse=True)
+        return {
+            "items": rows,
+            "created": created_count,
+            "status_changes": status_count,
+            "comments": comment_count,
+            "total": len(rows),
+        }
+
     def session_commits_view(
         self,
         run_id: str,
@@ -866,11 +1167,15 @@ class WorkspaceService:
         from archon_horizon.server.changes_api import session_change_summary
         from archon_horizon.vcs.git import WorkspaceGit, git_available
 
+        inbox_activity = self._session_inbox_activity(run_id, session)
+        roadmap_activity = self._session_roadmap_activity(run_id, session)
         wsgit = WorkspaceGit(self.root) if git_available() else None
         if wsgit is None:
             return {
                 "run": run_id,
                 "session": session,
+                "inbox": inbox_activity,
+                "roadmap": roadmap_activity,
                 "commits": [],
                 "total": 0,
                 "offset": max(0, offset),
@@ -919,6 +1224,8 @@ class WorkspaceService:
         return {
             "run": run_id,
             "session": session,
+            "inbox": inbox_activity,
+            "roadmap": roadmap_activity,
             "commits": commits_out,
             "total": total,
             "offset": start,
@@ -978,6 +1285,14 @@ class WorkspaceService:
         if self.root.resolve() not in path.parents:  # contain path traversal
             raise ValueError("transcript ref escapes the workspace")
         return [serde.to_jsonable(e) for e in read_transcript(path)]
+
+    def transcript_page(
+        self, ref: str, *, before: int | None = None, limit: int = 120,
+    ) -> dict[str, Any]:
+        path = (self.root / ref).resolve()
+        if self.root.resolve() not in path.parents:
+            raise ValueError("transcript ref escapes the workspace")
+        return read_transcript_page(path, before=before, limit=limit)
 
     def report(self, ref: str) -> dict[str, Any]:
         """The session's report artifacts, sitting next to its transcript ref."""
@@ -1189,8 +1504,17 @@ class WorkspaceService:
         """Every GET path the dashboard reads. The live server and the static
         exporter both go through this, so they can never drift."""
         eps = ["/api/state", "/api/blueprints", "/api/transcripts", "/api/git/log", "/api/git/diff", "/api/projects"]
-        eps += [f"/api/transcript?ref={t['ref']}" for t in self.transcripts()]
-        eps += [f"/api/report?ref={t['ref']}" for t in self.transcripts()]
+        for transcript in self.transcripts():
+            ref = transcript["ref"]
+            eps.append(f"/api/report?ref={ref}")
+            before: int | None = None
+            while True:
+                suffix = f"&before={before}" if before is not None else ""
+                eps.append(f"/api/transcript?ref={ref}&limit=120{suffix}")
+                page = self.transcript_page(ref, before=before, limit=120)
+                if not page.get("has_more") or page.get("before") is None:
+                    break
+                before = int(page["before"])
         # The commit-granular git view: one commits endpoint per session, plus a
         # per-commit file-diff endpoint per changed Lean/blueprint file so the
         # click-to-diff works on the static page too.
@@ -1203,10 +1527,18 @@ class WorkspaceService:
                 eps.append(f"/api/session/commits?run={run_id}&session={session.name}")
                 try:
                     all_commits = self.session_commits_view(run_id, session.name).get("commits", [])
+                    # Retain the one-at-a-time URLs for backwards-compatible
+                    # snapshots, and export the three-card pages the current UI
+                    # requests.
                     for offset in range(len(all_commits)):
                         eps.append(
                             f"/api/session/commits?run={run_id}&session={session.name}"
                             f"&offset={offset}&limit=1"
+                        )
+                    for offset in range(0, len(all_commits), 3):
+                        eps.append(
+                            f"/api/session/commits?run={run_id}&session={session.name}"
+                            f"&offset={offset}&limit=3"
                         )
                     for c in all_commits:
                         for f in c.get("files", []):
@@ -1229,6 +1561,7 @@ class WorkspaceService:
             pass
         for name in self._discover_projects():
             encoded_name = quote(name, safe='')
+            eps.append(f"/api/project/metrics?project={encoded_name}")
             eps.append(f"/api/blueprint/chapters?project={encoded_name}")
             # Full per-project DAG (heavy) — the Blueprint/DAG pages fetch this on
             # demand now that /api/state carries only light DAG nodes, so the
@@ -1236,7 +1569,6 @@ class WorkspaceService:
             # statements / proofs / Lean source.
             eps.append(f"/api/blueprint/dag?project={encoded_name}")
             eps.append(f"/api/source?project={encoded_name}")
-            eps.append(f"/api/project/history?project={encoded_name}")
             try:
                 for f in list_lean_files(self._project_path(name)):
                     eps.append(
@@ -1260,7 +1592,18 @@ class WorkspaceService:
         if parsed.path == "/api/transcripts":
             return self.transcripts()
         if parsed.path == "/api/transcript":
-            return self.transcript((query.get("ref") or [""])[0])
+            ref = (query.get("ref") or [""])[0]
+            if "limit" not in query and "before" not in query:
+                return self.transcript(ref)
+            try:
+                limit = int((query.get("limit") or ["120"])[0])
+            except ValueError:
+                limit = 120
+            try:
+                before = int(query["before"][0]) if query.get("before") else None
+            except ValueError:
+                before = None
+            return self.transcript_page(ref, before=before, limit=limit)
         if parsed.path == "/api/report":
             return self.report((query.get("ref") or [""])[0])
         if parsed.path == "/api/search":
@@ -1325,7 +1668,12 @@ class WorkspaceService:
                 sha=(query.get("sha") or [""])[0],
             )
         if parsed.path == "/api/projects":
-            return self.projects_summary()
+            return self.projects_index()
+        if parsed.path == "/api/project/metrics":
+            proj = (query.get("project") or [""])[0]
+            if proj:
+                return self.project_metrics(proj)
+            return {"name": "", "lean_files": 0, "loc": 0, "loc_code": 0, "sorries": 0}
         if parsed.path == "/api/project/history":
             proj = (query.get("project") or [""])[0]
             try:
@@ -1430,12 +1778,28 @@ class WorkspaceService:
             if not author:
                 raise ValueError("local inbox author is required")
             labels = (NOT_READY,) if kw.get("pending") else (AGENT_READY,)
+            recipients = audience_targets(str(kw.get("audience") or ""))
+            conversation = bool(kw.get("conversation")) or len(recipients) > 1 or any(
+                target.startswith(("task:", "run:")) for target in recipients
+            )
+            metadata: dict[str, Any] = {READ_BY_KEY: ["human"]}
+            if conversation:
+                metadata.update({
+                    "conversation": True,
+                    PARTICIPANTS_KEY: list(dict.fromkeys((*recipients, "human"))),
+                    STARTED_BY_KEY: "human",
+                })
+            kind = InboxKind(kw.get("kind", "hint"))
+            if conversation:
+                kind = InboxKind.CONVERSATION
             item = self.local.create_item(
                 InboxDraft(
-                    kind=InboxKind(kw.get("kind", "hint")),
+                    kind=kind,
                     body=f"{title}\n\n{comment}",
                     labels=labels,
-                    metadata={"author": author},
+                    audience=", ".join(recipients),
+                    author=author,
+                    metadata=metadata,
                 )
             )
             return {"created": item.id}
@@ -1469,6 +1833,15 @@ class WorkspaceService:
             provider.update_labels(item_id, list(self._labels_for_gate(str(kw["gate"]))), actor)
         elif action == "comment":
             provider.add_comment(item_id, str(kw["body"]), str(kw.get("author") or "").strip() or None)
+            if provider is self.local:
+                # A dashboard comment is a human action even when its display
+                # author is customized. Keep the human participant acknowledged.
+                provider.set_read(item_id, "human", read=True, actor=actor)
+        elif action == "read":
+            if "read_state" not in provider.capabilities:
+                raise ValueError(f"{provider.name} inbox does not support read state")
+            reader = str(kw.get("reader") or "human").strip() or "human"
+            provider.set_read(item_id, reader, read=True, actor=actor)
         elif action == "body":
             provider.update_body(item_id, str(kw["body"]).strip(), actor)
         elif action == "comment_edit":
@@ -1505,31 +1878,52 @@ class WorkspaceService:
         roadmap = self.stores.roadmap.load()
         items = list(roadmap.items)
         if action == "add":
-            item_id = kw.get("id") or f"R-{len(items)+1:04d}"
+            item_id = str(kw.get("id") or "").strip()
+            if not item_id:
+                existing_ids = {item.id for item in items}
+                index = 1
+                while f"R-{index:04d}" in existing_ids:
+                    index += 1
+                item_id = f"R-{index:04d}"
+            if any(item.id == item_id for item in items):
+                raise ValueError(f"roadmap item {item_id!r} already exists")
+            if len(item_id) > 160 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", item_id):
+                raise ValueError(
+                    "roadmap item id must start with a letter or digit and contain only letters, "
+                    "digits, dots, underscores, or hyphens"
+                )
             author = str(kw.get("author") or "").strip()
             if not author:
                 raise ValueError("roadmap item author is required")
-            projects = tuple(kw.get("projects", []))
+            title = str(kw.get("title") or "").strip()
+            if not title:
+                raise ValueError("roadmap item title is required")
+            projects = self._string_tuple(kw.get("projects", ()))
+            if not projects:
+                raise ValueError("roadmap item requires at least one project")
+            parent = str(kw.get("parent") or "").strip()
+            self._validate_roadmap_parent(items, item_id, parent)
+            priority = self._roadmap_priority(kw.get("priority", "normal"))
+            now = datetime.now(timezone.utc).isoformat()
             new_item = RoadmapItem(
                 id=item_id,
-                title=str(kw.get("title", "")).strip(),
+                title=title,
                 projects=projects,
                 summary=str(kw.get("summary", "")).strip(),
                 status=RoadmapStatus(kw.get("status", "active")),
                 kind=RoadmapKind(kw.get("kind", "proof")),
-                depends_on=tuple(kw.get("depends_on", [])),
-                inbox_refs=tuple(kw.get("inbox_refs", [])),
-                task_refs=tuple(kw.get("task_refs", [])),
-                priority=kw.get("priority", "normal"),
+                depends_on=self._string_tuple(kw.get("depends_on", ())),
+                inbox_refs=self._string_tuple(kw.get("inbox_refs", ())),
+                task_refs=self._string_tuple(kw.get("task_refs", ())),
+                priority=priority,
                 scope=ItemScope(projects=projects),
-                metadata=apply_hierarchy(
+                metadata=self._roadmap_metadata(
                     {
                         "author": author,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "created_at": now,
+                        "updated_at": now,
                     },
-                    depth=kw.get("depth"),
-                    parent=kw.get("parent"),
+                    kw,
                 ),
             )
             items.append(new_item)
@@ -1560,51 +1954,114 @@ class WorkspaceService:
         else:
             old = items[idx]
             actor = str(kw.get("author") or old.metadata.get("author") or "human").strip()
-            if action == "status":
-                self._record_history(self.stores.roadmap, item_id, actor, "status",
-                                     before=str(old.status.value), after=str(kw["status"]))
-            elif action == "edit":
-                self._record_history(self.stores.roadmap, item_id, actor, "edited",
-                                     note="fields updated")
             if action == "edit":
-                items[idx] = RoadmapItem(
-                    id=old.id,
-                    title=str(kw.get("title", old.title)).strip(),
-                    projects=tuple(kw.get("projects", old.projects)),
+                title = str(kw.get("title", old.title)).strip()
+                if not title:
+                    raise ValueError("roadmap item title is required")
+                projects = self._string_tuple(kw.get("projects", old.projects))
+                if not projects:
+                    raise ValueError("roadmap item requires at least one project")
+                parent = str(kw.get("parent", old.metadata.get("parent", "")) or "").strip()
+                self._validate_roadmap_parent(items, item_id, parent)
+                items[idx] = dataclasses.replace(
+                    old,
+                    title=title,
+                    projects=projects,
                     summary=str(kw.get("summary", old.summary)).strip(),
                     status=RoadmapStatus(kw.get("status", old.status)),
                     kind=RoadmapKind(kw.get("kind", old.kind)),
-                    depends_on=tuple(kw.get("depends_on", old.depends_on)),
-                    inbox_refs=tuple(kw.get("inbox_refs", old.inbox_refs)),
-                    task_refs=tuple(kw.get("task_refs", old.task_refs)),
-                    priority=kw.get("priority", old.priority),
-                    scope=ItemScope(projects=tuple(kw.get("projects", old.projects))),
-                    metadata=apply_hierarchy(
+                    depends_on=self._string_tuple(kw.get("depends_on", old.depends_on)),
+                    inbox_refs=self._string_tuple(kw.get("inbox_refs", old.inbox_refs)),
+                    task_refs=self._string_tuple(kw.get("task_refs", old.task_refs)),
+                    priority=self._roadmap_priority(kw.get("priority", old.priority)),
+                    scope=dataclasses.replace(old.scope, projects=projects),
+                    metadata=self._roadmap_metadata(
                         {
                             **old.metadata,
-                            "author": kw.get("author", old.metadata.get("author", "unknown")),
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         },
-                        depth=kw.get("depth"),
-                        parent=kw.get("parent"),
+                        kw,
                     ),
                 )
+                self._record_history(
+                    self.stores.roadmap, item_id, actor, "edited", note="fields updated"
+                )
             elif action == "status":
-                items[idx] = RoadmapItem(
-                    id=old.id, title=old.title, projects=old.projects, summary=old.summary,
-                    status=RoadmapStatus(kw["status"]), kind=old.kind, depends_on=old.depends_on,
-                    inbox_refs=old.inbox_refs, task_refs=old.task_refs, priority=old.priority, 
-                    scope=old.scope,
+                items[idx] = dataclasses.replace(
+                    old,
+                    status=RoadmapStatus(kw["status"]),
                     metadata={
                         **old.metadata,
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }
+                    },
+                )
+                self._record_history(
+                    self.stores.roadmap,
+                    item_id,
+                    actor,
+                    "status",
+                    before=str(old.status.value),
+                    after=str(items[idx].status.value),
                 )
             else:
                 raise ValueError(f"unknown roadmap action {action!r}")
         
         self.stores.roadmap.save(Roadmap(version=roadmap.version, items=tuple(items)))
         return {"ok": True, "id": item_id}
+
+    @staticmethod
+    def _string_tuple(value: Any) -> tuple[str, ...]:
+        """Normalize repeated dashboard fields while preserving their order."""
+        values = value.split(",") if isinstance(value, str) else value or ()
+        return tuple(dict.fromkeys(str(entry).strip() for entry in values if str(entry).strip()))
+
+    @staticmethod
+    def _roadmap_priority(value: Any) -> str:
+        priority = str(value or "normal").strip().lower()
+        if priority not in {"urgent", "high", "normal", "low"}:
+            raise ValueError(f"unknown roadmap priority {priority!r}")
+        return priority
+
+    @staticmethod
+    def _validate_roadmap_parent(items: list[RoadmapItem], item_id: str, parent: str) -> None:
+        if not parent:
+            return
+        by_id = {item.id: item for item in items}
+        if parent not in by_id:
+            raise ValueError(f"roadmap parent {parent!r} does not exist")
+        cursor = parent
+        seen: set[str] = set()
+        while cursor:
+            if cursor == item_id:
+                raise ValueError("roadmap parent would create a cycle")
+            if cursor in seen:
+                raise ValueError("roadmap hierarchy already contains a cycle")
+            seen.add(cursor)
+            node = by_id.get(cursor)
+            cursor = str(node.metadata.get("parent") or "").strip() if node else ""
+
+    @staticmethod
+    def _roadmap_metadata(metadata: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        result = dict(metadata)
+        for key in ("owner", "milestone"):
+            if key not in payload:
+                continue
+            value = str(payload.get(key) or "").strip()
+            if value:
+                result[key] = value
+            else:
+                result.pop(key, None)
+        if "pinned_commits" in payload:
+            commits = WorkspaceService._string_tuple(payload.get("pinned_commits"))
+            if commits:
+                result["pinned_commits"] = list(commits)
+            else:
+                result.pop("pinned_commits", None)
+        return apply_hierarchy(
+            result,
+            depth=payload.get("depth") if "depth" in payload else None,
+            parent=payload.get("parent") if "parent" in payload else None,
+        )
 
     def edit_task(self, action: str, **kw: Any) -> dict[str, Any]:
         tasks = {task.id: task for task in self.stores.tasks.list()}

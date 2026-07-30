@@ -18,9 +18,12 @@ Read this before running `git diff`/`git log` on a project.
   `.git/`, and there is no `.archon-horizon/vcs/<project>.git`. A project's
   "history" is simply the workspace ledger filtered to that project's path.
 - **You record your own work by committing to the ledger** with plain `git` (see
-  below). Commit *early and often* with a semantic, math-first message — the
-  commit message + diff is how your progress is read, so make the message say what
-  you proved/built. Provenance trailers are added automatically; do not write them.
+  below). Commit after each independently useful, verified proof/file/tooling
+  change, before a long build or delegated review, and before expanding scope.
+  A multi-hour implementation session should normally have several commits; one
+  commit is appropriate only when the work is genuinely atomic. The message +
+  diff is how progress is read, so use a semantic, math-first subject. Provenance
+  trailers are added automatically; do not write them.
 
 So a plain `git diff` at the root sees only a user repo (if any), never Archon's.
 Drive the out-of-tree workspace ledger explicitly (or use `hgit`).
@@ -60,6 +63,9 @@ anything staged in your way.
   such as `--trailer 'Summary=**Invariant.** Preserves $f(x)=x$ on $A$.'` renders
   directly in the dashboard commit item. Keep each trailer on one line; repeat
   `--trailer 'Summary=…'` for a few separate points.
+- Do not wait for the whole task to be complete. A checkpoint commit must build
+  or otherwise be internally coherent, but it may explicitly leave the next
+  named obligation open.
 - Stage **explicit paths** you changed rather than `add -A` — the work tree is the
   whole workspace, so `-A` can sweep in unrelated files.
 - `Archon-Run`/`Session`/`Role`/`Task`/`Projects` trailers are stamped for you by a

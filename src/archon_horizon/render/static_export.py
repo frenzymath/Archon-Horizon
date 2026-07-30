@@ -140,10 +140,23 @@ def export_static(service: WorkspaceService, out_dir: Path, *, dist_dir: Path | 
     data_dir = out_dir / "data" / "api"
     data_dir.mkdir(parents=True, exist_ok=True)
     paths = service.endpoints()
+    exported: list[str] = []
     for path in paths:
+        # A handler raises KeyError to mean "404" (e.g. /api/commit?sha=... for a
+        # SHA that resolves in no project's git log — cited SHAs in inbox bodies,
+        # reports and roadmap pins routinely age out of those logs). The live
+        # server turns that into a 404 and the client renders the reference
+        # plain; here it would abort the whole export, so skip the endpoint and
+        # let the client take the same absent-data path.
+        try:
+            payload = service.serve_endpoint(path)
+        except KeyError:
+            continue
         (data_dir / f"{endpoint_key(path)}.json").write_text(
-            json.dumps(service.serve_endpoint(path)), "utf-8"
+            json.dumps(payload), "utf-8"
         )
+        exported.append(path)
+    paths = exported
     reports_src = service.workspace.state_path / "reports"
     if reports_src.exists():
         shutil.copytree(reports_src, out_dir / "reports", dirs_exist_ok=True)

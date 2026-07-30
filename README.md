@@ -15,6 +15,9 @@
 
 ---
 
+> [!IMPORTANT]
+> This is the first public release of **Archon Horizon**. This version is stable, and already used in our projects, but be aware that new versions may introduce big changes. We advise you to check this repository regularly for updates. We try to maintain backward compatibility, although some interfaces may change.
+
 Archon Horizon orchestrates autonomous AI agents that formalize mathematics in **Lean 4** across **multiple interdependent projects**. A workspace is the unit of work: the Horizon agent plans over shared blueprints and dependency graphs, runs long proving sessions, builds with `lake`, and repairs failures without constant human supervision. Fresh-context helpers provide independent review and workspace hygiene without creating a second orchestration loop.
 
 The **Horizon Agent** owns the proof loop and decides when to dispatch helpers. The read-only **Ground** helper is a scheduled workspace-wide checkpoint for strategy, graph/task consistency, ledger hygiene, and convergence; `work-reviewer`, `blueprint`, `janitor`, and the other helpers remain available for narrower slices.

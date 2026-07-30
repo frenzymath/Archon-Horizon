@@ -30,8 +30,12 @@ You do not manage other teams and they do not manage you. You coordinate through
 
 Before you start, be aware of who else is live (see "Is another run live" below).
 A short **synchronizer** digest is printed to stderr at the start of your CLI
-commands (unread inbox for your task, your session's runtime/tokens, other live
-runs) — read it; it is how you stay aware without asking anyone.
+commands. Its attention order is deliberate: `REQUIRED` active protections,
+`ACTION` unread conversations, advisory unread inbox, then session/runtime and
+other live runs. Read it; it is how you stay aware without asking anyone. A new
+conversation or reply invalidates the digest cache immediately. If stderr is
+redirected, the same protection/conversation lanes are the first `attention`
+object in `horizon inbox list --json`.
 
 ## Orient (pull state, don't assume it)
 
@@ -70,6 +74,16 @@ project rather than at that root. The absolute path to this skill is
   `inbox list --mine --unread` is your team's fresh queue, and you can
   direct-message another team with `--to task:<id>`. Inbox commands warn when the
   open working set—especially `memory` and `info`—needs review.
+- **Inbox attention order** — before edits, inspect all open `protection` items
+  (standing constraints, whether read or unread), then open unread
+  `conversation` items and reply or mark them read. Other kinds are advisory
+  context. In an agent session an unqualified `inbox list` defaults to open items
+  and sorts in this order; use an explicit status to audit history.
+- **Conversation discipline** — use a conversation only when a reply/decision is
+  expected. Search and reuse an open thread before starting one. Its initiator is
+  a participant and owns closure: after consuming the answer, add a concise
+  conclusion if needed and archive the thread. Reply to human-started threads but
+  leave their closure to the human unless asked otherwise (skill: `horizon-inbox`).
 - **Blueprint graph** — declaration dependencies and what's proved. `"$HORIZON_BIN" graph -p <project> …` (skill: `hgraph`).
   Each node is also an **hgraph** file with attached comments/reviews —
   `"$HORIZON_BIN" graph -p <project> frontier` ranks what to prove next, and node-scoped failure memory
@@ -130,8 +144,8 @@ you genuinely can. Prefer ambitious progress over defensive avoidance.
 
 If this session was launched on a specific task, make concrete progress on that
 task's REAL objective — don't preemptively pivot to easy unrelated wins because
-the objective is large. Leave a `"$HORIZON_BIN" task comment <task_id> --body …`
-at each significant step. You own the task's terminal status (skill:
+the objective is large. Leave a concise task comment only for a durable state
+change or blocker, not every action. You own the task's terminal status (skill:
 `task-status`): set `--status done` only when the objective is FULLY complete;
 `blocked`/`failed` if genuinely stuck; set nothing if it's only partly advanced
 (it returns to the queue).
@@ -263,6 +277,16 @@ or the explicit `--git-dir/--work-tree` form; provenance trailers are auto-stamp
 Write **semantic, math-first** messages that say what you proved/built. Prefer
 staging explicit files over `add -A`. Beyond commits:
 
+- Commit after each independently useful verified proof, file, or bounded tooling
+  change; commit before long builds/reviews and before expanding scope. Multi-hour
+  implementation sessions normally produce several commits.
+- Never end a session with durable authored changes after the last commit. The
+  lifecycle hook gives a compact checkpoint reminder and may pause Stop when it
+  observed a file mutation after the last commit.
+- Keep operational prose as a delta. Task/roadmap/inbox comments default to one
+  sentence or at most three bullets: conclusion, evidence, next action. Do not
+  copy the report, commit summary, or thread history into them.
+
 - Update the **roadmap** with coarse status/strategy (not a re-narration of the diff).
 - Use the **inbox** to hand off to the next/other sessions; record durable dead-ends
   as **memory**.
@@ -273,7 +297,9 @@ strategy changed, add a concise mathematical comment for a key advance, and
 archive or complete open inbox items your work actually resolved. Also scan the
 remaining open inbox for consumed temporary/info/memory items and archive those
 that are now stale. Never archive a standing protection merely to make the list
-shorter. This pass is part of completing the work, not optional janitor follow-up.
+shorter. In particular, review every open conversation your task started: archive
+answered threads and leave a concrete blocker on any that must stay open. This
+pass is part of completing the work, not optional janitor follow-up.
 
 ## Resuming after an interruption
 
@@ -303,15 +329,14 @@ the `horizon-start` skill — load it at the start of the session. The essential
 
 Your final message is saved as the session's report — a human or the next
 session should understand the session from it without opening raw logs.
-Recommended sections: `## Summary`, `## Progress`, `## Issues`,
-`## Why I stopped`, `## Next` (keep at least `## Progress` and
-`## Why I stopped`). In `## Progress`, one inline `-` bullet per file/target,
+Use only sections that carry information: normally `## Progress`, `## Issues`,
+`## Why I stopped`, and `## Next`. In `## Progress`, use one inline `-` bullet per file/target,
 e.g. `- FileA.lean: 4 sorries -> 3; closed the base case.` In `## Why I
 stopped`, say plainly whether the objective is fully complete, partly advanced,
 or blocked — and why. Always mention build failures, broken proofs, blocked
 dependencies, and checks that failed or were not run. If a plausible next
 action fits in the session's scope, take it before stopping — a clean commit is
-not by itself a reason to stop.
+not by itself a reason to stop. Do not replay the chronological session log.
 
 ## Cleaning up the work (you decide, via subagents)
 

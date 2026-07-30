@@ -33,6 +33,11 @@ its following `proof` environment form one node's content.
   proof is formalized; on a statement, the signature is formalized.
 - `\mathlibok` — the declaration is already available in mathlib (no
   formalization needed; treat as a leaf).
+- `\notready` — the Lean is **not written yet**: the node's statement stands but
+  no declaration formalizes it. Mutually exclusive with `\leanok` (a node is
+  never both) — remove `\notready` exactly when you add `\leanok`, i.e. the
+  moment its Lean is written and checked. It is a human-facing marker of an
+  intentional gap, not a DAG edge.
 
 ## House style
 
