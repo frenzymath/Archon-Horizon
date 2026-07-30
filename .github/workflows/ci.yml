@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared by requires-python, plus the version the demo
+        # workflow builds with.
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+
+      - name: Check version synchronization
+        run: python scripts/version.py --check
+
+      - name: Run tests
+        run: python -B -m pytest -q
+
+  frontend:
+    name: dashboard typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: src/archon_horizon/frontend/package-lock.json
+
+      - name: Install
+        run: npm --prefix src/archon_horizon/frontend ci
+
+      # `vite build` does not typecheck, so run tsc explicitly: type errors
+      # would otherwise ship a silently-broken dashboard.
+      - name: Typecheck
+        run: npm --prefix src/archon_horizon/frontend exec -- tsc --noEmit
+
+      - name: Build
+        run: npm --prefix src/archon_horizon/frontend run build
+
+  package:
+    name: wheel contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build distributions
+        run: |
+          python -m pip install build
+          python -m build
+
+      - name: Assert the wheel ships data files and no node_modules
+        run: python scripts/check_wheel.py
