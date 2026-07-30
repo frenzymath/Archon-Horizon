@@ -35,11 +35,33 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _session_usage(session_dir: Path) -> dict[str, Any]:
-    """A session's usage: the live ``usage.json``, else the finalized meta."""
+    """A session's usage, repairing legacy completed totals from its transcript."""
     live = _read_json(session_dir / "usage.json")
+    if live.get("schema_version") == 2 and live.get("usage_events"):
+        return live
+    meta = _read_json(session_dir / "meta.json")
+    transcript_path = session_dir / "transcript.jsonl"
+    # Version-1 files summed repeated display usage and cumulative Claude costs.
+    # Completed session transcripts are immutable, so repair them on read. Live
+    # legacy sessions keep their cheap usage.json snapshot until they finish.
+    if transcript_path.exists() and meta.get("ended_at"):
+        from archon_horizon.transcript.parsers import aggregate_usage
+        from archon_horizon.transcript.sink import read_transcript
+
+        events = read_transcript(transcript_path)
+        usage = aggregate_usage(events)
+        return {
+            "schema_version": 2,
+            "tokens_in": usage.tokens_in,
+            "tokens_out": usage.tokens_out,
+            "cached_tokens_in": usage.cached_tokens_in,
+            "reasoning_tokens_out": usage.reasoning_tokens_out,
+            "cost_usd": usage.cost_usd,
+            "usage_events": sum(event.kind == "usage" for event in events),
+        }
     if live.get("usage_events"):
         return live
-    meta_usage = _read_json(session_dir / "meta.json").get("usage")
+    meta_usage = meta.get("usage")
     return meta_usage if isinstance(meta_usage, dict) else {}
 
 

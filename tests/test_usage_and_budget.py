@@ -13,7 +13,9 @@ import json
 from pathlib import Path
 
 from archon_horizon.config.schema import BudgetConfig
+from archon_horizon.commands.usage import _session_usage
 from archon_horizon.harnesses.command import _UsageFile, _advertised_retry_s, _classify_failure
+from archon_horizon.transcript.sink import JsonlTranscriptSink
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind, TranscriptUsage
 from archon_horizon.transcript.parsers import parse_claude_line
 
@@ -32,6 +34,60 @@ def test_usage_file_accumulates_and_persists(tmp_path: Path) -> None:
     assert data["cost_usd"] == 0.5
     assert data["usage_events"] == 2
     assert data["updated_at"] is not None
+    assert data["schema_version"] == 2
+
+
+def test_usage_file_deltas_cumulative_cost_and_ignores_display_usage(tmp_path: Path) -> None:
+    path = tmp_path / "usage.json"
+    uf = _UsageFile(path)
+    uf.add(TranscriptEvent(
+        TranscriptKind.TEXT,
+        text="display row",
+        usage=TranscriptUsage(tokens_in=99_999, cost_usd=500.0),
+    ))
+    for tokens, cost in ((80, 5.0), (20, 7.5), (10, 9.0)):
+        uf.add(TranscriptEvent(
+            TranscriptKind.USAGE,
+            data={"cost_cumulative": True},
+            usage=TranscriptUsage(tokens_in=tokens, cost_usd=cost),
+        ))
+    uf.flush(force=True)
+
+    data = json.loads(path.read_text("utf-8"))
+    assert data["tokens_in"] == 110
+    assert data["cost_usd"] == 9.0
+    assert data["usage_events"] == 3
+
+
+def test_completed_legacy_usage_is_recomputed_from_transcript(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / "usage.json").write_text(json.dumps({
+        "tokens_in": 999_999,
+        "tokens_out": 999,
+        "cost_usd": 15.0,
+        "usage_events": 2,
+    }), "utf-8")
+    (session / "meta.json").write_text(json.dumps({
+        "ended_at": "2026-07-28T05:42:07+00:00",
+    }), "utf-8")
+    sink = JsonlTranscriptSink(session / "transcript.jsonl")
+    sink.emit(TranscriptEvent(
+        TranscriptKind.USAGE,
+        data={"cost_cumulative": True},
+        usage=TranscriptUsage(tokens_in=80, tokens_out=5, cost_usd=5.0),
+    ))
+    sink.emit(TranscriptEvent(
+        TranscriptKind.USAGE,
+        data={"cost_cumulative": True},
+        usage=TranscriptUsage(tokens_in=20, tokens_out=2, cost_usd=7.5),
+    ))
+
+    usage = _session_usage(session)
+    assert usage["schema_version"] == 2
+    assert usage["tokens_in"] == 100
+    assert usage["tokens_out"] == 7
+    assert usage["cost_usd"] == 7.5
 
 
 def test_usage_file_without_path_is_noop() -> None:

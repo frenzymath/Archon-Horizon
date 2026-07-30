@@ -77,31 +77,96 @@ def _session_line() -> str | None:
     return line
 
 
-def _inbox_line(root: Path) -> str | None:
-    """Count of unread items in my task's inbox (owned-by-me plus shared)."""
+def _inbox_lines(root: Path) -> list[str]:
+    """Priority lanes for protections, conversations, then advisory items."""
     try:
-        from archon_horizon.commands.shared import provenance_task, reader_id
-        from archon_horizon.config.loader import load_config
-        from archon_horizon.core.inbox import InboxFilter, InboxStatus
+        from archon_horizon.commands.shared import (
+            provenance_project,
+            provenance_task,
+            reader_id,
+            task_inbox_refs,
+        )
+        from archon_horizon.config.loader import build_workspace, load_config
+        from archon_horizon.core.inbox import (
+            InboxFilter,
+            InboxKind,
+            InboxStatus,
+            is_conversation,
+            is_read_by,
+            reaches_horizon,
+        )
+        from archon_horizon.core.labels import is_agent_ready
         from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 
         cfg = load_config(root)
+        workspace = build_workspace(cfg, root)
         inbox = FilesystemInboxProvider(root / cfg.state_dir / "inbox" / "local")
-        unread = inbox.list_items(
+        task = provenance_task()
+        inbox_refs = task_inbox_refs(workspace, task)
+        candidates = inbox.list_items(
             InboxFilter(
                 status=InboxStatus.OPEN,
-                owner_task=provenance_task(),
-                unread_for=reader_id(),
+                owner_task=task,
             )
         )
+        run = os.environ.get("ARCHON_HORIZON_RUN", "").strip() or None
+        relevant = sorted(
+            (
+                item for item in candidates
+                if is_agent_ready(item.labels) and reaches_horizon(
+                    item, provenance_project(), task=task, run=run,
+                    inbox_refs=inbox_refs,
+                )
+            ),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )
     except Exception:
-        return None
-    if not unread:
-        return None
-    n = len(unread)
-    ids = ", ".join(item.id for item in unread[:5])
-    more = f", +{n - 5} more" if n > 5 else ""
-    return f"{n} unread inbox item{'s' if n != 1 else ''} ({ids}{more}) — `horizon inbox list --unread`"
+        return []
+
+    def _title(item) -> str:
+        title = str(item.body or "").split("\n", 1)[0].strip().replace('"', "'")
+        return title if len(title) <= 48 else title[:45].rstrip() + "..."
+
+    def _shown(items) -> str:
+        text = "; ".join(f'{item.id} "{_title(item)}"' for item in items[:3])
+        return text + (f"; +{len(items) - 3} more" if len(items) > 3 else "")
+
+    reader = reader_id()
+    protections = [item for item in relevant if item.kind is InboxKind.PROTECTION]
+    conversations = [
+        item for item in relevant
+        if is_conversation(item) and not is_read_by(item, reader)
+    ]
+    advisory = [
+        item for item in relevant
+        if item.kind is not InboxKind.PROTECTION
+        and not is_conversation(item)
+        and not is_read_by(item, reader)
+    ]
+    lines: list[str] = []
+    if protections:
+        lines.append(
+            f"REQUIRED · {len(protections)} active protection"
+            f"{'s' if len(protections) != 1 else ''}: {_shown(protections)} — "
+            "consult before editing: `horizon inbox list --mine --status open "
+            "--kind protection --json`"
+        )
+    if conversations:
+        first = conversations[0].id
+        lines.append(
+            f"ACTION · {len(conversations)} unread conversation"
+            f"{'s' if len(conversations) != 1 else ''}: {_shown(conversations)} — "
+            f"open now: `horizon inbox show {first} --json`; reply with "
+            f"`horizon inbox comment {first} --body \"Reply\"`"
+        )
+    if advisory:
+        lines.append(
+            f"Advisory · {len(advisory)} unread inbox item"
+            f"{'s' if len(advisory) != 1 else ''}: {_shown(advisory)} — "
+            "review when relevant: `horizon inbox list --mine --unread --json`"
+        )
+    return lines
 
 
 def _runs_line(root: Path) -> str | None:
@@ -117,12 +182,33 @@ def _runs_line(root: Path) -> str | None:
         return None
     if not others:
         return None
-    labels = ", ".join(r["run"] for r in others[:6])
-    return f"{len(others)} other run{'s' if len(others) != 1 else ''} live on this workspace ({labels}) — `horizon ps`"
+    labels: list[str] = []
+    recipients: list[str] = []
+    for row in others[:4]:
+        label = f"run {row['run']}"
+        task = str(row.get("task") or "").strip()
+        title = str(row.get("task_title") or "").strip()
+        if title and len(title) > 42:
+            title = title[:39].rstrip() + "..."
+        if task:
+            label += f" · task {task}"
+            recipients.append(f"task:{task}")
+        else:
+            recipients.append(f"run:{row['run']}")
+        if title:
+            label += f' "{title}"'
+        labels.append(label)
+    recipient = recipients[0]
+    return (
+        f"Running sessions: {'; '.join(labels)} "
+        f"— message a team with `horizon inbox dm {recipient} --body \"Title\\n\\nMessage\"`; "
+        "details: `horizon ps`"
+    )
 
 
 def _compute_lines(root: Path) -> list[str]:
-    return [line for line in (_session_line(), _inbox_line(root), _runs_line(root)) if line]
+    inbox = _inbox_lines(root)
+    return [*inbox, *[line for line in (_session_line(), _runs_line(root)) if line]]
 
 
 def _cache_path() -> Path | None:
@@ -130,20 +216,41 @@ def _cache_path() -> Path | None:
     return Path(session_dir) / "notify_cache.json" if session_dir else None
 
 
+def _inbox_stamp(root: Path) -> str | None:
+    """Cheap invalidation so a new message bypasses the digest's normal TTL."""
+    try:
+        from archon_horizon.config.loader import load_config
+
+        cfg = load_config(root)
+        items_dir = root / cfg.state_dir / "inbox" / "local" / "items"
+        stats = [path.stat() for path in items_dir.iterdir() if path.is_file()]
+        return f"{len(stats)}:{max((stat.st_mtime_ns for stat in stats), default=0)}:{sum(stat.st_size for stat in stats)}"
+    except Exception:
+        return None
+
+
 def _cached_lines(root: Path) -> list[str]:
     """Compute the digest, reusing a fresh (< TTL) cache within a session."""
     cache = _cache_path()
+    inbox_stamp = _inbox_stamp(root)
     if cache is not None:
         try:
             blob = json.loads(cache.read_text("utf-8"))
-            if time.time() - float(blob.get("at") or 0) < _CACHE_TTL_S:
+            if (
+                time.time() - float(blob.get("at") or 0) < _CACHE_TTL_S
+                and blob.get("inbox_stamp") == inbox_stamp
+            ):
                 return [str(x) for x in blob.get("lines", [])]
         except (OSError, ValueError):
             pass
     lines = _compute_lines(root)
     if cache is not None:
         try:
-            cache.write_text(json.dumps({"at": time.time(), "lines": lines}), "utf-8")
+            cache.write_text(json.dumps({
+                "at": time.time(),
+                "inbox_stamp": inbox_stamp,
+                "lines": lines,
+            }), "utf-8")
         except OSError:
             pass
     return lines

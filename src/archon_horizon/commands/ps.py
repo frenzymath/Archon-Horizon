@@ -30,6 +30,84 @@ from .shared import emit_json
 _STALE_S = 30 * 60.0  # no run-dir writes for this long ⇒ flag as inactive
 
 
+def write_process_marker(run_dir: Path, **context: object) -> None:
+    """Register a live run process, including optional team identity metadata."""
+    try:
+        (run_dir / "process.json").write_text(json.dumps({
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "started_at": time.time(),
+            **{key: value for key, value in context.items() if value not in (None, "", [], ())},
+        }), "utf-8")
+    except OSError:
+        pass
+
+
+def clear_process_marker(run_dir: Path) -> None:
+    try:
+        (run_dir / "process.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _load_record(path: Path) -> dict:
+    try:
+        text = path.read_text("utf-8")
+        if path.suffix == ".json":
+            value = json.loads(text)
+        else:
+            from archon_horizon.store.codec import YamlCodec
+
+            value = YamlCodec().loads(text)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _run_context(run_dir: Path, marker: dict) -> dict[str, object]:
+    """Best-effort task/session label for a process marker.
+
+    Automated runs predate the richer marker and keep their identity in run.yaml
+    plus the live session's meta.json, so read both before falling back to a bare
+    run id.
+    """
+    context: dict[str, object] = {
+        key: marker.get(key)
+        for key in ("task", "task_title", "session", "projects")
+        if marker.get(key) not in (None, "", [], ())
+    }
+    meta_candidates = list((run_dir / "sessions").glob("*/meta.json"))
+    if meta_candidates:
+        try:
+            latest_meta = max(meta_candidates, key=lambda path: path.stat().st_mtime_ns)
+            meta = _load_record(latest_meta)
+            context.setdefault("session", latest_meta.parent.name)
+            context.setdefault("task", meta.get("task_id"))
+            context.setdefault("projects", meta.get("projects") or meta.get("project"))
+        except OSError:
+            pass
+    if not context.get("task"):
+        run_path = next(iter(sorted(run_dir.glob("run.*"))), None)
+        record = _load_record(run_path) if run_path else {}
+        focus = record.get("focus", {})
+        if isinstance(focus, dict):
+            task = focus.get("task")
+            tasks = focus.get("tasks")
+            if not task and isinstance(tasks, list) and tasks:
+                task = tasks[0]
+            if task:
+                context["task"] = str(task)
+    task = str(context.get("task") or "").strip()
+    if task and not context.get("task_title"):
+        tasks_dir = run_dir.parent.parent / "tasks"
+        task_path = next(iter(sorted(tasks_dir.glob(f"{task}.*"))), None)
+        task_record = _load_record(task_path) if task_path else {}
+        title = task_record.get("title") or task_record.get("objective")
+        if title:
+            context["task_title"] = str(title)
+    return context
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -77,7 +155,13 @@ def live_runs(runs_dir: Path, *, exclude_run: str | None = None) -> list[dict]:
         local = host == here
         if local and pid and not _pid_alive(pid):
             continue  # zombie marker — the run is dead
-        out.append({"run": run_dir.name, "pid": pid, "host": host, "local": local})
+        out.append({
+            "run": run_dir.name,
+            "pid": pid,
+            "host": host,
+            "local": local,
+            **_run_context(run_dir, info),
+        })
     return out
 
 

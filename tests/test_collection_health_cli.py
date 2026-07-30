@@ -61,3 +61,31 @@ def test_cli_lists_surface_health_warnings_in_human_and_json_output(
         captured = capsys.readouterr()
         payload = json.loads(captured.out)
         assert any(expected in warning for warning in payload["warnings"])
+
+
+def test_agent_inbox_health_counts_only_items_the_session_can_list(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    root = _workspace(tmp_path)
+    for index in range(10):
+        main([
+            "--root", str(root), "inbox", "add", "--kind", "memory",
+            "--body", f"Visible memory {index}\n\nDurable detail.",
+        ])
+    main([
+        "--root", str(root), "inbox", "add", "--kind", "memory", "--to", "human",
+        "--body", "Human-only memory\n\nThis is outside the agent's actionable queue.",
+    ])
+    capsys.readouterr()
+
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    monkeypatch.setenv("ARCHON_HORIZON_SESSION", "0001-horizon-T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0001")
+    monkeypatch.setenv("ARCHON_HORIZON_PROJECTS", "p")
+
+    assert main(["--root", str(root), "inbox", "list", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload["items"]) == 10
+    assert payload["attention"]["advisory_unread_count"] == 10
+    assert not any("open memory items" in warning for warning in payload["warnings"])

@@ -44,6 +44,14 @@ class FreezeRule:
 
 
 @dataclass(frozen=True, slots=True)
+class FreezeViolation:
+    """One concrete write target and the freeze rule that matched it."""
+
+    target: str
+    rule: FreezeRule
+
+
+@dataclass(frozen=True, slots=True)
 class FreezeSet:
     rules: tuple[FreezeRule, ...] = ()
 
@@ -85,8 +93,10 @@ class FreezeSet:
         return None
 
 
-def frozen_violations(write_set: WriteSet, freeze: FreezeSet) -> tuple[FreezeRule, ...]:
-    """Return the freeze rules a write set would violate (empty == allowed).
+def freeze_violation_details(
+    write_set: WriteSet, freeze: FreezeSet
+) -> tuple[FreezeViolation, ...]:
+    """Return each concrete write target together with its matching rule.
 
     A workspace-level freeze blocks any write. Otherwise each declared
     project, file, Lean declaration, and blueprint node is checked against
@@ -100,29 +110,34 @@ def frozen_violations(write_set: WriteSet, freeze: FreezeSet) -> tuple[FreezeRul
         or bool(write_set.blueprint_nodes)
     )
 
-    violations: list[FreezeRule] = []
+    violations: list[FreezeViolation] = []
     workspace_rule = freeze.workspace_rule()
     if workspace_rule is not None and touches_anything:
-        violations.append(workspace_rule)
+        violations.append(FreezeViolation(target="workspace", rule=workspace_rule))
 
     for project in write_set.projects:
         rule = freeze.project_rule(project)
         if rule is not None:
-            violations.append(rule)
+            violations.append(FreezeViolation(target=project, rule=rule))
 
     for file in write_set.files:
         rule = freeze.file_rule(file)
         if rule is not None:
-            violations.append(rule)
+            violations.append(FreezeViolation(target=file, rule=rule))
 
     for declaration in write_set.declarations:
         rule = freeze.declaration_rule(declaration)
         if rule is not None:
-            violations.append(rule)
+            violations.append(FreezeViolation(target=declaration, rule=rule))
 
     for node in write_set.blueprint_nodes:
         rule = freeze.blueprint_node_rule(node)
         if rule is not None:
-            violations.append(rule)
+            violations.append(FreezeViolation(target=node, rule=rule))
 
     return tuple(violations)
+
+
+def frozen_violations(write_set: WriteSet, freeze: FreezeSet) -> tuple[FreezeRule, ...]:
+    """Return matching freeze rules (empty means the write set is allowed)."""
+    return tuple(violation.rule for violation in freeze_violation_details(write_set, freeze))

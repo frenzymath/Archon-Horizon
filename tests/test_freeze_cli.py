@@ -9,7 +9,7 @@ import yaml
 
 from archon_horizon.cli import main
 from archon_horizon.config.loader import build_freeze, load_config
-from archon_horizon.core.freeze import frozen_violations
+from archon_horizon.core.freeze import freeze_violation_details, frozen_violations
 from archon_horizon.core.tasks import WriteSet
 
 
@@ -40,6 +40,13 @@ def test_freeze_add_list_remove_roundtrip(tmp_path: Path, capsys) -> None:
         freeze,
     )
     assert {rule.pattern for rule in violations} == {"Demo/API.lean", "Demo.api", "thm:api"}
+    details = freeze_violation_details(
+        WriteSet(files=("Demo/API.lean",), declarations=("Demo.api",)), freeze
+    )
+    assert {(detail.target, detail.rule.metadata["config_key"]) for detail in details} == {
+        ("Demo/API.lean", "freeze.files"),
+        ("Demo.api", "freeze.declarations"),
+    }
 
     capsys.readouterr()
     assert main(["--root", str(root), "freeze", "list", "--json"]) == 0
