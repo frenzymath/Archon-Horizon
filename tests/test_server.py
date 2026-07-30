@@ -15,7 +15,12 @@ from archon_horizon.cli import main
 from archon_horizon.commands.dashboard import resolve_dashboard_host
 from archon_horizon.commands.run import RunCommand
 from archon_horizon.runlog import RunLogTree
-from archon_horizon.server.app import create_server, create_server_with_fallback, dashboard_url
+from archon_horizon.server.app import (
+    create_server,
+    create_server_with_fallback,
+    dashboard_policy_rows,
+    dashboard_url,
+)
 from archon_horizon.server.service import WorkspaceService
 from archon_horizon.transcript.model import TranscriptEvent, TranscriptKind
 from archon_horizon.transcript.sink import JsonlTranscriptSink
@@ -39,6 +44,39 @@ def test_service_state_and_inbox_edit(tmp_path: Path) -> None:
     )
     assert created["created"] == "I-0001"
     assert len(service.state()["local_inbox"]) == 1
+
+    conversation = service.edit_inbox(
+        "add", kind="hint", title="coordinate", comment="split the proof",
+        author="human", audience="task:T-1, task:T-2", conversation=True,
+    )
+    thread = next(
+        item for item in service.state()["local_inbox"]
+        if item["id"] == conversation["created"]
+    )
+    assert thread["author"] == "human"
+    assert thread["audience"] == "task:T-1, task:T-2"
+    assert thread["kind"] == "conversation"
+    assert thread["metadata"]["conversation"] is True
+    assert thread["metadata"]["participants"] == ["task:T-1", "task:T-2", "human"]
+    assert thread["metadata"]["started_by"] == "human"
+
+    # A team reply makes the human initiator unread; expanding the dashboard
+    # thread calls the read action and acknowledges it again.
+    service.local.add_comment(
+        conversation["created"], "Team reply", author="horizon",
+        metadata={"provenance": {"task": "T-1", "run": "0002"}},
+    )
+    thread = next(
+        item for item in service.state()["local_inbox"]
+        if item["id"] == conversation["created"]
+    )
+    assert thread["metadata"]["read_by"] == ["T-1"]
+    service.edit_inbox("read", id=conversation["created"], author="human", reader="human")
+    thread = next(
+        item for item in service.state()["local_inbox"]
+        if item["id"] == conversation["created"]
+    )
+    assert set(thread["metadata"]["read_by"]) == {"T-1", "human"}
 
     service.edit_inbox("complete", id="I-0001", author="ground")
     item = service.state()["local_inbox"][0]
@@ -86,6 +124,35 @@ def test_service_state_and_inbox_edit(tmp_path: Path) -> None:
     assert {"created", "status"} <= fields
 
 
+def test_project_overview_index_does_not_scan_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _workspace(tmp_path)
+    service = WorkspaceService(ws)
+    project = ws / "demo"
+    project.mkdir()
+    (project / "Demo.lean").write_text("theorem demo : True := by\n  sorry\n", encoding="utf-8")
+    monkeypatch.setattr(service, "_discover_projects", lambda: ["demo"])
+    monkeypatch.setattr(service, "_project_path", lambda name: project)
+
+    # The table shell is configuration-only; source scanning happens through a
+    # separate row endpoint so a large project cannot delay every row.
+    monkeypatch.setattr("archon_horizon.server.service.list_lean_files", lambda path: (_ for _ in ()).throw(AssertionError("source scan")))
+    assert service.serve_endpoint("/api/projects") == {
+        "projects": [{"name": "demo", "depends_on": []}],
+    }
+
+    monkeypatch.undo()
+    service = WorkspaceService(ws)
+    monkeypatch.setattr(service, "_discover_projects", lambda: ["demo"])
+    monkeypatch.setattr(service, "_project_path", lambda name: project)
+    assert service.serve_endpoint("/api/project/metrics?project=demo") == {
+        "name": "demo",
+        "lean_files": 1,
+        "loc": 2,
+        "loc_code": 2,
+        "sorries": 1,
+    }
+
+
 def test_task_done_records_history_and_syncs_roadmap(tmp_path: Path) -> None:
     ws = _workspace(tmp_path)
     service = WorkspaceService(ws)
@@ -117,6 +184,139 @@ def test_task_done_records_history_and_syncs_roadmap(tmp_path: Path) -> None:
         for h in item["metadata"]["history"]
     )
     assert any("sync-task" in c["body"] and "`done`" in c["body"] for c in item["metadata"]["comments"])
+
+
+def test_dashboard_roadmap_crud_and_hierarchy_validation(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    service = WorkspaceService(ws)
+
+    service.edit_roadmap(
+        "add",
+        id="R-parent",
+        title="Parent goal",
+        projects=["ag-main"],
+        author="ground",
+    )
+    created = service.edit_roadmap(
+        "add",
+        id="R-child",
+        title="Child goal",
+        summary="Initial plan",
+        projects=["ag-main", "shared"],
+        author="human",
+        status="pending",
+        kind="blueprint",
+        priority="high",
+        parent="R-parent",
+        owner="proof-team",
+        milestone="w4-gate",
+        depends_on=["R-prereq"],
+        inbox_refs=["I-0001"],
+        task_refs=["prove-child"],
+        pinned_commits=["abc123"],
+    )
+    assert created == {"ok": True, "id": "R-child"}
+    item = next(i for i in service.state()["roadmap"]["items"] if i["id"] == "R-child")
+    assert item["projects"] == ["ag-main", "shared"]
+    assert item["status"] == "pending"
+    assert item["kind"] == "blueprint"
+    assert item["priority"] == "high"
+    assert item["depends_on"] == ["R-prereq"]
+    assert item["inbox_refs"] == ["I-0001"]
+    assert item["task_refs"] == ["prove-child"]
+    assert item["metadata"]["parent"] == "R-parent"
+    assert item["metadata"]["owner"] == "proof-team"
+    assert item["metadata"]["milestone"] == "w4-gate"
+    assert item["metadata"]["pinned_commits"] == ["abc123"]
+
+    service.edit_roadmap(
+        "edit",
+        id="R-child",
+        title="Revised child",
+        projects=["shared"],
+        author="human",
+        status="active",
+        kind="proof",
+        priority="urgent",
+        parent="",
+        owner="",
+        milestone="",
+        depends_on=[],
+        inbox_refs=[],
+        task_refs=[],
+        pinned_commits=[],
+    )
+    item = next(i for i in service.state()["roadmap"]["items"] if i["id"] == "R-child")
+    assert item["title"] == "Revised child"
+    assert item["projects"] == ["shared"]
+    assert item["status"] == "active"
+    assert item["priority"] == "urgent"
+    assert "parent" not in item["metadata"]
+    assert "owner" not in item["metadata"]
+    assert "milestone" not in item["metadata"]
+    assert "pinned_commits" not in item["metadata"]
+    assert item["metadata"]["author"] == "human"
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.edit_roadmap(
+            "add", id="R-child", title="Duplicate", projects=["shared"], author="human"
+        )
+    with pytest.raises(ValueError, match="item id"):
+        service.edit_roadmap(
+            "add", id="../outside", title="Unsafe", projects=["shared"], author="human"
+        )
+    with pytest.raises(ValueError, match="does not exist"):
+        service.edit_roadmap("edit", id="R-child", parent="R-missing", author="human")
+    service.edit_roadmap("edit", id="R-child", parent="R-parent", author="human")
+    with pytest.raises(ValueError, match="cycle"):
+        service.edit_roadmap("edit", id="R-parent", parent="R-child", author="human")
+
+    service.edit_roadmap("delete", id="R-child", author="human")
+    assert all(i["id"] != "R-child" for i in service.state()["roadmap"]["items"])
+
+
+def test_dashboard_roadmap_generated_ids_fill_gaps(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    service = WorkspaceService(ws)
+    for item_id in ("R-0001", "R-0003"):
+        service.edit_roadmap(
+            "add", id=item_id, title=item_id, projects=["ag-main"], author="human"
+        )
+    assert service.edit_roadmap(
+        "add", title="Generated", projects=["ag-main"], author="human"
+    )["id"] == "R-0002"
+
+
+def test_roadmap_activity_rolls_up_linked_tasks_and_children(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    service = WorkspaceService(ws)
+    service.edit_roadmap(
+        "add", id="R-parent", title="Parent", projects=["ag-main"], author="human"
+    )
+    service.edit_roadmap(
+        "add", id="R-child", title="Child", projects=["ag-main"],
+        parent="R-parent", author="human",
+    )
+    service.edit_task(
+        "add", id="child-task", title="Child task", projects=["ag-main"],
+        roadmap_refs=["R-child"], author="human",
+    )
+    service.edit_task(
+        "comment", id="child-task", body="The task has new evidence.", author="horizon"
+    )
+
+    state = service.state()
+    task = next(row for row in state["tasks"] if row["id"] == "child-task")
+    task_comment_at = task["metadata"]["comments"][-1]["at"]
+    child = next(row for row in state["roadmap"]["items"] if row["id"] == "R-child")
+    parent = next(row for row in state["roadmap"]["items"] if row["id"] == "R-parent")
+
+    assert child["activity"]["updated_at"] == task_comment_at
+    assert child["activity"]["task_count"] == 1
+    assert child["activity"]["updated_from_tasks"] is True
+    assert parent["activity"]["updated_at"] == task_comment_at
+    assert parent["activity"]["task_count"] == 1
+    assert parent["activity"]["updated_from_descendants"] is True
 
 
 def test_http_endpoints(tmp_path: Path) -> None:
@@ -155,6 +355,48 @@ def test_http_endpoints(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_mutating_endpoints_refuse_cross_origin_writes(tmp_path: Path) -> None:
+    """The POST endpoints mutate the workspace with no credentials, so a foreign
+    Origin must be refused.
+
+    A ``text/plain`` body is a CORS "simple request": a browser sends it
+    cross-origin with no preflight, so without this guard any page the user has
+    open can write to the inbox — which agents then read as instructions.
+    """
+    ws = _workspace(tmp_path)
+    server = create_server(ws, "127.0.0.1", 0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post_inbox(title: str, origin: str | None) -> int:
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        headers = {"Content-Type": "text/plain"}
+        if origin is not None:
+            headers["Origin"] = origin
+        body = json.dumps(
+            {"action": "add", "kind": "hint", "title": title, "comment": "why", "author": "ground"}
+        )
+        conn.request("POST", "/api/inbox", body, headers)
+        return conn.getresponse().status
+
+    try:
+        assert post_inbox("evil", "https://evil.example") == 403
+        assert post_inbox("wrong-port", "http://127.0.0.1:1") == 403
+        assert post_inbox("opaque", "null") == 403
+        # The dashboard's own fetches, and non-browser clients, still work.
+        assert post_inbox("same-origin", f"http://127.0.0.1:{port}") == 200
+        assert post_inbox("no-origin", None) == 200
+
+        service = WorkspaceService(ws)
+        # The API's `title` becomes the first line of the item body.
+        titles = {item["body"].splitlines()[0] for item in service.state()["local_inbox"]}
+        assert titles == {"same-origin", "no-origin"}  # no refused write landed
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_dashboard_public_host_resolution() -> None:
     assert resolve_dashboard_host("127.0.0.1") == "127.0.0.1"
     assert resolve_dashboard_host("0.0.0.0") == "0.0.0.0"
@@ -169,6 +411,35 @@ def test_dashboard_url_uses_browser_reachable_hosts() -> None:
     assert dashboard_url("0.0.0.0", 8765) == "http://localhost:8765"
     assert dashboard_url("::", 8765) == "http://[::1]:8765"
     assert dashboard_url("::1", 8765) == "http://[::1]:8765"
+
+
+def test_dashboard_policy_rows_show_all_configured_freezes(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "config.yaml").write_text(
+        """workspace:
+  name: policy-test
+  scheduler: {max_parallel_sessions: 3}
+projects:
+  demo:
+    path: projects/demo
+    freeze:
+      files: [Demo/Frozen.lean]
+      declarations: [Demo.fixed]
+freeze:
+  agents: [horizon]
+  projects: [LeeSmooth]
+  files: [Shared/*.lean]
+  blueprint_nodes: [thm:locked]
+""",
+        "utf-8",
+    )
+    rows = dashboard_policy_rows(WorkspaceService(ws))
+    assert rows == {
+        "Frozen projects": "LeeSmooth",
+        "Other freezes": "agents: horizon · files: 2 · declarations: 1 · blueprint nodes: 1",
+        "Max parallel": "3",
+    }
 
 
 def test_run_command_starts_dashboard_server_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -306,6 +577,31 @@ def test_recently_active_running_session_stays_running(tmp_path: Path) -> None:
     sink.emit(TranscriptEvent(TranscriptKind.TEXT, text="just now"))
 
     assert WorkspaceService(ws).state()["runs"][0]["sessions"][0]["status"] == "running"
+
+
+def test_live_process_marker_keeps_quiet_interactive_session_running(tmp_path: Path) -> None:
+    """A human can leave a bare TUI quiet for more than the recency window; its
+    live process marker is authoritative until that TUI exits."""
+    import json
+    import os
+    import socket
+    from datetime import timedelta
+    from archon_horizon.core.clock import utc_now
+
+    ws = _workspace(tmp_path)
+    run = RunLogTree(ws / ".archon-horizon" / "runs").allocate()
+    session = run.new_session("horizon-interactive")
+    sink = JsonlTranscriptSink(session.transcript_path)
+    old = utc_now() - timedelta(hours=1)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_START, at=old, data={"role": "horizon"}))
+    sink.emit(TranscriptEvent(TranscriptKind.TEXT, at=old, text="waiting for the human"))
+    (run.path / "process.json").write_text(json.dumps({
+        "pid": os.getpid(), "host": socket.gethostname(), "started_at": old.isoformat(),
+    }), "utf-8")
+
+    state = WorkspaceService(ws).state()["runs"][0]
+    assert state["status"] == "running"
+    assert state["sessions"][0]["status"] == "running"
 
 
 def test_stopped_run_marks_recent_running_session_interrupted(tmp_path: Path) -> None:
