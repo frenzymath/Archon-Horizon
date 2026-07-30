@@ -29,7 +29,7 @@ from archon_horizon.core.scope import ItemScope
 from archon_horizon.log import log
 from archon_horizon.store import serde
 
-from .shared import agent_author, emit_json, history_entry as _history_entry, load_workspace, provenance_project, roadmap_store, with_provenance
+from .shared import agent_author, emit_json, ensure_concise_agent_message, history_entry as _history_entry, load_workspace, provenance_project, roadmap_store, with_provenance
 
 app = typer.Typer(help="Read and update the roadmap.", no_args_is_help=True)
 
@@ -347,7 +347,12 @@ def comment_item(
     if not any(it.id == item_id for it in store.load().items):
         log.error(f"No roadmap item {item_id!r}.")
         raise typer.Exit(1)
-    store.add_comment(item_id, body, author or agent_author(), with_provenance())
+    actor = author or agent_author()
+    try:
+        ensure_concise_agent_message(body, "roadmap comment", author=actor)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    store.add_comment(item_id, body, actor, with_provenance())
     items = store.load().items
     if as_json:
         warnings = _roadmap_warnings(items)

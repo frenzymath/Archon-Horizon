@@ -28,7 +28,7 @@ from archon_horizon.core.tasks import HorizonTask, TaskStatus, WriteSet
 from archon_horizon.store import serde
 from archon_horizon.log import log
 
-from .shared import agent_author, emit_json, history_entry, load_workspace, provenance_project, roadmap_store, task_store, with_provenance
+from .shared import agent_author, emit_json, ensure_concise_agent_message, history_entry, load_workspace, provenance_project, roadmap_store, task_store, with_provenance
 
 app = typer.Typer(help="Read and update Horizon tasks (safe YAML writes).", no_args_is_help=True)
 
@@ -64,6 +64,10 @@ def _task_dict(task: HorizonTask) -> dict:
         "scope": serde.to_jsonable(task.scope),
         "roadmap_refs": list(task.roadmap_refs),
         "inbox_refs": list(task.inbox_refs),
+        # Mirror `inbox show --json`, which returns comments: a lane that leaves a
+        # task comment and reads it back must see it, rather than concluding the
+        # write failed because the key was absent (I-0618).
+        "comments": list(task.metadata.get("comments", [])),
     }
 
 
@@ -109,7 +113,15 @@ def show_task(ctx: typer.Context, task_id: str = typer.Argument(...), as_json: b
     if as_json:
         emit_json({**_task_dict(task), **({"warnings": warnings} if warnings else {})})
         return
-    log.info(str(_task_dict(task)))
+    data = _task_dict(task)
+    comments = data.pop("comments", [])
+    log.info(str(data))
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        author = str(comment.get("author") or "local")
+        at = str(comment.get("at") or "")
+        log.panel(str(comment.get("body") or ""), title=f"{author} {at}".strip())
     _warn_tasks(store.list())
 
 
@@ -275,7 +287,12 @@ def comment_task(
     except Exception:
         log.error(f"No task {task_id!r}.")
         raise typer.Exit(1)
-    store.add_comment(task_id, body, author or agent_author(), with_provenance())
+    actor = author or agent_author()
+    try:
+        ensure_concise_agent_message(body, "task comment", author=actor)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    store.add_comment(task_id, body, actor, with_provenance())
     tasks = store.list()
     if as_json:
         emit_json(_with_task_warnings({"id": task_id, "commented": True}, tasks))

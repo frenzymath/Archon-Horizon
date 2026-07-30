@@ -144,10 +144,18 @@ def _inbox_kind(value: Any) -> InboxKind:
 
 def inbox_item_from_dict(data: dict[str, Any]) -> InboxItem:
     scope = scope_from_dict(data.get("scope") or {})
+    metadata = dict(data.get("metadata", {}))
+    kind = _inbox_kind(data["kind"])
+    # Read-time migration: threads created before `conversation` became a kind
+    # retain their routing metadata but now participate in first-class filters
+    # and priority ordering. Older Horizon versions still fall back safely to a
+    # hint when they encounter the new value on disk.
+    if metadata.get("conversation"):
+        kind = InboxKind.CONVERSATION
     return InboxItem(
         id=data["id"],
         provider=data["provider"],
-        kind=_inbox_kind(data["kind"]),
+        kind=kind,
         body=data["body"],
         labels=tuple(data.get("labels", ())),
         status=_inbox_status(data.get("status", InboxStatus.OPEN)),
@@ -157,7 +165,7 @@ def inbox_item_from_dict(data: dict[str, Any]) -> InboxItem:
         source_ref=data.get("source_ref"),
         created_at=_dt(data["created_at"]),
         updated_at=_dt(data["updated_at"]),
-        metadata=dict(data.get("metadata", {})),
+        metadata=metadata,
     )
 
 

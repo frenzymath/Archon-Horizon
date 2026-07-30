@@ -20,12 +20,15 @@ from .interactive import discuss_prompt, interactive_launch_for_role, run_intera
 
 
 def discuss(ctx: typer.Context) -> None:
-    """Open an interactive session to talk with the workspace (status, changes)."""
+    """Open the human-approved workspace coordination console."""
     root: Path = ctx.obj["root"]
     log.header("Discuss")
     prompt = discuss_prompt(root.resolve())
     try:
-        launch = interactive_launch_for_role(root, "horizon", prompt)
+        # discuss is a human-driven advisor: launch WITHOUT the Horizon inbox
+        # attention hooks, which inject per-tool inbox context meant for
+        # autonomous runs and would interrupt a back-and-forth conversation.
+        launch = interactive_launch_for_role(root, "horizon", prompt, attention_hooks=False)
     except Exception as exc:
         log.error(f"Could not launch the discuss agent: {exc}")
         raise typer.Exit(1)
