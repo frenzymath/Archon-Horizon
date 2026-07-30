@@ -48,14 +48,16 @@ def _argv_with_prompt(argv: list[str], prompt: str) -> list[str]:
 
 
 def build_interactive_launch(
-    harness, prompt: str, *, resume_session_id: str | None = None
+    harness, prompt: str, *, resume_session_id: str | None = None, attention_hooks: bool = True
 ) -> InteractiveLaunch | None:
     """Build an interactive launch from a resolved harness config.
 
     Returns ``None`` for the ``null`` harness (nothing to launch). Raises
     ``ValueError`` when the engine binary is missing or the kind has no
     interactive form. ``resume_session_id`` continues a prior engine conversation
-    (claude ``--resume``) instead of starting a fresh one."""
+    (claude ``--resume``) instead of starting a fresh one. ``attention_hooks=False``
+    launches without the Horizon inbox hooks — used by ``horizon discuss``, a
+    human-driven advisor where the per-tool inbox interrupts are unwanted."""
     from archon_horizon.config.harnesses import _env_overrides, _resolve_claude_provider
 
     env = dict(os.environ)
@@ -64,8 +66,8 @@ def build_interactive_launch(
     if harness.kind == "claude-code":
         from archon_horizon.config.harnesses import (
             _claude_effort_flag,
+            _claude_session_settings,
             _claude_thinking_budget,
-            _claude_ultracode,
             _config_dir,
         )
 
@@ -98,8 +100,9 @@ def build_interactive_launch(
         effort_flag = _claude_effort_flag(harness)
         if effort_flag:
             argv += ["--effort", effort_flag]
-        if _claude_ultracode(harness):
-            argv += ["--settings", json.dumps({"ultracode": True})]
+        claude_settings = _claude_session_settings(harness, attention_hooks=attention_hooks)
+        if claude_settings:
+            argv += ["--settings", claude_settings]
         # Honour the harness's permission-bypass setting (default True) like headless,
         # so a session configured to skip prompts isn't gated only when interactive.
         if bool(harness.options.get("skip_permissions", True)):
@@ -124,7 +127,11 @@ def build_interactive_launch(
         )
 
     if harness.kind == "codex":
-        from archon_horizon.config.harnesses import _config_dir, _effort_label
+        from archon_horizon.config.harnesses import (
+            _codex_attention_hook_args,
+            _config_dir,
+            _effort_label,
+        )
 
         # Same precedence as headless: overrides win over the ambient environment.
         overrides = dict(_env_overrides(harness))
@@ -135,6 +142,8 @@ def build_interactive_launch(
             overrides.setdefault("CODEX_HOME", config_dir)
         env.update(overrides)
         argv = ["codex"]
+        if attention_hooks:
+            argv += _codex_attention_hook_args(harness)
         if harness.model:
             argv += ["-m", harness.model]
         # Normalise effort exactly as headless: `_effort_label` drops sentinels like
@@ -182,14 +191,16 @@ def _harness_for_role(cfg, role: str):
 
 
 def interactive_launch_for_role(
-    root: Path, role: str, prompt: str, *, resume_session_id: str | None = None
+    root: Path, role: str, prompt: str, *, resume_session_id: str | None = None,
+    attention_hooks: bool = True,
 ) -> InteractiveLaunch | None:
     """Build an interactive launch from the harness backing ``role``."""
     from archon_horizon.config.loader import load_config
 
     cfg = load_config(root)
     return build_interactive_launch(
-        _harness_for_role(cfg, role), prompt, resume_session_id=resume_session_id
+        _harness_for_role(cfg, role), prompt, resume_session_id=resume_session_id,
+        attention_hooks=attention_hooks,
     )
 
 
@@ -216,6 +227,25 @@ def _claude_projects_dir(env: dict[str, str]) -> Path:
     return Path(base) / "projects"
 
 
+def claude_session_file(launch: InteractiveLaunch) -> Path | None:
+    """Locate a pinned Claude conversation in the configured session store.
+
+    Claude scopes ``--resume`` lookup to the process's working directory, while
+    Horizon's transcript tailer deliberately searches the whole config store.  A
+    caller can use this lookup both to preflight a resume and to tell whether a
+    failed resume changed the underlying conversation before retrying it fresh.
+    """
+    if launch.engine != "claude" or not launch.session_id:
+        return None
+    try:
+        matches = sorted(
+            _claude_projects_dir(launch.env).glob(f"**/{launch.session_id}.jsonl")
+        )
+    except OSError:
+        return None
+    return matches[0] if matches else None
+
+
 def _codex_sessions_dir(env: dict[str, str]) -> Path:
     home = env.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
     return Path(home) / "sessions"
@@ -234,7 +264,10 @@ class _InteractiveTailer(threading.Thread):
         super().__init__(name="horizon-interactive-tailer", daemon=True)
         self._launch = launch
         self._sink = sink
-        self._stop = threading.Event()
+        # NB: never name this ``_stop`` -- ``threading.Thread._stop`` is a real
+        # CPython method that ``Thread.join()`` calls internally, so shadowing it
+        # with an Event makes join() raise TypeError: 'Event' object is not callable.
+        self._stop_event = threading.Event()
         self._file: Path | None = None
         self._offset = 0
         self._leftover = b""
@@ -245,6 +278,10 @@ class _InteractiveTailer(threading.Thread):
         self._codex_parent_id: str | None = None
         self._codex_children: dict[str, dict[str, object]] = {}
         self._codex_child_scan_at = 0.0
+        self._claude_workflows: dict[str, dict[str, object]] = {}
+        self._claude_workflow_tasks: dict[str, str] = {}
+        self._claude_workflow_journals: dict[str, dict[str, object]] = {}
+        self._claude_workflow_scan_at = 0.0
         if launch.engine == "codex":
             try:
                 self._codex_seen = {p.as_posix() for p in _codex_sessions_dir(launch.env).glob("**/rollout-*.jsonl")}
@@ -254,8 +291,7 @@ class _InteractiveTailer(threading.Thread):
     def _locate(self) -> Path | None:
         try:
             if self._launch.engine == "claude" and self._launch.session_id:
-                matches = sorted(_claude_projects_dir(self._launch.env).glob(f"**/{self._launch.session_id}.jsonl"))
-                return matches[0] if matches else None
+                return claude_session_file(self._launch)
             if self._launch.engine == "codex":
                 fresh = [
                     p for p in _codex_sessions_dir(self._launch.env).glob("**/rollout-*.jsonl")
@@ -295,11 +331,214 @@ class _InteractiveTailer(threading.Thread):
                             if isinstance(native_id, str) and native_id:
                                 self._codex_parent_id = native_id
                     for event in self._parser(decoded):
+                        if self._launch.engine == "claude" and event.kind is TranscriptKind.WORKFLOW_PROGRESS:
+                            event = self._remember_claude_workflow(event)
                         self._sink.emit(event)
                 except Exception:
                     continue  # a single malformed line must never kill the tailer
         if self._launch.engine == "codex":
             self._drain_codex_child_lifecycles()
+        elif self._launch.engine == "claude":
+            self._drain_claude_workflows()
+
+    def _remember_claude_workflow(self, event: TranscriptEvent) -> TranscriptEvent:
+        """Join terminal task notifications back to their structured launch."""
+        data = dict(event.data)
+        task_id = data.get("task_id")
+        run_id = data.get("workflow_id") or data.get("run_id")
+        if not run_id and isinstance(task_id, str):
+            run_id = self._claude_workflow_tasks.get(task_id)
+        if isinstance(run_id, str) and run_id:
+            info = self._claude_workflows.setdefault(run_id, {})
+            # A terminal notification calls the workflow merely "Workflow";
+            # retain the proper name and short description from the launch row.
+            for key, value in info.items():
+                if key not in data or data[key] in (None, "", "Workflow"):
+                    data[key] = value
+            data["workflow_id"] = run_id
+            data["run_id"] = run_id
+            info.update({key: value for key, value in data.items() if value not in (None, "")})
+            if isinstance(task_id, str) and task_id:
+                self._claude_workflow_tasks[task_id] = run_id
+        return dataclasses.replace(event, data=data)
+
+    @staticmethod
+    def _workflow_agent_metrics(directory: Path, state: dict[str, object]) -> dict[str, object]:
+        """Incrementally read child logs and retain each agent's latest context size.
+
+        Claude's live workflow token number is the sum of the most recent usage
+        sample for each child, not the sum of every turn (which double-counts the
+        growing context). This also gives us timestamps when the journal itself
+        does not record them.
+        """
+        files = state.setdefault("agent_files", {})
+        if not isinstance(files, dict):
+            return {}
+        try:
+            paths = directory.glob("agent-*.jsonl")
+        except OSError:
+            return {}
+        for path in paths:
+            key = path.as_posix()
+            child = files.setdefault(key, {"offset": 0, "leftover": b"", "tokens": 0})
+            if not isinstance(child, dict):
+                continue
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(int(child.get("offset", 0)))
+                    chunk = handle.read()
+                    child["offset"] = handle.tell()
+            except (OSError, ValueError):
+                continue
+            if not chunk:
+                continue
+            leftover = child.get("leftover", b"")
+            buffer = (leftover if isinstance(leftover, bytes) else b"") + chunk
+            lines = buffer.split(b"\n")
+            child["leftover"] = lines.pop()
+            for raw in lines:
+                if not raw.strip():
+                    continue
+                try:
+                    obj = json.loads(raw.decode("utf-8", "replace"))
+                except (ValueError, TypeError):
+                    continue
+                stamp = obj.get("timestamp") if isinstance(obj, dict) else None
+                if isinstance(stamp, str) and stamp:
+                    child.setdefault("started_at", stamp)
+                    child["last_at"] = stamp
+                message = obj.get("message", {}) if isinstance(obj, dict) else {}
+                usage = message.get("usage", {}) if isinstance(message, dict) else {}
+                if isinstance(usage, dict) and usage:
+                    tokens = 0
+                    for usage_key in (
+                        "input_tokens", "cache_creation_input_tokens",
+                        "cache_read_input_tokens", "output_tokens",
+                    ):
+                        try:
+                            tokens += int(usage.get(usage_key) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                    child["tokens"] = tokens
+        children = [child for child in files.values() if isinstance(child, dict)]
+        starts = [str(child["started_at"]) for child in children if child.get("started_at")]
+        lasts = [str(child["last_at"]) for child in children if child.get("last_at")]
+        metrics: dict[str, object] = {
+            "subagent_tokens": sum(int(child.get("tokens", 0)) for child in children),
+        }
+        if starts:
+            metrics["started_at"] = min(starts)
+        if lasts:
+            metrics["last_at"] = max(lasts)
+        return metrics
+
+    def _drain_claude_workflows(self) -> None:
+        """Snapshot Claude Workflow journal counters into the parent transcript."""
+        if self._file is None:
+            return
+        now = time.monotonic()
+        if now >= self._claude_workflow_scan_at:
+            self._claude_workflow_scan_at = now + 2.0
+            root = self._file.with_suffix("") / "subagents" / "workflows"
+            try:
+                journals = root.glob("*/journal.jsonl")
+                for journal in journals:
+                    self._claude_workflow_journals.setdefault(journal.as_posix(), {
+                        "offset": 0, "leftover": b"", "started": set(), "done": set(),
+                        "last_emitted": None, "agent_files": {},
+                    })
+            except OSError:
+                pass
+        for key, state in self._claude_workflow_journals.items():
+            if not isinstance(state, dict):
+                continue
+            journal = Path(key)
+            try:
+                with journal.open("rb") as handle:
+                    handle.seek(int(state.get("offset", 0)))
+                    chunk = handle.read()
+                    state["offset"] = handle.tell()
+            except (OSError, ValueError):
+                continue
+            changed = False
+            if chunk:
+                leftover = state.get("leftover", b"")
+                buffer = (leftover if isinstance(leftover, bytes) else b"") + chunk
+                lines = buffer.split(b"\n")
+                state["leftover"] = lines.pop()
+                started = state.get("started")
+                done = state.get("done")
+                if not isinstance(started, set) or not isinstance(done, set):
+                    continue
+                for raw in lines:
+                    if not raw.strip():
+                        continue
+                    try:
+                        row = json.loads(raw.decode("utf-8", "replace"))
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    agent_id = row.get("agentId") or row.get("key")
+                    if not isinstance(agent_id, str) or not agent_id:
+                        continue
+                    if row.get("type") == "started":
+                        before = len(started)
+                        started.add(agent_id)
+                        changed = changed or len(started) != before
+                    elif row.get("type") == "result":
+                        before = len(done)
+                        done.add(agent_id)
+                        changed = changed or len(done) != before
+            if not changed:
+                continue
+            run_id = journal.parent.name
+            info = self._claude_workflows.setdefault(run_id, {})
+            metrics = self._workflow_agent_metrics(journal.parent, state)
+            started = state.get("started", set())
+            done = state.get("done", set())
+            total = len(started) if isinstance(started, set) else 0
+            completed = len(done) if isinstance(done, set) else 0
+            status = "completed" if total and completed >= total else "running"
+            if info.get("status") in {"completed", "failed", "error", "cancelled"}:
+                status = str(info["status"])
+            # Exact terminal metrics from the parent notification take precedence
+            # over values inferred from child logs.
+            attrs = {
+                **metrics,
+                **info,
+                "workflow_id": run_id,
+                "run_id": run_id,
+                "completed_agents": completed,
+                "total_agents": total,
+            }
+            if attrs.get("duration_seconds") is None and attrs.get("started_at"):
+                try:
+                    started_at = datetime.fromisoformat(str(attrs["started_at"]).replace("Z", "+00:00"))
+                    endpoint = datetime.now(started_at.tzinfo)
+                    if status == "completed" and attrs.get("last_at"):
+                        endpoint = datetime.fromisoformat(str(attrs["last_at"]).replace("Z", "+00:00"))
+                    attrs["duration_seconds"] = max(0, (endpoint - started_at).total_seconds())
+                except ValueError:
+                    pass
+            signature = (
+                completed, total, status, attrs.get("subagent_tokens"),
+                attrs.get("agents_error"), attrs.get("agents_skipped"),
+            )
+            if signature == state.get("last_emitted"):
+                continue
+            state["last_emitted"] = signature
+            self._sink.emit(TranscriptEvent(
+                TranscriptKind.WORKFLOW_PROGRESS,
+                text=f"{attrs.get('name') or run_id}: {completed}/{total} agents done",
+                data={
+                    "lifecycle": "workflow",
+                    "engine": "claude",
+                    "name": attrs.get("name") or run_id,
+                    **{k: v for k, v in attrs.items() if v is not None and v != ""},
+                    "status": status,
+                },
+            ))
 
     def _drain_codex_child_lifecycles(self) -> None:
         """Surface direct Codex child ``task_complete`` events in the parent log.
@@ -440,11 +679,11 @@ class _InteractiveTailer(threading.Thread):
     def run(self) -> None:
         if self._parser is None:
             return  # generic engine: nothing to parse
-        while not self._stop.wait(_TAIL_POLL_LOCATE_S):
+        while not self._stop_event.wait(_TAIL_POLL_LOCATE_S):
             self._file = self._locate()
             if self._file is not None:
                 break
-        while not self._stop.wait(_TAIL_POLL_DRAIN_S):
+        while not self._stop_event.wait(_TAIL_POLL_DRAIN_S):
             self._drain()
 
     def stop(self) -> None:
@@ -452,7 +691,8 @@ class _InteractiveTailer(threading.Thread):
         # captured (the drain loop may have exited between the final write and now).
         if self._file is None:
             self._file = self._locate()
-        self._stop.set()
+        self._claude_workflow_scan_at = 0.0
+        self._stop_event.set()
         self.join(timeout=2.0)
         self._drain()
 
@@ -523,8 +763,22 @@ Rules of engagement:
 - Only *modify* anything when the human explicitly asks. Otherwise explain,
   propose, and wait.
 - Be concrete: cite exact files, task ids, and commands.
-- Start by briefly greeting the human with a short status summary (recent runs,
-  open tasks/inbox), then ask what they'd like to do."""
+- Act as the workspace's coordination console when asked: inspect `horizon ps`,
+  running tasks, roadmap milestones, and inbox conversations; help split work,
+  start conversations between teams, and propose task/run launches.
+- Treat inbox attention lanes distinctly: active protections are required
+  constraints; unread conversations are direct requests to open and acknowledge
+  promptly; hints/issues/info/memory are advisory context.
+- Creating tasks or launching runs/processes spends the human's resources. Read
+  `horizon permissions --json` first. Act only when the human explicitly approves
+  the concrete launch in this conversation or standing delegation permission
+  allows it, and stay within `max_parallel_sessions`. Never hide a launch.
+- A tmux/background launch is allowed only after that consent: state the exact
+  command, task, harness/account, and expected parallel-session count, then report
+  the resulting run id so the human can monitor or stop it with `horizon ps`.
+- Start by briefly greeting the human with a short status summary (recent and
+  running teams, open tasks, inbox conversations), then ask what they'd like to
+  coordinate."""
 
 
 def discuss_prompt(root: Path) -> str:
@@ -548,6 +802,12 @@ def horizon_seed_prompt(
         "",
         "Load the **`horizon`** skill — it explains where the state lives, the tools, "
         "and the conventions for this workspace. Do that first.",
+        "",
+        "Before modifying files, inspect active protections with `\"$HORIZON_BIN\" "
+        "inbox list --mine --status open --kind protection --json`, then open unread "
+        "conversations with `\"$HORIZON_BIN\" inbox list --mine --unread --kind "
+        "conversation --json`. Protections remain required after being read; "
+        "conversations take precedence over advisory inbox material.",
     ]
     items = ", ".join(f"`{f}`" for f in focus)
     if resuming:
@@ -556,9 +816,13 @@ def horizon_seed_prompt(
             "",
             f"You are RESUMING an earlier interactive session{target}. If that "
             "conversation is already in context, pick up where you left off; "
-            "otherwise orient from the workspace state (recent ledger history and "
-            "the previous session's report, as the skill describes). Briefly say "
-            "where things stand and what you propose next.",
+            "otherwise this is a fresh engine conversation attached to the same "
+            "Horizon run. In either case, use the `horizon-start` guidance and "
+            "inspect the earlier sibling sessions under "
+            "`$ARCHON_HORIZON_SESSION_DIR/..`: read their `meta.json` and latest "
+            "`report.md`, and inspect the tail of a transcript when its report is "
+            "missing. Reconcile that with recent ledger history before proceeding. "
+            "Briefly say where things stand and what you propose next.",
         ]
     elif focus:
         lines += [
