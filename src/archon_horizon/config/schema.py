@@ -15,6 +15,13 @@ from typing import Any
 from archon_horizon.core.types import Metadata
 
 
+class ConfigError(ValueError):
+    """A ``config.yaml`` is malformed in a way the user must fix.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` call sites keep
+    working; the CLI catches it to print the message instead of a traceback.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class HarnessConfig:
@@ -27,9 +34,28 @@ class HarnessConfig:
 
     @classmethod
     def from_raw(cls, name: str, data: dict[str, Any]) -> "HarnessConfig":
+        # ``kind`` is the one required key. Validate it here so a malformed
+        # config yields an actionable message on *every* command instead of a
+        # KeyError traceback (missing) or a late UnknownHarnessKind deep in the
+        # registry (unquoted YAML ``null``, which parses as None -- exactly what
+        # copying the documented ``kind: null`` example produces).
+        if "kind" not in data:
+            raise ConfigError(
+                f"harness {name!r} is missing the required 'kind' key "
+                "(expected one of: claude-code, codex, command, external-agent, \"null\")"
+            )
+        raw_kind = data["kind"]
+        if raw_kind is None:
+            raise ConfigError(
+                f"harness {name!r} has kind: null, which YAML parses as an empty value. "
+                'Quote it as kind: "null" to select the in-process null harness.'
+            )
+        kind = str(raw_kind).strip()
+        if not kind:
+            raise ConfigError(f"harness {name!r} has an empty 'kind'")
         return cls(
             name=name,
-            kind=data["kind"],
+            kind=kind,
             command=data.get("command"),
             args=tuple(data.get("args", ())),
             model=data.get("model"),

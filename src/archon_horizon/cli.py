@@ -17,6 +17,7 @@ from typer.main import get_command
 
 from archon_horizon import __version__
 from archon_horizon.commands import blueprint as blueprint_cmd
+from archon_horizon.commands import agent_hook as agent_hook_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
 from archon_horizon.commands import freeze as freeze_cmd
@@ -36,6 +37,7 @@ from archon_horizon.commands import skills as skills_cmd
 from archon_horizon.commands import sync as sync_cmd
 from archon_horizon.commands import update as update_cmd
 from archon_horizon.commands import usage as usage_cmd
+from archon_horizon.config.schema import ConfigError
 from archon_horizon.log import log
 
 
@@ -158,6 +160,7 @@ app.command("permissions")(permissions_cmd.permissions)
 app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)
 app.command("subagent", hidden=True)(subagent_cmd.subagent)
+app.command("agent-hook", hidden=True)(agent_hook_cmd.agent_hook)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -189,6 +192,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except FileNotFoundError as exc:
         # Almost always "not a workspace / missing config" — surface the
         # actionable message cleanly instead of dumping a traceback.
+        log.error(str(exc))
+        return 1
+    except ConfigError as exc:
+        # A malformed config.yaml is user error, not a crash: print the
+        # actionable message rather than a traceback.
         log.error(str(exc))
         return 1
     except Exception as exc:

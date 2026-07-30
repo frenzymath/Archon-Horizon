@@ -119,7 +119,7 @@ A harness is a named execution engine. The workspace selects one for its Horizon
 ```yaml
 harnesses:
   horizon-default:
-    kind: "claude-code"         # claude-code | codex | command | null
+    kind: "claude-code"         # claude-code | codex | command | "null"
     model: claude-opus-4-8
   horizon-codex:
     kind: "codex"
@@ -130,12 +130,19 @@ harnesses:
 
 | Key | Purpose |
 | :--- | :--- |
-| `kind` | Engine type: `claude-code`, `codex`, a custom `command` (alias `external-agent`), or `null` (in-process, for tests). |
+| `kind` | Engine type: `claude-code`, `codex`, a custom `command` (alias `external-agent`), or `"null"` (in-process, for tests). Quote the null harness — bare `null` is YAML's empty value, not the string, and is rejected. |
 | `model` | Primary model for the Horizon session. Helpers inherit by default; the Horizon agent chooses any per-dispatch override through the native engine. |
 | `command` / `args` | For `kind: command`, the external CLI to launch and its arguments. |
 | `options` | Backend-specific options — e.g. `effort` for Codex, or `config_dir` to pin auth/session home (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). |
 | `options.max_retries` | Transient API errors (rate limit, overload, 5xx, network) are retried with exponential backoff. Default `2` (i.e. 3 attempts); set `0` to disable. A usage/billing limit is never retried — it's labelled and surfaced. |
 | `options.retry_base_seconds` | Base backoff delay in seconds for the retry above (default `8`; doubles each attempt). |
+| `options.inbox_hooks` | Model-visible protection/conversation checkpoints for Claude Code and Codex (default `true`). Horizon injects new messages after the next tool boundary, reminds every five tool calls while attention remains open, pauses a commit for an unread direct conversation, and continues `Stop` once if one remains unread. Set `false` for an older or policy-locked engine. |
+
+Codex requires command hooks to be reviewed or explicitly trusted. Horizon's
+hook definition is a constant supplied on the engine command line, so
+Horizon-launched Codex sessions use Codex's one-invocation hook-trust bypass.
+That flag applies to other hooks enabled in the same Codex invocation too; use
+`options.inbox_hooks: false` when local policy requires manual hook review.
 
 > [!TIP]
 > Provider routing for Kimi / Moonshot, DeepSeek, and OpenRouter is configured through the harness `kind`/`model`/`options` here — see [`config/harnesses.py`](../../src/archon_horizon/config/harnesses.py). API keys go in the workspace-root `.env`, not `config.yaml`.
