@@ -51,7 +51,7 @@ The **Horizon Agent** owns the proof loop and decides when to dispatch helpers. 
 - **Parallel teams on a shared board.** Each `horizon run` is a team (a lead agent plus its subagent workers); parallel teams coordinate through shared state — a roadmap that doubles as a **project board** (owner, milestone labels, pinned commits, a live `/board` view), the inbox, and the commit ledger — rather than synchronous meetings. A stderr **synchronizer** keeps each agent aware of unread messages and other live runs, and launching work for *other* teams is gated by an opt-in `workspace.delegation` policy (default deny). → [Architecture](./docs/architecture/README.md)
 - **Blueprints & dependency graphs.** LaTeX-subset blueprints and Lean sources synchronize into a vendored, plain-files semantic graph. `horizon graph` exposes frontier, dependency, review, and comment operations; the dashboard renders a deterministic chapter-collapsed Graphviz view. → [Blueprints & semantic graphs](./docs/blueprints-and-graph/README.md)
 - **Dashboard & offline search.** A live web dashboard renders the DAG (KaTeX), run logs, and inbox, and can export a self-contained static snapshot for GitHub Pages. `horizon search` runs BM25, Loogle-style name, and signature-pattern search over `.lean` sources with no GPU, API key, or network. → [Dashboard & Search](./docs/dashboard-and-search/README.md)
-- **Public demo workspace.** A tiny two-chapter Lean/blueprint fixture ships outside the Python package with synthetic Claude Code and Codex runs, so the dashboard can be explored without credentials. → [Open the live demo](https://axeldlv00.github.io/Archon-Horizon/)
+- **Public demo workspace.** A tiny two-chapter Lean/blueprint fixture ships outside the Python package with synthetic Claude Code and Codex runs, so the dashboard can be explored without credentials. → [Open the live demo](https://frenzymath.github.io/Archon-Horizon/)
 
 *More depth on every topic — including the full [`config.yaml`](./docs/configuration/README.md) reference — lives in [`docs/`](./docs/README.md).*
 
@@ -93,7 +93,7 @@ horizon init
 
 ### Live Demo
 
-The [public demo](https://axeldlv00.github.io/Archon-Horizon/) is rebuilt by
+The [public demo](https://frenzymath.github.io/Archon-Horizon/) is rebuilt by
 GitHub Actions from [`demo/`](./demo/). It is intentionally small: two blueprint
 chapters, partial Lean coverage, one open issue, and two historical runs showing
 different engines and a Ground review checkpoint.
