@@ -3,7 +3,7 @@ title: Connected finite spaces
 projects:
 - MiniTopology
 summary: Characterize connectedness through clopen partitions.
-status: pending
+status: active
 kind: proof
 priority: normal
 depends_on:
@@ -19,3 +19,7 @@ metadata:
   author: human
   parent: M-FOUND
   created_at: '2026-07-18T08:00:00+00:00'
+  owner: horizon
+  milestone: Chapter 2 — Connectedness
+  pinned_commits:
+  - ddc78a297137a2f1bb529b3c406d9f8f3c6e9966

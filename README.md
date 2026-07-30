@@ -6,6 +6,7 @@
 
 *Workspace-first orchestration for long-horizon Lean 4 formalization agents*
 
+[![Live demo](https://img.shields.io/badge/live%20demo-open%20dashboard-brightgreen?logo=githubpages)](https://frenzymath.github.io/Archon-Horizon/)
 ![Version](https://img.shields.io/badge/version-0.1.2-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
@@ -96,7 +97,10 @@ horizon init
 The [public demo](https://frenzymath.github.io/Archon-Horizon/) is rebuilt by
 GitHub Actions from [`demo/`](./demo/). It is intentionally small: two blueprint
 chapters, partial Lean coverage, one open issue, and two historical runs showing
-different engines and a Ground review checkpoint.
+different engines and a Ground review checkpoint. The
+[`/board`](https://frenzymath.github.io/Archon-Horizon/#/board) view shows the
+roadmap as a project board — two milestones, owners, and commits pinned to the
+items they delivered.
 
 ### 3. Run
 

@@ -14,6 +14,21 @@ from pathlib import Path
 from archon_horizon.vcs.git import WorkspaceGit
 
 
+def _pin_commits(state: Path, pins: dict[str, list[str]]) -> None:
+    """Write ``pinned_commits`` into each roadmap item's metadata in place.
+
+    Rewrites only that one key so the rest of the checked-in fixture (ordering,
+    comments, formatting of other fields) is preserved as authored.
+    """
+    import yaml
+
+    for item_id, shas in pins.items():
+        path = state / "roadmap" / "items" / f"{item_id}.yaml"
+        data = yaml.safe_load(path.read_text("utf-8"))
+        data.setdefault("metadata", {})["pinned_commits"] = list(shas)
+        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), "utf-8")
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent
     state = root / ".archon-horizon"
@@ -78,6 +93,12 @@ def main() -> None:
     )
     if not baseline or not first or not second:
         raise RuntimeError("demo ledger seeding did not create all three commits")
+
+    # Pin each commit to the roadmap item it delivered, so the board's Commits
+    # row is populated. This happens here rather than in the checked-in YAML
+    # because the SHAs are regenerated on every run — hardcoding them would go
+    # stale the first time this script changes.
+    _pin_commits(state, {"M-FOUND": [first], "M-CONN": [second]})
     print(f"demo commits: {baseline} {first} {second}")
 
 

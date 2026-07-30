@@ -1,0 +1,20 @@
+id: M-SEP
+title: Separation axioms
+projects:
+- MiniTopology
+summary: Introduce T0/T1 separation on the finite demo space, once connectedness lands.
+status: pending
+kind: blueprint
+priority: low
+depends_on:
+- M-CONN
+inbox_refs: []
+task_refs: []
+scope:
+  projects:
+  - MiniTopology
+metadata:
+  author: human
+  created_at: '2026-07-19T09:30:00+00:00'
+  owner: human
+  milestone: Chapter 2 — Connectedness
