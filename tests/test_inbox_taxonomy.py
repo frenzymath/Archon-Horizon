@@ -23,7 +23,9 @@ projects:
 
 
 def test_kind_and_status_sets() -> None:
-    assert {k.value for k in InboxKind} == {"hint", "issue", "protection", "info", "memory"}
+    assert {k.value for k in InboxKind} == {
+        "conversation", "hint", "issue", "protection", "info", "memory",
+    }
     assert {s.value for s in InboxStatus} == {"open", "closed", "archived"}
 
 
@@ -142,6 +144,12 @@ def test_add_stamps_run_session_provenance(tmp_path: Path, monkeypatch) -> None:
         "task": "T-7",
         "projects": "p,q",
     }
+    assert item.metadata["history"][0]["provenance"] == prov
+
+    assert main(["--root", str(ws), "inbox", "read", "I-0001"]) == 0
+    item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
+    assert item.metadata["history"][-1]["field"] == "read_by"
+    assert item.metadata["history"][-1]["provenance"] == prov
 
 
 def test_agent_comment_stamps_authorship_and_provenance(tmp_path: Path, monkeypatch) -> None:
@@ -170,3 +178,40 @@ def test_add_without_run_env_has_no_provenance(tmp_path: Path) -> None:
     assert main(["--root", str(ws), "inbox", "add", "--body", "title\n\ndescription", "--author", "human"]) == 0
     item = FilesystemInboxProvider(ws / ".archon-horizon" / "inbox" / "local").get_item("I-0001")
     assert "provenance" not in item.metadata
+
+
+def test_long_agent_messages_require_scannable_markdown(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "config.yaml").write_text(_CONFIG, "utf-8")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    wall = " ".join(["Dense unstructured evidence"] * 35)
+
+    assert main([
+        "--root", str(ws), "inbox", "add", "--body", f"Dense report\n\n{wall}",
+    ]) == 2
+    assert "needs scannable Markdown" in capsys.readouterr().err
+
+    structured = f"## Result\n\n{wall}\n\n## Next action\n\n- Review the evidence."
+    assert main([
+        "--root", str(ws), "inbox", "add", "--body", f"Structured report\n\n{structured}",
+    ]) == 0
+    capsys.readouterr()
+
+    assert main([
+        "--root", str(ws), "inbox", "comment", "I-0001", "--body", wall,
+    ]) == 2
+    assert "needs scannable Markdown" in capsys.readouterr().err
+    assert main([
+        "--root", str(ws), "inbox", "comment", "I-0001",
+        "--body", f"## Evidence\n\n{wall}",
+    ]) == 0
+
+    capsys.readouterr()
+    oversized = "## Evidence\n\n- " + ("Detailed repetition. " * 140)
+    assert main([
+        "--root", str(ws), "inbox", "comment", "I-0001", "--body", oversized,
+    ]) == 2
+    assert "too long" in capsys.readouterr().err

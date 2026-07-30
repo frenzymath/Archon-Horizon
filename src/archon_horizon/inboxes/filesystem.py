@@ -19,6 +19,7 @@ from pathlib import Path
 
 from archon_horizon.core.clock import utc_now
 from archon_horizon.core.inbox import (
+    PARTICIPANTS_KEY,
     READ_BY_KEY,
     InboxDraft,
     InboxFilter,
@@ -26,9 +27,12 @@ from archon_horizon.core.inbox import (
     InboxKind,
     InboxStatus,
     SyncResult,
+    conversation_participants,
+    is_conversation,
     item_readers,
     matches_filter,
 )
+from archon_horizon.core.provenance import agent_provenance
 from archon_horizon.store import serde
 from archon_horizon.store.codec import Codec, YamlCodec
 
@@ -43,6 +47,19 @@ from .sharded import (
 )
 
 _ID_RE = re.compile(r"I-(\d+)")
+
+# Reading an item file can race a concurrent lane's write. Writes are atomic
+# (temp + os.replace), so a reader normally sees only complete content; these
+# bound a defence-in-depth retry for a residual race (e.g. a legacy non-atomic
+# writer mid-upgrade) before a file is treated as genuinely corrupt.
+_LOAD_RETRIES = 5
+_LOAD_RETRY_SLEEP = 0.02
+
+
+class InboxLoadError(RuntimeError):
+    """A single inbox item file could not be parsed, named so the operator can
+    find it — instead of the opaque ``AttributeError`` a ``None`` parse used to
+    raise deep inside :func:`serde.inbox_item_from_dict`."""
 
 
 class FilesystemInboxProvider(InboxProvider):
@@ -77,24 +94,63 @@ class FilesystemInboxProvider(InboxProvider):
         return self._history_dir / f"{item_id}.jsonl"
 
     def _record(self, item_id: str, actor: str | None, field: str, *, before: str = "", after: str = "", note: str = "") -> None:
+        actor_name = (actor or "").strip() or "system"
+        entry: dict[str, object] = {
+            "at": utc_now().isoformat(),
+            "actor": actor_name,
+            "field": field,
+            "from": before,
+            "to": after,
+            "note": note,
+        }
+        provenance = agent_provenance()
+        if provenance and actor_name.lower() == provenance.get("role"):
+            entry["provenance"] = provenance
         append_history(
             self._history_path(item_id),
-            {
-                "at": utc_now().isoformat(),
-                "actor": (actor or "").strip() or "system",
-                "field": field,
-                "from": before,
-                "to": after,
-                "note": note,
-            },
+            entry,
         )
+
+    def _read_item(self, path: Path) -> InboxItem | None:
+        """Parse one item file, tolerating a concurrent writer.
+
+        Item files are written atomically (see :meth:`_save_item`), so a reader
+        normally sees only complete content. A sibling lane can still delete a
+        file between the directory glob and this read, or — during a mixed-version
+        window — leave a truncated file a pure-Python ``yaml.load`` decodes to
+        ``None``. Retry a few times, return ``None`` when the file has simply
+        vanished (nothing to load), and only raise a *named* error once a file
+        stays unparseable — never the opaque ``AttributeError`` a ``None`` parse
+        used to trigger, which took down unrelated inbox writes (I-0398, I-0621).
+        """
+        last: Exception | str | None = None
+        for _ in range(_LOAD_RETRIES):
+            try:
+                text = path.read_text("utf-8")
+            except FileNotFoundError:
+                return None  # deleted concurrently between glob and read
+            except OSError as exc:
+                last = exc
+            else:
+                try:
+                    data = self._codec.loads(text)
+                except Exception as exc:  # a half-written file may not even parse
+                    last = exc
+                else:
+                    if isinstance(data, dict):
+                        return serde.inbox_item_from_dict(data)
+                    last = f"parsed to {type(data).__name__}, not a mapping"
+            time.sleep(_LOAD_RETRY_SLEEP)
+        raise InboxLoadError(f"could not read inbox item {path.name}: {last}")
 
     def _load(self) -> dict[str, InboxItem]:
         if not self._items_dir.exists():
             return {}
         items: dict[str, InboxItem] = {}
         for path in sorted(self._items_dir.glob(f"*.{self._codec.extension}")):
-            item = serde.inbox_item_from_dict(self._codec.loads(path.read_text("utf-8")))
+            item = self._read_item(path)
+            if item is None:
+                continue
             extra: dict[str, object] = {}
             comments = read_comments(self._comment_dir(item.id))
             if comments:
@@ -107,21 +163,24 @@ class FilesystemInboxProvider(InboxProvider):
             items[item.id] = item
         return items
 
-    def _save(self, items: dict[str, InboxItem]) -> None:
-        self._items_dir.mkdir(parents=True, exist_ok=True)
-        wanted = set(items)
-        for item in items.values():
-            self._save_item(item)
-        for path in self._items_dir.glob(f"*.{self._codec.extension}"):
-            if path.stem not in wanted:
-                path.unlink()
-                shutil.rmtree(self._comment_dir(path.stem), ignore_errors=True)
-                self._history_path(path.stem).unlink(missing_ok=True)
-
     def _save_item(self, item: InboxItem) -> None:
         self._items_dir.mkdir(parents=True, exist_ok=True)
         stored = dataclasses.replace(item, metadata=without_comments(item.metadata))
-        self._item_path(item.id).write_text(self._codec.dumps(serde.to_jsonable(stored)), "utf-8")
+        payload = self._codec.dumps(serde.to_jsonable(stored))
+        # Write atomically: a plain ``write_text`` truncates the file first, so a
+        # concurrent lane's ``_load`` can read it empty (``yaml.load`` -> ``None``)
+        # and crash. ``os.replace`` swaps in the finished file in one step, so a
+        # reader always sees either the old or the new complete item (I-0398,
+        # I-0621). The temp name keeps the ``.tmp`` suffix so it can never match
+        # the ``*.<ext>`` load glob.
+        path = self._item_path(item.id)
+        tmp = path.parent / f"{path.name}.{os.getpid()}.tmp"
+        try:
+            tmp.write_text(payload, "utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _next_id(self, items: dict[str, InboxItem]) -> str:
         highest = max((int(m.group(1)) for k in items if (m := _ID_RE.fullmatch(k))), default=0)
@@ -160,9 +219,13 @@ class FilesystemInboxProvider(InboxProvider):
             os.close(fd)  # closing the fd releases the flock
 
     def _replace(self, item_id: str, **changes: object) -> None:
-        items = self._load()
-        items[item_id] = dataclasses.replace(items[item_id], updated_at=utc_now(), **changes)
-        self._save(items)
+        # Write ONLY the mutated item, never the whole collection. `_save`
+        # rewrites every item and deletes any file not in the snapshot it loaded,
+        # so a status/label edit that raced a concurrent lane's `create` used to
+        # clobber the freshly-created item. A single-item atomic write touches
+        # nothing else — the only deletions happen in `delete_item` (I-0611 family).
+        item = self._load()[item_id]
+        self._save_item(dataclasses.replace(item, updated_at=utc_now(), **changes))
 
     # ── read ────────────────────────────────────────────────────────
 
@@ -191,8 +254,10 @@ class FilesystemInboxProvider(InboxProvider):
                 source_ref=item.source_ref,
                 metadata=item.metadata,
             )
-            items[created.id] = created
-            self._save(items)
+            # Write only the new item under the lock (id already deduped by the
+            # lock); a full `_save` here would prune a sibling lane's item created
+            # since our `_load`.
+            self._save_item(created)
         self._record(created.id, created.author, "created", after=created.status.value, note="opened")
         return created
 
@@ -241,7 +306,37 @@ class FilesystemInboxProvider(InboxProvider):
                 "body": body,
             },
         )
-        self._save_item(dataclasses.replace(item, updated_at=utc_now()))
+        # A reply is new information for every other participant. Keep only the
+        # sender marked read; otherwise a conversation read once would never
+        # become unread again when another team answered it.
+        sender_ids: list[str] = []
+        provenance = (metadata or {}).get("provenance")
+        if isinstance(provenance, dict):
+            for key in ("task", "run"):
+                value = str(provenance.get(key) or "").strip()
+                if value:
+                    sender_ids.append(value)
+                    break
+        if not sender_ids:
+            sender = str(author or "local").strip()
+            if sender:
+                sender_ids.append(sender)
+        item_metadata = {**item.metadata, READ_BY_KEY: sender_ids}
+        if is_conversation(item):
+            participants = list(conversation_participants(item))
+            sender_route = ""
+            if isinstance(provenance, dict):
+                task = str(provenance.get("task") or "").strip()
+                run = str(provenance.get("run") or "").strip()
+                sender_route = f"task:{task}" if task else (f"run:{run}" if run else "")
+            if not sender_route and str(author or "").strip().lower() in {"human", "horizon"}:
+                sender_route = str(author).strip().lower()
+            if sender_route and sender_route not in participants:
+                participants.append(sender_route)
+            item_metadata[PARTICIPANTS_KEY] = participants
+        self._save_item(dataclasses.replace(
+            item, metadata=item_metadata, updated_at=utc_now()
+        ))
 
     def update_comment(self, item_id: str, index: int, body: str, author: str | None = None) -> None:
         items = self._load()
@@ -291,9 +386,11 @@ class FilesystemInboxProvider(InboxProvider):
         self._record(item_id, actor, "owner", before=before or "everyone", after=owner or "everyone")
 
     def delete_item(self, item_id: str) -> None:
-        items = self._load()
-        items.pop(item_id, None)
-        self._save(items)
+        # Remove only this item's files. A full `_save` would rewrite the whole
+        # collection and could prune a concurrently-created sibling.
+        self._item_path(item_id).unlink(missing_ok=True)
+        shutil.rmtree(self._comment_dir(item_id), ignore_errors=True)
+        self._history_path(item_id).unlink(missing_ok=True)
 
     def sync(self) -> SyncResult:
         # The local files are the source of truth; nothing to import.

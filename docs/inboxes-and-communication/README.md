@@ -32,6 +32,7 @@ The local inbox stores persistent communication items directly inside `.archon-h
 | `hint` | Guidance or proof sketches suggested by humans or agents to assist complex proof searches. |
 | `issue` | Bug reports, build failures, or architectural inconsistencies requiring resolution. |
 | `protection` | Standing constraints preventing modifications to specific files, declarations, or signatures. |
+| `conversation` | A direct or group thread that agents should open and acknowledge before advisory inbox material. |
 | `info` | General contextual notes or notifications. |
 | `memory` | Long-term knowledge items retained across runs to inform future formalization strategies. |
 
@@ -53,24 +54,50 @@ horizon inbox comment <id> --body "Investigating dependency failure..."
 
 ### Audiences and Direct Messages
 
-Where a `scope` says what an item is *about*, its **audience** (`--to`) says who
-it is *for*. The recognized audiences are `horizon`, `human`, `project:<name>`,
-and — for a private hand-off — `task:<id>` or `run:<id>`. The general audiences
-broadcast (any Horizon session on a matching project sees the item); the
-`task:`/`run:` audiences are **direct messages** that reach only that one
-recipient. Delivery is decided by `reaches_horizon` in
+Where a `scope` says what an item is *about*, its **audience** says who it is
+*for*. The recognized recipients are `horizon`, `human`, `project:<name>`,
+`task:<id>`, and `run:<id>`. `horizon inbox dm` accepts one or several recipients,
+so the same durable thread supports direct and group conversations. The general
+audiences broadcast; task/run recipients and the originating team are the
+conversation participants. New threads persist the full set in
+`metadata.participants` and identify the initiator in `metadata.started_by`, so
+the author receives later replies and owns thread closure. Delivery is decided by `reaches_horizon` in
 [`core/inbox.py`](../../src/archon_horizon/core/inbox.py): a session reading its
-own inbox never sees a direct message meant for a different task or run, while a
-see-all context (e.g. a Ground audit, where task/run are unknown) bypasses the
-gating and sees everything.
+own inbox never sees a direct message meant for a different task or run. A
+caller without a matching task/run identity does not receive private messages;
+the human dashboard remains the workspace-wide administrative view.
 
 ```bash
 # Message another project's Horizon agent
 horizon inbox add --kind info --to project:mathlib-port --body $'Renamed lemma\n\nFoo.bar is now Foo.baz.'
 
 # Direct message to one task (a private hand-off)
-horizon inbox add --kind hint --to task:T-0042 --body $'Try induction\n\nInduct on the recursion depth.'
+horizon inbox dm task:T-0042 --body $'Try induction\n\nInduct on the recursion depth.'
+
+# Group conversation between two running teams and the human
+horizon inbox dm task:T-0042 task:T-0047 human --body $'Split the proof\n\nWhich side should each team own?'
 ```
+
+The opening message and later comments form one `conversation` item. An agent
+opens it with `horizon inbox show <id> --json` (which acknowledges it as read)
+and replies with `horizon inbox comment <id> --body ...`; the human replies in
+the live dashboard. A reply marks the thread unread for every participant except
+its sender, so an active thread reappears as an `ACTION` synchronizer line instead
+of silently remaining read forever.
+
+Conversations are bounded coordination, not one-way notices. Search and reuse an
+open thread before creating another for the same topic. The initiator archives
+the conversation after consuming the answer (normally after a concise conclusion
+comment); recipients reply but leave closure to the initiator. Human-started
+threads remain open until the human consumes/archives them unless closure was
+explicitly delegated. The CLI warns when the open conversation set grows beyond
+the recommended working limit.
+
+Active `protection` items occupy the stronger `REQUIRED` lane and are surfaced
+even after they have been read. Other inbox kinds are advisory. In JSON mode the
+same ordering is emitted in the leading `attention` object; the human-readable
+synchronizer remains on stderr, so shell code that uses `2>/dev/null` suppresses
+only that duplicate digest, not the JSON attention data.
 
 ### Ownership Tiers: Shared vs. a Task's Inbox
 

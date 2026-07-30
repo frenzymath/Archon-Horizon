@@ -10,6 +10,7 @@ from archon_horizon.core.inbox import (
     InboxFilter,
     InboxItem,
     InboxKind,
+    conversation_participants,
     is_read_by,
     item_owner,
     item_readers,
@@ -63,6 +64,38 @@ def test_task_and_run_direct_messages() -> None:
     assert not reaches_horizon(_item(audience="run:R-3"), "ag-main", run="R-4")
     # A DM whose recipient is unknown in this context stays hidden.
     assert not reaches_horizon(_item(audience="task:T-7"), "ag-main")
+
+
+def test_group_message_reaches_recipients_and_sender() -> None:
+    group = _item(
+        audience="task:T-7, task:T-8, human",
+        provenance={"task": "T-6", "run": "0006"},
+        conversation=True,
+    )
+    assert reaches_horizon(group, "ag-main", task="T-7", run="0007")
+    assert reaches_horizon(group, "ag-main", task="T-8", run="0008")
+    assert reaches_horizon(group, "ag-main", task="T-6", run="0006")
+    assert not reaches_horizon(group, "ag-main", task="T-9", run="0009")
+    assert conversation_participants(group) == (
+        "task:T-7", "task:T-8", "human", "task:T-6",
+    )
+
+
+def test_explicit_started_by_routes_replies_without_provenance() -> None:
+    thread = InboxItem(
+        id="I-2", provider="local", kind=InboxKind.CONVERSATION,
+        body="topic\n\nquestion", labels=("agent-ready",), author="horizon",
+        audience="task:T-2",
+        metadata={
+            "conversation": True,
+            "participants": ["task:T-2", "task:T-1"],
+            "started_by": "task:T-1",
+        },
+    )
+    assert conversation_participants(thread) == ("task:T-2", "task:T-1")
+    assert reaches_horizon(thread, "ag-main", task="T-1")
+    assert reaches_horizon(thread, "ag-main", task="T-2")
+    assert not reaches_horizon(thread, "ag-main", task="T-3")
 
 
 # ── model: read-state ────────────────────────────────────────────────────
@@ -142,3 +175,147 @@ def test_cli_read_unread_and_task_listing(tmp_path: Path, capsys) -> None:
     prov = _provider(ws)
     assert not matches_filter(prov.get_item("I-0002"), InboxFilter(unread_for="X"))
     assert matches_filter(prov.get_item("I-0002"), InboxFilter(unread_for="Y"))
+
+
+def test_group_dm_cli_and_reply_notify_other_participants(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    ws = tmp_path / "ws"
+    (ws / "projects" / "ag-main").mkdir(parents=True)
+    (ws / "config.yaml").write_text(_CONFIG, "utf-8")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    monkeypatch.setenv("ARCHON_HORIZON_SESSION", "horizon-T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0001")
+    monkeypatch.setenv("ARCHON_HORIZON_PROJECTS", "ag-main")
+
+    assert main([
+        "--root", str(ws), "inbox", "dm", "task:T-2", "task:T-3",
+        "--body", "Coordinate proof split\n\nWhich side should each team own?", "--json",
+    ]) == 0
+    created = json.loads(capsys.readouterr().out)
+    assert created["kind"] == "conversation"
+    assert created["attention"] == "conversation"
+    assert created["conversation"] is True
+    assert created["read_by"] == ["T-1"]
+    assert created["audience"] == "task:T-2, task:T-3"
+    assert created["metadata"]["conversation"] is True
+    assert created["metadata"]["participants"] == ["task:T-2", "task:T-3", "task:T-1"]
+    assert created["metadata"]["started_by"] == "task:T-1"
+
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-2")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0002")
+    main(["--root", str(ws), "inbox", "list", "--json"])
+    t2_payload = json.loads(capsys.readouterr().out)
+    assert len(t2_payload["items"]) == 1
+    assert t2_payload["attention"]["unread_conversations"][0]["id"] == "I-0001"
+    main([
+        "--root", str(ws), "inbox", "comment", "I-0001",
+        "--body", "The right side is available; please take the descent side.",
+    ])
+    capsys.readouterr()
+
+    # The initiating task is a participant, so the reply returns as unread even
+    # though it was not one of the original audience recipients.
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0001")
+    main(["--root", str(ws), "inbox", "list", "--unread", "--json"])
+    origin_payload = json.loads(capsys.readouterr().out)
+    assert origin_payload["attention"]["unread_conversations"][0]["id"] == "I-0001"
+
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-9")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0009")
+    main(["--root", str(ws), "inbox", "list", "--json"])
+    assert json.loads(capsys.readouterr().out)["items"] == []
+
+    inbox = _provider(ws)
+    inbox.set_read("I-0001", "T-2")
+    inbox.set_read("I-0001", "T-3")
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0001")
+    main([
+        "--root", str(ws), "inbox", "comment", "I-0001",
+        "--body", "I can own the descent side.",
+    ])
+    item = inbox.get_item("I-0001")
+    assert item_readers(item) == ("T-1",)
+
+
+def test_agent_list_is_open_attention_queue_and_show_acknowledges(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    ws = tmp_path / "ws"
+    (ws / "projects" / "ag-main").mkdir(parents=True)
+    (ws / "config.yaml").write_text(_CONFIG, "utf-8")
+    main(["--root", str(ws), "inbox", "add", "--kind", "memory", "--body", "Old\n\nHistory"])
+    main(["--root", str(ws), "inbox", "archive", "I-0001"])
+    main(["--root", str(ws), "inbox", "add", "--body", "Advice\n\nRead when relevant"])
+    main(["--root", str(ws), "inbox", "dm", "task:T-1", "--body", "Question\n\nPlease answer"])
+    main(["--root", str(ws), "inbox", "protect", "--body", "Keep API\n\nDo not change Foo.bar"])
+    capsys.readouterr()
+
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    monkeypatch.setenv("ARCHON_HORIZON_SESSION", "horizon-T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0001")
+    monkeypatch.setenv("ARCHON_HORIZON_PROJECTS", "ag-main")
+
+    main(["--root", str(ws), "inbox", "list", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert [item["kind"] for item in payload["items"]] == [
+        "protection", "conversation", "hint",
+    ]
+    assert payload["attention"]["required_protections"][0]["id"] == "I-0004"
+    assert payload["attention"]["unread_conversations"][0]["id"] == "I-0003"
+
+    main(["--root", str(ws), "inbox", "show", "I-0003", "--json"])
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["read_by"] == ["human", "T-1"]
+    main(["--root", str(ws), "inbox", "list", "--json"])
+    after = json.loads(capsys.readouterr().out)
+    assert after["attention"]["unread_conversations"] == []
+    # Required protections remain in the attention lane after acknowledgement.
+    main(["--root", str(ws), "inbox", "read", "I-0004", "--reader", "T-1", "--json"])
+    capsys.readouterr()
+    main(["--root", str(ws), "inbox", "list", "--json"])
+    assert json.loads(capsys.readouterr().out)["attention"]["required_protections"][0]["id"] == "I-0004"
+
+
+def test_task_inbox_ref_grants_read_access_and_denied_show_exits_nonzero(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    ws = tmp_path / "ws"
+    (ws / "projects" / "ag-main").mkdir(parents=True)
+    (ws / "config.yaml").write_text(_CONFIG, "utf-8")
+    main([
+        "--root", str(ws), "task", "add", "--id", "T-1", "--project", "ag-main",
+        "--objective", "Read the linked decision",
+    ])
+    main([
+        "--root", str(ws), "inbox", "add", "--to", "human",
+        "--body", "Linked decision\n\nThis item is explicitly attached to T-1.",
+    ])
+    main([
+        "--root", str(ws), "inbox", "add", "--to", "human",
+        "--body", "Unrelated decision\n\nThis item is not attached to T-1.",
+    ])
+    main([
+        "--root", str(ws), "task", "set", "T-1", "--inbox-ref", "I-0001",
+    ])
+    capsys.readouterr()
+
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    monkeypatch.setenv("ARCHON_HORIZON_SESSION", "0001-horizon-T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_TASK", "T-1")
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "0001")
+    monkeypatch.setenv("ARCHON_HORIZON_PROJECTS", "ag-main")
+
+    assert main(["--root", str(ws), "inbox", "list", "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)["items"]
+    assert [item["id"] for item in listed] == ["I-0001"]
+    assert main(["--root", str(ws), "inbox", "show", "I-0001", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == "I-0001"
+
+    assert main(["--root", str(ws), "inbox", "show", "I-0002", "--json"]) == 2
+    denied = capsys.readouterr()
+    assert "I-0002 is not addressed to this team" in denied.err

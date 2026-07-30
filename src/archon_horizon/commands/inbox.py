@@ -8,25 +8,37 @@ import typer
 
 from archon_horizon.core.collection_health import inbox_health_warnings
 from archon_horizon.core.inbox import (
+    PARTICIPANTS_KEY,
+    READ_BY_KEY,
+    STARTED_BY_KEY,
     InboxDraft,
     InboxFilter,
     InboxKind,
     InboxScope,
     InboxStatus,
+    audience_targets,
+    inbox_attention,
+    inbox_attention_rank,
+    is_conversation,
     is_read_by,
     matches_filter,
+    reaches_horizon,
 )
-from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED
+from archon_horizon.core.labels import AGENT_READY, NOT_READY, REJECTED, is_agent_ready
 from archon_horizon.log import log
 from archon_horizon.store import serde
 
 from .shared import agent_author as _agent_author
 from .shared import (
+    conversation_sender,
     emit_json,
+    ensure_concise_agent_message,
     load_workspace,
     local_inbox,
     provenance_task,
+    provenance_project,
     reader_id,
+    task_inbox_refs,
     with_provenance,
 )
 
@@ -103,11 +115,28 @@ def _ensure_title_and_description(body: str) -> None:
         )
 
 
+def _normalize_recipients(recipients: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    targets = audience_targets(",".join(recipients))
+    allowed = ("task:", "run:", "project:")
+    invalid = [
+        target for target in targets
+        if target not in {"horizon", "human"} and not target.startswith(allowed)
+    ]
+    if invalid:
+        raise typer.BadParameter(
+            "unknown recipient(s): " + ", ".join(invalid)
+            + "; use human, horizon, task:<id>, run:<id>, or project:<name>"
+        )
+    return targets
+
+
 def _item_dict(item) -> dict:
     return {
         "id": item.id,
         "provider": item.provider,
         "kind": item.kind.value,
+        "attention": inbox_attention(item).value,
+        "conversation": is_conversation(item),
         "status": item.status.value,
         "labels": list(item.labels),
         "body": item.body,
@@ -139,6 +168,49 @@ def _item_dict_capped(item, comments: int | None = None) -> dict:
     return data
 
 
+def _item_title(item, limit: int = 72) -> str:
+    title = str(item.body or "").split("\n", 1)[0].strip()
+    return title if len(title) <= limit else title[:limit - 3].rstrip() + "..."
+
+
+def _attention_summary(items, reader: str) -> dict:
+    """Compact, front-loaded triage that survives stderr redirection in JSON mode."""
+    open_items = [item for item in items if item.status is InboxStatus.OPEN]
+    protections = sorted(
+        (item for item in open_items if item.kind is InboxKind.PROTECTION),
+        key=lambda item: item.updated_at,
+        reverse=True,
+    )
+    conversations = sorted(
+        (
+            item for item in open_items
+            if is_conversation(item) and not is_read_by(item, reader)
+        ),
+        key=lambda item: item.updated_at,
+        reverse=True,
+    )
+    advisory_unread = sum(
+        not is_conversation(item)
+        and item.kind is not InboxKind.PROTECTION
+        and not is_read_by(item, reader)
+        for item in open_items
+    )
+    def row(item) -> dict:
+        return {
+            "id": item.id,
+            "title": _item_title(item),
+            "author": item.author,
+            "audience": item.audience,
+            "updated_at": item.updated_at.isoformat(),
+        }
+    return {
+        "required_protections": [row(item) for item in protections],
+        "unread_conversations": [row(item) for item in conversations],
+        "advisory_unread_count": advisory_unread,
+        "order": ["required_protections", "unread_conversations", "advisory"],
+    }
+
+
 @app.command("list")
 def list_items(
     ctx: typer.Context,
@@ -156,8 +228,20 @@ def list_items(
     as_json: bool = _JSON,
 ) -> None:
     """List local inbox items, optionally narrowed for triage."""
+    in_session = bool(
+        os.environ.get("ARCHON_HORIZON_SESSION", "").strip()
+        or os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip()
+    )
     if mine and task is None:
         task = provenance_task()
+    if in_session and task is None and to is None:
+        # An agent's unqualified inbox is its team inbox, not a see-all audit of
+        # other teams' owned items.
+        task = provenance_task()
+    if in_session and status is None:
+        # Agents need a working queue, not hundreds of archived historical
+        # records. An explicit --status still permits an audit.
+        status = InboxStatus.OPEN
     filters = InboxFilter(
         status=status,
         kinds=tuple(kind),
@@ -168,22 +252,41 @@ def list_items(
         unread_for=reader_id() if unread else None,
         query=query,
     )
-    inbox = _inbox(ctx)
+    _, workspace = load_workspace(ctx.obj["root"])
+    inbox = local_inbox(workspace)
     all_items = inbox.list_items()
-    warnings = inbox_health_warnings(all_items)
+    project_context = provenance_project()
+    task_context = provenance_task()
+    run_context = os.environ.get("ARCHON_HORIZON_RUN", "").strip() or None
+    inbox_refs = task_inbox_refs(workspace, task_context)
+    visible_items = [
+        item for item in all_items
+        if not in_session or (
+            is_agent_ready(item.labels)
+            and reaches_horizon(
+                item, project_context, task=task_context, run=run_context,
+                inbox_refs=inbox_refs,
+            )
+        )
+    ]
+    warnings = inbox_health_warnings(visible_items)
     items = sorted(
-        (item for item in all_items if matches_filter(item, filters)),
-        key=lambda item: item.updated_at,
+        (item for item in visible_items if matches_filter(item, filters)),
+        key=lambda item: (inbox_attention_rank(item), item.updated_at),
         reverse=True,
     )
     if limit is not None:
         items = items[:limit]
     if as_json:
-        emit_json({"items": [_item_dict_capped(i, comments) for i in items], "warnings": warnings})
+        emit_json({
+            "attention": _attention_summary(visible_items, reader_id()),
+            "items": [_item_dict_capped(i, comments) for i in items],
+            "warnings": warnings,
+        })
         return
     if not items:
         log.info("(empty)")
-        _warn_inbox(all_items)
+        _warn_inbox(visible_items)
         return
     me = reader_id()
     rows = []
@@ -206,7 +309,7 @@ def list_items(
             summary = f"{summary}\n  comments: " + " | ".join(comment_bits)
         rows.append((item.id, item.status.value, summary))
     log.results_table(rows, title="Local Inbox")
-    _warn_inbox(all_items)
+    _warn_inbox(visible_items)
 
 
 @app.command()
@@ -254,7 +357,30 @@ def add(
     labels = (NOT_READY,) if pending else (AGENT_READY,)
     scope = InboxScope(projects=(project,) if project else ())
     author_val, agent_val = _resolve_authorship(author, agent)
+    _, _, description = body.partition("\n\n")
+    if not description:
+        _, _, description = body.partition("\n")
+    if author_val == "horizon":
+        try:
+            ensure_concise_agent_message(
+                description, "description", author=author_val,
+                soft_limit=800, hard_limit=2400,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     metadata = with_provenance()
+    recipients = _normalize_recipients([to]) if to else ()
+    conversation = len(recipients) > 1 or any(
+        target.startswith(("task:", "run:")) for target in recipients
+    )
+    if conversation:
+        sender = conversation_sender()
+        metadata.update({
+            "conversation": True,
+            PARTICIPANTS_KEY: list(dict.fromkeys((*recipients, sender))),
+            STARTED_BY_KEY: sender,
+            READ_BY_KEY: [reader_id()],
+        })
     if agent_val:
         metadata["agent"] = agent_val
     if mine and owner is None:
@@ -263,7 +389,9 @@ def add(
         metadata["owner_task"] = owner
     inbox = _inbox(ctx)
     created = inbox.create_item(
-        InboxDraft(kind=kind, body=body, labels=labels, scope=scope, audience=(to or ""),
+        InboxDraft(kind=InboxKind.CONVERSATION if conversation else kind,
+                   body=body, labels=labels, scope=scope,
+                   audience=", ".join(recipients),
                    author=author_val, metadata=metadata)
     )
     if as_json:
@@ -271,6 +399,119 @@ def add(
         return
     log.success(f"created {created.id}")
     _warn_inbox(inbox.list_items())
+
+
+@app.command()
+def dm(
+    ctx: typer.Context,
+    recipient: list[str] = typer.Argument(
+        ..., help="One or more recipients: task:<id>, run:<id>, project:<name>, human, or horizon."
+    ),
+    body: str = typer.Option(..., "--body", help="Conversation title, blank line, then opening message."),
+    project: str | None = typer.Option(None, "--project", help="Project the conversation is about."),
+    author: str | None = typer.Option(None, "--author", help="Who is starting it (normally inferred)."),
+    agent: str | None = typer.Option(None, "--agent", help="Finer-grained agent identity."),
+    as_json: bool = _JSON,
+) -> None:
+    """Start a direct or group conversation in the inbox.
+
+    The opening message becomes a durable thread; humans reply in the dashboard
+    and agents reply with ``horizon inbox comment <id>``. The originating task/run
+    remains a participant even when it is not listed as a recipient.
+    """
+    _ensure_title_and_description(body)
+    recipients = _normalize_recipients(recipient)
+    if not recipients:
+        raise typer.BadParameter("provide at least one recipient")
+    author_val, agent_val = _resolve_authorship(author, agent)
+    _, _, description = body.partition("\n\n")
+    if not description:
+        _, _, description = body.partition("\n")
+    if author_val == "horizon":
+        try:
+            ensure_concise_agent_message(
+                description, "opening message", author=author_val,
+                soft_limit=800, hard_limit=2400,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    sender = conversation_sender()
+    metadata = with_provenance({
+        "conversation": True,
+        PARTICIPANTS_KEY: list(dict.fromkeys((*recipients, sender))),
+        STARTED_BY_KEY: sender,
+        READ_BY_KEY: [reader_id()],
+    })
+    if agent_val:
+        metadata["agent"] = agent_val
+    inbox = _inbox(ctx)
+    created = inbox.create_item(InboxDraft(
+        kind=InboxKind.CONVERSATION,
+        body=body,
+        labels=(AGENT_READY,),
+        scope=InboxScope(projects=(project,) if project else ()),
+        audience=", ".join(recipients),
+        author=author_val,
+        metadata=metadata,
+    ))
+    if as_json:
+        emit_json(_with_inbox_warnings(_item_dict(created), inbox.list_items()))
+        return
+    log.success(f"started conversation {created.id} with {', '.join(recipients)}")
+    _warn_inbox(inbox.list_items())
+
+
+@app.command()
+def show(
+    ctx: typer.Context,
+    id: str,
+    mark_read: bool = typer.Option(
+        True, "--mark-read/--no-mark-read",
+        help="Mark this thread read for the current task/run/human.",
+    ),
+    as_json: bool = _JSON,
+) -> None:
+    """Open one inbox item directly; by default, acknowledge it as read."""
+    _, workspace = load_workspace(ctx.obj["root"])
+    inbox = local_inbox(workspace)
+    item = inbox.get_item(id)
+    in_session = bool(
+        os.environ.get("ARCHON_HORIZON_SESSION", "").strip()
+        or os.environ.get("ARCHON_HORIZON_AGENT_ROLE", "").strip()
+    )
+    task_context = provenance_task()
+    run_context = os.environ.get("ARCHON_HORIZON_RUN", "").strip() or None
+    if in_session and (
+        not is_agent_ready(item.labels)
+        or not reaches_horizon(
+            item, provenance_project(), task=task_context, run=run_context,
+            inbox_refs=task_inbox_refs(workspace, task_context),
+        )
+    ):
+        raise typer.BadParameter(f"{id} is not addressed to this team")
+    if mark_read:
+        inbox.set_read(id, reader_id(), read=True, actor=_agent_author())
+        item = inbox.get_item(id)
+    payload = _item_dict(item)
+    if as_json:
+        emit_json(payload)
+        return
+    log.key_value({
+        "id": item.id,
+        "kind": item.kind.value,
+        "attention": inbox_attention(item).value,
+        "status": item.status.value,
+        "from": item.author or "unknown",
+        "to": item.audience or "everyone",
+        "updated": item.updated_at.isoformat(),
+    }, title="Inbox item")
+    log.panel(item.body, title=_item_title(item))
+    for comment in item.metadata.get("comments", []):
+        if not isinstance(comment, dict):
+            continue
+        author = str(comment.get("author") or "local")
+        at = str(comment.get("at") or "")
+        log.panel(str(comment.get("body") or ""), title=f"{author} {at}".strip())
 
 
 @app.command(hidden=True)
@@ -283,6 +524,11 @@ def comment(
 ) -> None:
     """Add a progress comment to an inbox item (track work, not ask the human)."""
     author_val, _ = _resolve_authorship(author)
+    if author_val == "horizon":
+        try:
+            ensure_concise_agent_message(body, "comment", author=author_val)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
     inbox = _inbox(ctx)
     inbox.add_comment(id, body, author=author_val, metadata=with_provenance())
     items = inbox.list_items()

@@ -15,6 +15,12 @@ fields.
   to narrow without losing the overview: `--to horizon`, `--to human`,
   `--project P`, repeated `--kind K`, repeated `--label L`,
   `--status open`, `--query TEXT`, `--limit N`, and `--comments N`.
+- In an agent session, an unqualified list means the **open working queue**, not
+  archived history. It is ordered by attention: required protections first,
+  unread/direct conversations next, then advisory items. JSON starts with an
+  `attention` summary so redirecting stderr cannot erase this signal.
+- `horizon inbox show <id> --json` opens exactly one item and marks it read for
+  your team. Use `--no-mark-read` for inspection without acknowledgement.
 - Every inbox command evaluates the full local working set, even when `list` is
   filtered. Treat its advisory warnings as a prompt to review duplicates, stale
   memories, and consumed notices. The CLI never archives automatically because
@@ -28,12 +34,18 @@ fields.
   a concrete reason agents should not see or act on the item yet.
 - Audience says who should read the item: empty/general, `horizon`, `human`,
   `project:<name>`, or a **direct message** to another team: `task:<id>` /
-  `run:<id>` (older items may carry the legacy `ground` audience).
+  `run:<id>` (older items may carry the legacy `ground` audience). A conversation
+  may have several recipients; start one with `horizon inbox dm <recipient>...`.
   Scope/project says what the item is about.
 - Horizon reads general items, items addressed to `horizon`, items addressed
   to its project, and DMs addressed to its own task/run. It should ignore other
   projects' and other teams' addressed items.
-- Kinds: `hint` (normal guidance), `issue` (problem to fix/report),
+- A conversation's participants are its recipients **and its initiator**. The
+  initiator is recorded as `metadata.started_by`; replies become unread for every
+  other participant, including that initiator. Participants are not ownership:
+  the initiator remains responsible for deciding when the thread is finished.
+- Kinds: `conversation` (a direct/group thread requiring prompt acknowledgement),
+  `hint` (normal guidance), `issue` (problem to fix/report),
   `protection` (standing constraint / soft freeze), `info` (a notice for the
   human — something you did or noticed they should know, e.g. a renamed project
   or an important change; purely informational, never affects what runs),
@@ -58,6 +70,15 @@ lightweight overlays keep it navigable:
   `horizon inbox list --mine --unread` is your team's fresh queue — the same signal
   the pre-command synchronizer counts for you.
 
+Read in this order before editing:
+
+1. `horizon inbox list --mine --status open --kind protection --json` — every
+   active protection is required even if your team previously marked it read.
+2. `horizon inbox list --mine --unread --kind conversation --json` — open each
+   result with `inbox show`; reply when a response is needed, otherwise the read
+   acknowledgement clears it until another participant replies.
+3. Consult hint/issue/info/memory items as advisory context for the task.
+
 The reader/owner id is inferred from your session (your task), so you rarely pass
 it explicitly.
 
@@ -81,10 +102,13 @@ New inbox items use a two-part body:
   next action, and relevant ids/files here. The description is **mandatory** — an
   item that is only a title is rejected.
 
-Write bodies and comments in **Markdown**: the dashboard renders it. Use short
-paragraphs and `-` bullet lists instead of one wall-of-text paragraph, `**bold**`
-for the key claim, and backticks for ids, lemma names, files, and code
-(`` `lem:foo` ``, `` `Foo.lean:42` ``). A long unstructured blob is hard to scan.
+Write bodies and comments in **Markdown**: the dashboard renders it. Operational
+messages are deltas, not reports. Default to one sentence or at most three short
+bullets covering conclusion, new evidence, and next action; do not repeat the
+thread, commit diff, or session history. Use headings only when a genuinely
+multi-part decision needs them. Agent comments target at most 600 characters and
+are rejected above 1200; descriptions/opening messages target 800 and are
+rejected above 2400. Humans are not subject to these bounds.
 
 Do not create an item whose body is only a title. If you need a `[persistent]` or
 `[temporary]` tag, put it at the start of the title paragraph and keep the rest
@@ -98,11 +122,46 @@ main description is stale. If you discover an open item is obsolete, already
 solved, consumed, or superseded, add a short comment when the reason is not
 obvious and then run `horizon inbox archive <id>`.
 
+### Conversation lifecycle
+
+A conversation is for an expected reply, decision, or active coordination. A
+one-way handoff or announcement is an `info`/`hint`, not a conversation.
+
+1. **Search before starting:** inspect open conversations for the same topic and
+   participants (`inbox list --status open --kind conversation --query "key words"
+   --json`). Reply to the existing thread whenever it can carry the update. Do not
+   open one thread per incremental finding.
+2. **One question, one thread:** keep follow-ups, answers, corrections, and the
+   final decision as comments on that thread. Start another only when it has a
+   genuinely different decision boundary or participant set.
+3. **Answer before branching:** when a conversation becomes unread, open it and
+   answer or acknowledge it before starting another conversation with the same
+   team.
+4. **The initiator closes:** if `metadata.started_by` is your task/run, you own
+   the lifecycle. Once the requested answer has arrived and been consumed, add a
+   short conclusion comment when the outcome is not obvious, then
+   `horizon inbox archive <id>`. Do this during the session, not only after a
+   warning says the inbox is full.
+5. **Do not hide an answer from its initiator:** recipients normally reply and
+   leave closure to the initiator. For a human-started thread, answer it but leave
+   it open for the human to consume/archive unless the human explicitly delegates
+   closure. Use `complete` instead of `archive` only when the concluded thread is
+   intentionally meant to remain visible in the resolved working record.
+6. **End-of-session sweep:** before the final report, inspect open conversations
+   in which your task is `started_by`. Archive every resolved one and state a real
+   blocker on any that must remain open. An accumulation of open conversations is
+   unfinished coordination, not harmless history.
+
 - `horizon inbox comment <id> --body "..."` — progress note on an item (record
-  what you did; not to ask the human for clarification). Do not write your name
-  into the comment body; the author is set automatically. Drop a comment at each **key advance**
-  while you work an item (a milestone reached, a route ruled out, a blocker hit),
-  not only at the end — these comments are the item's visible progress trail.
+  what changed; not to ask the human for clarification). Do not write your name
+  into the body; authorship is automatic. Comment only at a **key advance** such
+  as a milestone, ruled-out route, blocker, correction, or conclusion. Update the
+  existing thread with the delta instead of re-establishing its full context.
+- `horizon inbox dm task:<id> [task:<id> ...] --body "Topic\n\nOpening message"`
+  — start a one-to-one or group conversation. Use `horizon ps` to discover live
+  teams. Use it only after the lifecycle search above. The sender remains a
+  participant and owns closure; every reply makes the thread unread for the other
+  participants. Humans read and reply from the live dashboard.
 - **Write comments as mathematics, for a human.** State the key step that
   succeeded in human-readable mathematical language (LaTeX for formulas), naming
   the result and the idea — e.g. "Proved $H^i(X,\mathcal{F})=0$ for $i>\dim X$ by
@@ -114,6 +173,8 @@ obvious and then run `horizon inbox archive <id>`.
   hide it from the dashboard by default. Use for stale, superseded, consumed, or
   no-longer-key context. Keeping the inbox tidy this way is your job (or the
   janitor subagent's) — prune memory/info so they remain small.
+  For a conversation you initiated, this is the normal "discussion finished"
+  operation after its answer/conclusion has been consumed.
 - `horizon inbox complete <id>` — mark an item resolved only when it records work
   you genuinely concluded and want to keep visible outside the archive. Before
   completing, add a short **conclusion comment**: first the mathematical
