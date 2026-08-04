@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -53,6 +54,10 @@ _MUTATING_COMMAND = re.compile(
     r"(?:cat|tee|printf|echo)\b[^\n]*(?:>|>>)|touch\s|cp\s|mv\s|rm\s|mkdir\s)"
 )
 _MUTATING_TOOLS = {"edit", "write", "notebookedit", "apply_patch", "applypatch"}
+_REPORT_SECTION = re.compile(
+    r"(?im)^##\s+(?:progress|issues|why i stopped|next)\s*$"
+)
+_MIN_REPORT_LENGTH = 40
 
 
 def _attention_items(root: Path) -> tuple[list[Any], list[Any], list[Any]]:
@@ -363,12 +368,87 @@ def _is_mutating_tool(payload: dict[str, Any]) -> bool:
     return isinstance(command, str) and bool(_MUTATING_COMMAND.search(command))
 
 
+def _has_final_report(payload: dict[str, Any]) -> bool:
+    """Whether Stop carries the structured hand-off saved as ``report.md``."""
+    message = str(payload.get("last_assistant_message") or "").strip()
+    return len(message) >= _MIN_REPORT_LENGTH and bool(_REPORT_SECTION.search(message))
+
+
+def _runtime_status_path(root: Path, path: str) -> bool:
+    """Exclude live session artifacts that the orchestrator owns at finalization."""
+    session_dir = os.environ.get("ARCHON_HORIZON_SESSION_DIR", "").strip()
+    if session_dir:
+        try:
+            relative = Path(session_dir).resolve().relative_to(root.resolve()).as_posix()
+        except (OSError, ValueError):
+            relative = ""
+        if relative and (path == relative or path.startswith(relative + "/")):
+            return True
+    run = os.environ.get("ARCHON_HORIZON_RUN", "").strip()
+    return bool(run and path == f".archon-horizon/runs/{run}/process.json")
+
+
+def _ledger_dirty_paths(root: Path) -> tuple[str, ...] | None:
+    """Return durable uncommitted ledger paths, or ``None`` if status is unavailable."""
+    wrapper = os.environ.get("HORIZON_GIT", "").strip()
+    git_dir = os.environ.get("HORIZON_LEDGER_GIT_DIR", "").strip()
+    work_tree = os.environ.get("HORIZON_LEDGER_WORK_TREE", "").strip()
+    if wrapper:
+        command = [wrapper]
+    elif git_dir and work_tree:
+        command = ["git", "--git-dir", git_dir, "--work-tree", work_tree]
+    else:
+        return None
+    try:
+        completed = subprocess.run(
+            [*command, "-c", "core.quotepath=false", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    paths: list[str] = []
+    for line in completed.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        path = path.strip('"')
+        if path and not _runtime_status_path(root, path):
+            paths.append(path)
+    return tuple(paths)
+
+
+def _commit_checkpoint(
+    root: Path,
+    state: dict[str, Any],
+    parallel_runs: list[dict[str, str]],
+) -> tuple[bool, tuple[str, ...]]:
+    """Prefer real ledger status unless another live run makes it ambiguous."""
+    if not parallel_runs:
+        dirty_paths = _ledger_dirty_paths(root)
+        if dirty_paths is not None:
+            return bool(dirty_paths), dirty_paths
+    return state.get("dirty_since_call") is not None, ()
+
+
 def hook_response(root: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
     """Build one Claude/Codex-compatible hook response, or stay silent."""
     event = str(payload.get("hook_event_name") or "").strip()
     if event not in {
         "SessionStart", "SubagentStart", "PreToolUse", "PostToolUse", "Stop",
     }:
+        return None
+    # Both engines set this after a Stop hook has already continued the turn. The
+    # second Stop is always allowed, even when cleanup is incomplete, so a broken
+    # commit or report command cannot wedge the session forever.
+    if event == "Stop" and bool(payload.get("stop_hook_active")):
         return None
     state_path = _state_path(root, payload)
     inbox_stamp = _inbox_stamp(root)
@@ -433,22 +513,45 @@ def hook_response(root: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
         state["parallel_runs"] = current_parallel
 
         if event == "Stop":
-            if has_conversations and not bool(payload.get("stop_hook_active")):
-                return {
-                    "decision": "block",
-                    "reason": reminder_context,
-                }
-            if state.get("dirty_since_call") is not None and not bool(payload.get("stop_hook_active")):
-                return {
-                    "decision": "block",
-                    "reason": (
-                        "HORIZON COMMIT CHECKPOINT: this session used a file-mutating tool "
-                        "after its last observed ledger commit. Commit coherent authored "
-                        "changes with `$HORIZON_GIT` (explicit paths), or explain that the "
-                        "mutation produced no durable change before stopping."
-                    ),
-                }
-            return None
+            reasons: list[str] = []
+            if has_conversations:
+                reasons.append(reminder_context)
+            dirty, dirty_paths = _commit_checkpoint(root, state, current_parallel)
+            if dirty:
+                path_note = ""
+                if dirty_paths:
+                    shown = ", ".join(f"`{path}`" for path in dirty_paths[:8])
+                    more = len(dirty_paths) - 8
+                    path_note = f" Remaining ledger paths: {shown}"
+                    if more > 0:
+                        path_note += f", plus {more} more."
+                    else:
+                        path_note += "."
+                reasons.append(
+                    "HORIZON COMMIT CHECKPOINT: durable changes remain after the last "
+                    "observed ledger commit. Commit coherent authored changes with "
+                    "`$HORIZON_GIT` using explicit paths. Do not commit another writer's "
+                    "changes; identify pre-existing or concurrent paths in the report "
+                    f"instead.{path_note}"
+                )
+            interactive = os.environ.get("ARCHON_HORIZON_INTERACTIVE", "").strip() == "1"
+            if not interactive and not _has_final_report(payload):
+                reasons.append(
+                    "HORIZON REPORT CHECKPOINT: finish with a self-contained hand-off in "
+                    "your last message. Use the informative sections among `## Progress`, "
+                    "`## Issues`, `## Why I stopped`, and `## Next`; state checks not run "
+                    "and any remaining uncommitted or blocked work. This last message is "
+                    "what Horizon saves as `report.md`."
+                )
+            if not reasons:
+                return None
+            return {
+                "decision": "block",
+                "reason": (
+                    "HORIZON FINALIZATION CHECK (one retry before Stop):\n\n"
+                    + "\n\n".join(reasons)
+                ),
+            }
 
         if event == "PreToolUse":
             changed = signature != previous_signature

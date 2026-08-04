@@ -286,6 +286,7 @@ def test_interactive_launch_can_omit_attention_hooks(monkeypatch) -> None:
         attention_hooks=False,
     )
     assert claude is not None
+    assert claude.env["ARCHON_HORIZON_INTERACTIVE"] == "1"
     # No hooks, but other session settings (ultracode) survive.
     if "--settings" in claude.argv:
         settings = json.loads(claude.argv[claude.argv.index("--settings") + 1])
@@ -296,6 +297,7 @@ def test_interactive_launch_can_omit_attention_hooks(monkeypatch) -> None:
         HarnessConfig(name="codex", kind="codex"), "PROMPT", attention_hooks=False
     )
     assert codex is not None
+    assert codex.env["ARCHON_HORIZON_INTERACTIVE"] == "1"
     assert "--dangerously-bypass-hook-trust" not in codex.argv
     assert not any(arg.startswith("hooks.") for arg in codex.argv)
 

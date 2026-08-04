@@ -136,7 +136,7 @@ harnesses:
 | `options` | Backend-specific options — e.g. `effort` for Codex, or `config_dir` to pin auth/session home (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). |
 | `options.max_retries` | Transient API errors (rate limit, overload, 5xx, network) are retried with exponential backoff. Default `2` (i.e. 3 attempts); set `0` to disable. A usage/billing limit is never retried — it's labelled and surfaced. |
 | `options.retry_base_seconds` | Base backoff delay in seconds for the retry above (default `8`; doubles each attempt). |
-| `options.inbox_hooks` | Model-visible protection/conversation checkpoints for Claude Code and Codex (default `true`). Horizon injects new messages after the next tool boundary, reminds every five tool calls while attention remains open, pauses a commit for an unread direct conversation, and continues `Stop` once if one remains unread. Set `false` for an older or policy-locked engine. |
+| `options.inbox_hooks` | Model-visible lifecycle checkpoints for Claude Code and Codex (default `true`). Horizon injects new messages after the next tool boundary, reminds periodically while attention remains open, pauses a commit for an unread direct conversation, and continues headless `Stop` once when conversations, uncommitted durable changes, or the final report still need attention. The second Stop always succeeds to prevent a loop. Set `false` for an older or policy-locked engine. |
 
 Codex requires command hooks to be reviewed or explicitly trusted. Horizon's
 hook definition is a constant supplied on the engine command line, so

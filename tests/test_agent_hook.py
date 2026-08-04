@@ -57,6 +57,17 @@ def _additional(response: dict) -> str:
     return response["hookSpecificOutput"]["additionalContext"]
 
 
+_REPORT = """\
+## Progress
+
+- Finished the requested checkpoint and recorded the durable result.
+
+## Why I stopped
+
+The bounded objective is complete.
+"""
+
+
 def test_session_start_injects_message_bodies_and_protections(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -215,7 +226,9 @@ def test_mutations_get_compact_commit_checkpoint_and_stop_guard(
     assert reminder is not None
     assert "coherent edits are still uncommitted" in _additional(reminder)
 
-    blocked = hook_response(root, _payload("Stop", stop_hook_active=False))
+    blocked = hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    ))
     assert blocked is not None and blocked["decision"] == "block"
     assert "COMMIT CHECKPOINT" in blocked["reason"]
 
@@ -223,7 +236,9 @@ def test_mutations_get_compact_commit_checkpoint_and_stop_guard(
         "PostToolUse", tool_name="Bash",
         tool_input={"command": '$HORIZON_GIT commit -m "checkpoint" -- Foo.lean'},
     )) is None
-    assert hook_response(root, _payload("Stop", stop_hook_active=False)) is None
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    )) is None
 
 
 def test_read_conversation_stops_reminders_and_unread_stop_continues_once(
@@ -238,7 +253,9 @@ def test_read_conversation_stops_reminders_and_unread_stop_continues_once(
         metadata={"conversation": True},
     ))
 
-    blocked = hook_response(root, _payload("Stop", stop_hook_active=False))
+    blocked = hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    ))
     assert blocked is not None
     assert blocked["decision"] == "block"
     assert "silently abandoned" in blocked["reason"]
@@ -246,7 +263,83 @@ def test_read_conversation_stops_reminders_and_unread_stop_continues_once(
 
     inbox.set_read(item.id, "T-1")
     assert hook_response(root, _payload("PostToolUse")) is None
-    assert hook_response(root, _payload("Stop", stop_hook_active=False)) is None
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    )) is None
+
+
+def test_headless_stop_requires_report_once_but_interactive_turn_does_not(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root, _ = _workspace(tmp_path, monkeypatch)
+
+    blocked = hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message="Done.",
+    ))
+    assert blocked is not None and blocked["decision"] == "block"
+    assert "REPORT CHECKPOINT" in blocked["reason"]
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=True, last_assistant_message="Still done.",
+    )) is None
+
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    )) is None
+    monkeypatch.setenv("ARCHON_HORIZON_INTERACTIVE", "1")
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message="Short turn reply.",
+    )) is None
+
+
+def test_stop_combines_commit_and_report_cleanup_in_one_retry(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root, _ = _workspace(tmp_path, monkeypatch)
+    assert hook_response(root, _payload(
+        "PostToolUse", tool_name="Edit", tool_input={"file_path": "Foo.lean"},
+    )) is None
+
+    blocked = hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message="Done.",
+    ))
+
+    assert blocked is not None
+    assert "COMMIT CHECKPOINT" in blocked["reason"]
+    assert "REPORT CHECKPOINT" in blocked["reason"]
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=True, last_assistant_message="Done.",
+    )) is None
+
+
+def test_stop_uses_clean_ledger_status_after_observed_commit(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root, _ = _workspace(tmp_path, monkeypatch)
+    assert hook_response(root, _payload(
+        "PostToolUse", tool_name="Edit", tool_input={"file_path": "Foo.lean"},
+    )) is None
+    assert hook_response(root, _payload(
+        "PostToolUse", tool_name="Bash",
+        tool_input={"command": '$HORIZON_GIT commit -m "partial" -- Foo.lean'},
+    )) is None
+    monkeypatch.setattr(
+        agent_hook_module,
+        "_ledger_dirty_paths",
+        lambda _root: ("projects/ag-main/Bar.lean",),
+    )
+
+    blocked = hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    ))
+
+    assert blocked is not None
+    assert "COMMIT CHECKPOINT" in blocked["reason"]
+    assert "projects/ag-main/Bar.lean" in blocked["reason"]
+
+    monkeypatch.setattr(agent_hook_module, "_ledger_dirty_paths", lambda _root: ())
+    assert hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    )) is None
 
 
 def test_unread_conversation_pauses_commit_but_not_other_commands(
