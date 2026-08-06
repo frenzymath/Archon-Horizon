@@ -174,6 +174,22 @@ def test_registry_builds_codex_argv(tmp_path: Path) -> None:
     assert argv[-1] == "PROMPT"
 
 
+def test_registry_detects_codex_api_key_in_config_dir(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text('{"OPENAI_API_KEY":"sk-test"}', "utf-8")
+    cfg = HarnessConfig(
+        name="horizon",
+        kind="codex",
+        model="fable5",
+        options={"config_dir": str(codex_home)},
+    )
+
+    harness = HarnessRegistry().build(cfg)
+
+    assert getattr(harness, "horizon_auth") == "api-key"
+
+
 def test_registry_maps_claude_named_effort_to_effort_flag() -> None:
     # A named tier drives claude's native --effort flag (not a thinking budget).
     cfg = HarnessConfig(name="horizon", kind="claude-code", model="opus", options={"effort": "max"})
