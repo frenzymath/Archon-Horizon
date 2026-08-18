@@ -25,3 +25,5 @@ subagent_test/
 /codex_error.log
 /codex_test.jsonl
 
+# local manuscript drafts
+/arxiv-paper/

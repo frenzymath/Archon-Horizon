@@ -34,7 +34,33 @@ def test_usage_file_accumulates_and_persists(tmp_path: Path) -> None:
     assert data["cost_usd"] == 0.5
     assert data["usage_events"] == 2
     assert data["updated_at"] is not None
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
+
+
+def test_usage_file_records_context_and_compactions_without_counting_them_as_usage(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "usage.json"
+    uf = _UsageFile(path)
+    uf.add(TranscriptEvent(
+        TranscriptKind.CONTEXT,
+        data={
+            "request_tokens_in": 90_000,
+            "request_cached_tokens_in": 80_000,
+            "cumulative_tokens_in": 500_000,
+            "model_context_window": 258_400,
+        },
+    ))
+    uf.add(TranscriptEvent(TranscriptKind.COMPACTION))
+    uf.flush(force=True)
+
+    data = json.loads(path.read_text("utf-8"))
+    assert data["usage_events"] == 0
+    assert data["compaction_count"] == 1
+    assert data["last_compaction_at"]
+    assert data["context"]["request_tokens_in"] == 90_000
+    assert data["context"]["cumulative_tokens_in"] == 500_000
+    assert data["context"]["model_context_window"] == 258_400
 
 
 def test_usage_file_deltas_cumulative_cost_and_ignores_display_usage(tmp_path: Path) -> None:

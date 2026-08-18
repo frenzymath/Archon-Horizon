@@ -1165,8 +1165,10 @@ button.danger { color: var(--red); }
    native child transcript lives in a separate engine-owned file. */
 .subagent-lifecycle-card { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 7px 10px; border: 1px solid color-mix(in srgb, #7c3aed 30%, var(--border)); border-radius: 6px; background: color-mix(in srgb, #7c3aed 5%, var(--bg-secondary)); }
 .subagent-lifecycle-card.ended { border-color: color-mix(in srgb, #15803d 30%, var(--border)); background: color-mix(in srgb, #15803d 5%, var(--bg-secondary)); }
+.subagent-lifecycle-card.ended:not(.status-completed) { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); background: color-mix(in srgb, var(--red) 5%, var(--bg-secondary)); }
 .subagent-lifecycle-glyph { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; color: #7c3aed; background: color-mix(in srgb, #7c3aed 12%, transparent); font-weight: 800; }
 .subagent-lifecycle-card.ended .subagent-lifecycle-glyph { color: #15803d; background: color-mix(in srgb, #15803d 12%, transparent); }
+.subagent-lifecycle-card.ended:not(.status-completed) .subagent-lifecycle-glyph { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
 .subagent-lifecycle-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .subagent-lifecycle-main strong { color: var(--text-primary); font-size: 12px; }
 .subagent-lifecycle-main > span { color: var(--text-secondary); font-size: 11px; }
@@ -1176,6 +1178,13 @@ button.danger { color: var(--red); }
 .workflow-progress-card { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 42px; padding: 8px 10px; border: 1px solid color-mix(in srgb, #0f766e 34%, var(--border)); border-radius: 6px; background: color-mix(in srgb, #0f766e 5%, var(--bg-secondary)); }
 .workflow-progress-card.terminal { border-color: color-mix(in srgb, #15803d 32%, var(--border)); }
 .workflow-progress-card.has-errors { border-color: color-mix(in srgb, var(--red) 42%, var(--border)); }
+.context-telemetry-card, .compaction-card {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-height: 38px;
+  padding: 7px 10px; border: 1px solid color-mix(in srgb, #0f766e 34%, var(--border));
+  border-radius: 6px; background: color-mix(in srgb, #0f766e 5%, var(--bg-secondary));
+}
+.context-telemetry-card span, .compaction-card span { color: var(--text-secondary); font-size: 11px; }
+.compaction-card { border-color: color-mix(in srgb, #b45309 38%, var(--border)); background: color-mix(in srgb, #b45309 6%, var(--bg-secondary)); }
 .workflow-progress-glyph { display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; color: #0f766e; background: color-mix(in srgb, #0f766e 12%, transparent); font-weight: 800; }
 .workflow-progress-main { display: flex; flex: 1 1 260px; flex-direction: column; gap: 3px; min-width: 0; }
 .workflow-progress-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -1569,6 +1578,17 @@ button.danger { color: var(--red); }
   font-size: 11px; font-weight: 600; color: var(--accent-text);
   background: var(--accent-bg); box-shadow: inset 0 0 0 1px var(--accent-ring);
 }
+.attempt-list { display: flex; flex-direction: column; }
+.attempt-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; padding: 9px 16px; border-top: 1px solid var(--border); }
+.attempt-row > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.attempt-row > div span, .attempt-row > span { color: var(--text-muted); font-size: 10.5px; }
+.attempt-row ul { grid-column: 1 / -1; margin: 2px 0 0; padding-left: 18px; color: var(--text-secondary); font-family: var(--mono); font-size: 10.5px; }
+.check-list { display: flex; flex-direction: column; }
+.check-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--border); }
+.check-row strong { color: #15803d; font-size: 11px; text-transform: uppercase; }
+.check-row.check-failed strong { color: var(--red); }
+.check-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 11px; }
+.check-row span { color: var(--text-muted); font-size: 10.5px; }
 .session-inbox-panel .commits-count {
   display: inline-block; margin-left: 8px; padding: 0 7px; border-radius: 10px;
   font-size: 11px; font-weight: 600; color: var(--accent-text);

@@ -238,6 +238,7 @@ def test_agent_env_carries_full_session_identity(tmp_path: Path) -> None:
     HarnessHorizonAgent(harness).run_task(ctx)
 
     env = harness.request.metadata["env"]
+    assert env["ARCHON_HORIZON_INTERACTIVE"] == "0"
     assert env["ARCHON_HORIZON_RUN"] == "0004"
     assert env["ARCHON_HORIZON_SESSION"] == "0002-horizon-T-9"
     assert env["ARCHON_HORIZON_SESSION_DIR"] == str(log_dir.resolve())

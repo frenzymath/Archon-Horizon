@@ -218,6 +218,35 @@ export interface SessionCommits {
   session: string;
   inbox?: SessionInboxActivity;
   roadmap?: SessionRoadmapActivity;
+  commit_counts?: Record<string, number>;
+  attempts?: Array<{
+    id: string;
+    status: string;
+    reason: string;
+    created_at?: string;
+    diagnostics?: string;
+    artifact_ref?: string;
+    files?: Array<{ path: string; lines?: number; bytes?: number }>;
+  }>;
+  checks?: Array<{
+    status: string;
+    ok: boolean;
+    command?: string[];
+    duration_seconds?: number;
+    finished_at?: string;
+    reused?: boolean;
+  }>;
+  outcome?: {
+    execution_status: string;
+    objective_status: string;
+    durable_result: 'agent_commit' | 'integration_only' | 'other_commit' | 'no_commit' | 'unavailable';
+    agent_commits?: number;
+    integration_commits?: number;
+    discarded_attempts?: number;
+    checks_run?: number;
+    failed_checks?: number;
+    blocker?: string;
+  };
   commits: CommitChange[];
   total?: number;
   offset?: number;

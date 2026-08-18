@@ -58,7 +58,12 @@ def _agent_env(role: str, context: HorizonContext) -> dict[str, str]:
     Horizon agent runs from its project dir), and the task/projects so a raw ``git``
     commit the agent makes into the ledger carries full provenance trailers (stamped
     by the ledger's prepare-commit-msg hook)."""
-    env = {"ARCHON_HORIZON_AGENT_ROLE": role}
+    env = {
+        "ARCHON_HORIZON_AGENT_ROLE": role,
+        # A headless run may be launched from an interactive Horizon shell. Do not
+        # inherit that parent's marker or Stop would skip the final-report guard.
+        "ARCHON_HORIZON_INTERACTIVE": "0",
+    }
     env["ARCHON_HORIZON_ROOT"] = str(context.workspace.root.resolve())
     env["ARCHON_HORIZON_SKILL"] = str(
         (context.workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
@@ -206,4 +211,3 @@ class HarnessHorizonAgent(HorizonAgent):
             artifact_refs=result.artifact_refs,
             metadata=_result_metadata(result),
         )
-

@@ -302,6 +302,31 @@ def _usage_data(usage: TranscriptUsage | None) -> dict[str, object]:
     }
 
 
+def _codex_context_data(info: dict, last: dict, total: dict) -> dict[str, object]:
+    """Normalize Codex's current/cumulative token snapshot without conflating it
+    with the per-turn ``TranscriptUsage`` used for billing aggregation."""
+    def number(source: dict, *keys: str) -> int:
+        for key in keys:
+            value = source.get(key)
+            if value is not None:
+                return _int_or_zero(value)
+        return 0
+
+    window = number(
+        info,
+        "model_context_window", "context_window", "model_context_window_tokens",
+    )
+    return {
+        "request_tokens_in": number(last, "input_tokens", "tokens_in", "prompt_tokens"),
+        "request_tokens_out": number(last, "output_tokens", "tokens_out", "completion_tokens"),
+        "request_cached_tokens_in": number(last, "cached_input_tokens", "cached_tokens_in"),
+        "cumulative_tokens_in": number(total, "input_tokens", "tokens_in", "prompt_tokens"),
+        "cumulative_tokens_out": number(total, "output_tokens", "tokens_out", "completion_tokens"),
+        "cumulative_cached_tokens_in": number(total, "cached_input_tokens", "cached_tokens_in"),
+        "model_context_window": window,
+    }
+
+
 def parse_claude_line(line: str) -> list[TranscriptEvent]:
     """Claude Code ``--output-format stream-json`` lines.
 
@@ -683,13 +708,37 @@ def parse_codex_rollout_line(line: str) -> list[TranscriptEvent]:
         if payload.get("type") == "token_count":
             info = payload.get("info") or {}
             last = info.get("last_token_usage") or info.get("total_token_usage") or {}
+            total = info.get("total_token_usage") or last
             usage = TranscriptUsage(
                 tokens_in=int(last.get("input_tokens", 0) or 0),
                 tokens_out=int(last.get("output_tokens", 0) or 0),
                 cached_tokens_in=int(last.get("cached_input_tokens", 0) or 0),
                 reasoning_tokens_out=int(last.get("reasoning_output_tokens", 0) or 0),
             )
-            events = [TranscriptEvent(TranscriptKind.USAGE, data=_usage_data(usage), usage=usage)]
+            data = _usage_data(usage)
+            data.update(_codex_context_data(info, last, total))
+            events = [TranscriptEvent(TranscriptKind.USAGE, data=data, usage=usage)]
+        elif payload.get("type") == "context_compacted":
+            info = payload.get("info") or payload
+            if not isinstance(info, dict):
+                info = {}
+            data = {
+                "trigger": info.get("trigger") or info.get("reason") or "automatic",
+                "tokens_before": _int_or_zero(
+                    info.get("tokens_before") or info.get("input_tokens_before")
+                ),
+                "tokens_after": _int_or_zero(
+                    info.get("tokens_after") or info.get("input_tokens_after")
+                ),
+                "model_context_window": _int_or_zero(
+                    info.get("model_context_window") or info.get("context_window")
+                ),
+            }
+            events = [TranscriptEvent(
+                TranscriptKind.COMPACTION,
+                text="Context compacted",
+                data={key: value for key, value in data.items() if value not in (None, "")},
+            )]
         elif payload.get("type") == "task_complete":
             # With fork_turns/all, Codex replays earlier task_complete records at
             # the child rollout's start timestamp.  `completed_at` retains their
@@ -705,7 +754,36 @@ def parse_codex_rollout_line(line: str) -> list[TranscriptEvent]:
                 duration_ms = payload.get("duration_ms")
                 if isinstance(duration_ms, (int, float)):
                     attrs["duration_seconds"] = max(0, float(duration_ms) / 1000)
-                events = [_subagent_end(engine="codex", attrs=attrs)]
+                message = str(payload.get("last_agent_message") or "").strip()
+                summary = message.splitlines()[0][:240] if message else None
+                events = [_subagent_end(engine="codex", attrs=attrs, summary=summary)]
+        elif payload.get("type") == "turn_aborted":
+            reason = str(payload.get("reason") or "failed")
+            status = reason if reason in {"interrupted", "cancelled"} else "failed"
+            attrs = {"reason": reason}
+            duration_ms = payload.get("duration_ms")
+            if isinstance(duration_ms, (int, float)):
+                attrs["duration_seconds"] = max(0, float(duration_ms) / 1000)
+            events = [_subagent_end(engine="codex", status=status, attrs=attrs)]
+    elif otype == "compacted":
+        info = payload if isinstance(payload, dict) else {}
+        data = {
+            "trigger": info.get("trigger") or info.get("reason") or "automatic",
+            "tokens_before": _int_or_zero(
+                info.get("tokens_before") or info.get("input_tokens_before")
+            ),
+            "tokens_after": _int_or_zero(
+                info.get("tokens_after") or info.get("input_tokens_after")
+            ),
+            "model_context_window": _int_or_zero(
+                info.get("model_context_window") or info.get("context_window")
+            ),
+        }
+        events = [TranscriptEvent(
+            TranscriptKind.COMPACTION,
+            text="Context compacted",
+            data={key: value for key, value in data.items() if value not in (None, "")},
+        )]
     if at is not None:
         events = [dataclasses.replace(event, at=at) for event in events]
     return events

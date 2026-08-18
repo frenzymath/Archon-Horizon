@@ -47,12 +47,13 @@ Work down the list; the first match is your best guess.
 
 **An earlier horizon sibling has no `report.md`** → *resume after a crash or
 kill.* Its work is half-done and possibly half-committed. Read its commits in
-the ledger first (they are the part that survived), then the tail of its
+the ledger first (they are the durable result), then inspect any `attempts/`
+artifacts it deliberately preserved, then the tail of its
 transcript to see what it was in the middle of — `usage --json` `paused` gives
 the reason it died (usage limit, budget, auth), and `recent_failure_reasons`
 shows rate-limit pressure that may still be there. Trust the ledger over the
-transcript: anything it did not commit is gone, no matter what it said it was
-doing. If the dead session shares your `ARCHON_HORIZON_TASK`, you are continuing
+transcript: uncommitted work survives only when it was explicitly preserved
+under `attempts/`. If the dead session shares your `ARCHON_HORIZON_TASK`, you are continuing
 its exact work — pick up its front rather than opening a new one.
 
 **An earlier horizon sibling has a `report.md`** → *hand-off from the session

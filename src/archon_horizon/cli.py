@@ -17,7 +17,9 @@ from typer.main import get_command
 
 from archon_horizon import __version__
 from archon_horizon.commands import blueprint as blueprint_cmd
+from archon_horizon.commands import check as check_cmd
 from archon_horizon.commands import agent_hook as agent_hook_cmd
+from archon_horizon.commands import attempt as attempt_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
 from archon_horizon.commands import freeze as freeze_cmd
@@ -142,6 +144,7 @@ app.add_typer(task_cmd.app, name="task")
 app.add_typer(project_cmd.app, name="project")
 app.add_typer(freeze_cmd.app, name="freeze")
 app.add_typer(skills_cmd.app, name="skills")
+app.add_typer(attempt_cmd.app, name="attempt")
 app.command("blueprint")(blueprint_cmd.blueprint)
 app.command(
     "graph",
@@ -156,6 +159,7 @@ app.command(
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
 app.command("usage")(usage_cmd.usage)
+app.command("check")(check_cmd.check)
 app.command("permissions")(permissions_cmd.permissions)
 app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)

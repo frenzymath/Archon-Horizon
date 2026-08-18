@@ -164,6 +164,9 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     # …and the deterministic integration commit is present too, distinctly tagged
     # (so the UI can render agent progress prominently and bookkeeping subtly).
     assert any(c["kind"] == "integration" for c in view["commits"])
+    assert view["commit_counts"]["agent"] == 2
+    assert view["commit_counts"]["integration"] == 1
+    assert view["outcome"]["durable_result"] == "agent_commit"
 
     # Endpoint parity + registered for static export.
     via = service.serve_endpoint(f"/api/session/commits?run={run.id}&session={s1.name}")
@@ -206,6 +209,7 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     ]) == 0
     inbox_only = service.session_commits_view(run.id, s2.name)
     assert inbox_only["commits"] == []
+    assert inbox_only["outcome"]["durable_result"] == "no_commit"
     assert inbox_only["inbox"]["created"] == 1
     assert inbox_only["inbox"]["items"][0]["title"] == "Session hand-off"
 

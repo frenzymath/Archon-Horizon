@@ -2747,6 +2747,9 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
   const [inbox, setInbox] = useState<SessionInboxActivity | null>(null);
   const [inboxExpanded, setInboxExpanded] = useState(false);
   const [roadmap, setRoadmap] = useState<SessionRoadmapActivity | null>(null);
+  const [commitCounts, setCommitCounts] = useState<Record<string, number>>({});
+  const [attempts, setAttempts] = useState<any[]>([]);
+  const [checks, setChecks] = useState<any[]>([]);
   const [roadmapExpanded, setRoadmapExpanded] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -2758,6 +2761,9 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
     setInbox(null);
     setInboxExpanded(false);
     setRoadmap(null);
+    setCommitCounts({});
+    setAttempts([]);
+    setChecks([]);
     setRoadmapExpanded(false);
     setTotal(null);
     setNextOffset(null);
@@ -2770,6 +2776,9 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
         setCommits(page.commits ?? []);
         setInbox(page.inbox ?? { items: [], created: 0, comments: 0, actions: 0, total: 0 });
         setRoadmap(page.roadmap ?? { items: [], created: 0, status_changes: 0, comments: 0, total: 0 });
+        setCommitCounts(page.commit_counts ?? {});
+        setAttempts(page.attempts ?? []);
+        setChecks(page.checks ?? []);
         setNextOffset(page.has_more ? (page.next_offset ?? null) : null);
       })
       .catch(() => {
@@ -2777,6 +2786,9 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
         setCommits([]);
         setInbox({ items: [], created: 0, comments: 0, actions: 0, total: 0 });
         setRoadmap({ items: [], created: 0, status_changes: 0, comments: 0, total: 0 });
+        setCommitCounts({});
+        setAttempts([]);
+        setChecks([]);
         setError('Unable to load commits.');
       });
     return () => { live = false; };
@@ -2875,17 +2887,51 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
       </div>
     </details>
   ) : null;
+  const commitKindSummary = Object.entries(commitCounts)
+    .filter(([, count]) => count > 0)
+    .map(([kind, count]) => `${count} ${kind}`)
+    .join(' · ');
+  const attemptsPanel = attempts.length > 0 ? (
+    <details className="log-panel attempts-panel">
+      <summary>Rejected attempts <span className="commits-count">{attempts.length}</span></summary>
+      <div className="attempt-list">
+        {attempts.map((attempt) => (
+          <article className="attempt-row" key={attempt.id}>
+            <div><strong>{attempt.reason || 'Rejected approach'}</strong><span>{attempt.created_at ? formatDateTime(attempt.created_at) : attempt.id}</span></div>
+            <span>{(attempt.files ?? []).length} file{(attempt.files ?? []).length === 1 ? '' : 's'}</span>
+            <ul>{(attempt.files ?? []).map((file: any) => <li key={file.path}>{file.path}{file.lines ? ` · ${file.lines} lines` : ''}</li>)}</ul>
+          </article>
+        ))}
+      </div>
+    </details>
+  ) : null;
+  const checksPanel = checks.length > 0 ? (
+    <details className="log-panel checks-panel">
+      <summary>Lean checks <span className="commits-count">{checks.length}</span></summary>
+      <div className="check-list">
+        {checks.map((check, index) => (
+          <div className={`check-row check-${check.ok ? 'passed' : 'failed'}`} key={`${check.finished_at || index}-${index}`}>
+            <strong>{check.ok ? 'passed' : check.status || 'failed'}</strong>
+            <code>{Array.isArray(check.command) ? check.command.join(' ') : 'Lean check'}</code>
+            {check.duration_seconds != null && <span>{formatSeconds(Number(check.duration_seconds))}</span>}
+            {check.reused && <span>reused</span>}
+          </div>
+        ))}
+      </div>
+    </details>
+  ) : null;
   if (commits.length === 0) {
-    if (!error) return <>{inboxPanel}{roadmapPanel}</>;
-    return <>{inboxPanel}{roadmapPanel}<details className="log-panel commits-panel" open>
+    if (!error) return <>{checksPanel}{attemptsPanel}{inboxPanel}{roadmapPanel}</>;
+    return <>{checksPanel}{attemptsPanel}{inboxPanel}{roadmapPanel}<details className="log-panel commits-panel" open>
       <summary>Commits</summary>
       <p className="empty commit-loading">{error}</p>
     </details></>;
   }
   return (
-    <>{inboxPanel}{roadmapPanel}<details className="log-panel commits-panel" open>
+    <>{checksPanel}{attemptsPanel}{inboxPanel}{roadmapPanel}<details className="log-panel commits-panel" open>
       <summary>
         Commits <span className="commits-count">{total == null ? commits.length : `${commits.length}/${total}`}</span>
+        {commitKindSummary && <span className="session-inbox-totals">{commitKindSummary}</span>}
       </summary>
       <div className="commit-cards">
         {commits.map((c) => <CommitCard key={c.sha} commit={c} runId={runId} session={session} />)}
@@ -2931,6 +2977,22 @@ function collapseWorkflowProgress(events: any[] | null): any[] | null {
     }
   }
   return kept.reverse();
+}
+
+/** Keep context accounting append-only on disk, but show only the newest
+ * snapshot in the transcript. Codex emits one after nearly every model step,
+ * so rendering all of them obscures the conversation on long runs. */
+function collapseContextSnapshots(events: any[] | null): any[] | null {
+  if (!events) return events;
+  let latest = -1;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.kind === 'context') {
+      latest = index;
+      break;
+    }
+  }
+  if (latest < 0) return events;
+  return events.filter((event, index) => event?.kind !== 'context' || index === latest);
 }
 
 /** Pair lifecycle end rows with their dispatch row without changing the stored
@@ -2992,7 +3054,7 @@ function TranscriptViewer({
   transcriptError?: string;
 }) {
   const displayEvents = useMemo(
-    () => annotateSubagentDurations(collapseWorkflowProgress(events)),
+    () => annotateSubagentDurations(collapseWorkflowProgress(collapseContextSnapshots(events))),
     [events],
   );
   const start = displayEvents?.find((event: any) => event.kind === 'session_start');
@@ -3182,6 +3244,7 @@ function SessionParameters({
   const meta = session.meta ?? {};
   const engineSession = meta.engine_session_id ?? meta.session_id ?? meta.data?.session_id;
   const durEnd = boundedSessionEnd(session, Date.now(), nextSessionStart, tick);
+  const telemetry = session.telemetry ?? {};
   const rows = [
     ['Run', session.run],
     ['Session', session.session],
@@ -3194,7 +3257,13 @@ function SessionParameters({
     ['Status', session.status],
     ['Started', formatDateTime(session.started_at)],
     ['Ended', formatDateTime(session.ended_at)],
-    ['Duration', formatDuration(session.started_at, durEnd)],
+    ['Session duration', formatDuration(session.started_at, durEnd)],
+    ['Compactions', telemetry.compaction_count ? String(telemetry.compaction_count) : ''],
+    ['Last compaction', formatDateTime(telemetry.last_compaction_at)],
+    ['Current request input', telemetry.request_tokens_in ? `${Number(telemetry.request_tokens_in).toLocaleString()} tokens` : ''],
+    ['Current request cached', telemetry.request_cached_tokens_in ? `${Number(telemetry.request_cached_tokens_in).toLocaleString()} tokens` : ''],
+    ['Model context window', telemetry.model_context_window ? `${Number(telemetry.model_context_window).toLocaleString()} tokens` : ''],
+    ['Cumulative engine input', telemetry.cumulative_tokens_in ? `${Number(telemetry.cumulative_tokens_in).toLocaleString()} tokens` : ''],
     ['Workspace SHA', shortSha(meta.workspace_sha)],
     ['Project SHAs', formatProjectRevisions(meta.project_revisions)],
     ['Harness', harness],
@@ -3236,6 +3305,7 @@ const EVENT_COLORS: Record<string, string> = {
   tool_result: '#059669', error: '#dc2626', session_start: '#64748b', session_end: '#64748b',
   subagent_start: '#7c3aed', subagent_end: '#15803d',
   workflow_progress: '#0f766e',
+  context: '#0f766e', compaction: '#b45309',
 };
 // Render text/thinking as markdown (after stripping terminal ANSI); everything
 // else stays monospace. The input prompt is rendered by TranscriptViewer.
@@ -3644,21 +3714,55 @@ function SubagentLifecycleView({ event }: { event: any }) {
   const started = event.kind === 'subagent_start';
   const name = String(data.name || 'subagent');
   const status = String(data.status || (started ? 'running' : 'closed'));
+  const succeeded = status === 'completed';
   const duration = data.duration_seconds != null ? formatSeconds(Number(data.duration_seconds)) : '';
   return (
-    <div className={`subagent-lifecycle-card ${started ? 'started' : 'ended'}`}>
-      <span className="subagent-lifecycle-glyph" aria-hidden="true">{started ? '↗' : status === 'completed' ? '✓' : '■'}</span>
+    <div className={`subagent-lifecycle-card ${started ? 'started' : 'ended'} status-${status}`}>
+      <span className="subagent-lifecycle-glyph" aria-hidden="true">{started ? '↗' : succeeded ? '✓' : status === 'orphaned' ? '?' : '!'}</span>
       <div className="subagent-lifecycle-main">
         <strong>{name}</strong>
         <span>{started ? 'agent dispatched' : `agent ${status}`}</span>
         {data.summary && String(data.summary) !== event.text ? <small>{String(data.summary)}</small> : null}
       </div>
       <div className="subagent-lifecycle-meta">
-        {data.nickname ? <span>{String(data.nickname)}</span> : null}
+        {data.nickname || data.agent_nickname ? <span>{String(data.nickname || data.agent_nickname)}</span> : null}
         {data.subagent_type ? <span>{String(data.subagent_type)}</span> : null}
         {data.model ? <span>{shortModel(String(data.model))}</span> : null}
         {duration ? <span>{duration}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function ContextTelemetryView({ event }: { event: any }) {
+  const data = event.data ?? {};
+  const requestIn = Number(data.request_tokens_in ?? 0);
+  const requestOut = Number(data.request_tokens_out ?? 0);
+  const cached = Number(data.request_cached_tokens_in ?? 0);
+  const cumulativeIn = Number(data.cumulative_tokens_in ?? 0);
+  const windowSize = Number(data.model_context_window ?? 0);
+  return (
+    <div className="context-telemetry-card">
+      <strong>Context snapshot</strong>
+      <span>{requestIn.toLocaleString()} current input</span>
+      {requestOut > 0 && <span>{requestOut.toLocaleString()} current output</span>}
+      {cached > 0 && <span>{cached.toLocaleString()} cached input</span>}
+      {windowSize > 0 && <span>{windowSize.toLocaleString()} context window</span>}
+      {cumulativeIn > 0 && <span>{cumulativeIn.toLocaleString()} cumulative input</span>}
+    </div>
+  );
+}
+
+function CompactionView({ event }: { event: any }) {
+  const data = event.data ?? {};
+  const before = Number(data.tokens_before ?? data.before_tokens ?? 0);
+  const after = Number(data.tokens_after ?? data.after_tokens ?? 0);
+  return (
+    <div className="compaction-card">
+      <strong>Context compacted</strong>
+      <span>{String(data.reason || data.trigger || 'automatic')}</span>
+      {before > 0 && <span>{before.toLocaleString()} before</span>}
+      {after > 0 && <span>{after.toLocaleString()} after</span>}
     </div>
   );
 }
@@ -3713,6 +3817,8 @@ function EventBodyView({ event, text }: { event: any; text: string }) {
   if (event.kind === 'subagent_start' || event.kind === 'subagent_end') {
     return <SubagentLifecycleView event={event} />;
   }
+  if (event.kind === 'context') return <ContextTelemetryView event={event} />;
+  if (event.kind === 'compaction') return <CompactionView event={event} />;
   if (event.kind === 'usage') return <UsageBlock usage={event.usage ?? event.data} />;
   if (event.kind === 'tool_call' && event.data?.actor && text) {
     return (
@@ -3740,7 +3846,9 @@ const TranscriptEvent = React.memo(function TranscriptEvent({ event, forceOpen }
   const long = text.length > 280 || text.includes('\n');
   const [open, setOpen] = useState(!long);
   useEffect(() => { if (forceOpen !== null) setOpen(forceOpen); }, [forceOpen]);
-  const color = EVENT_COLORS[event.kind] ?? 'var(--text-muted)';
+  const color = event.kind === 'subagent_end' && event.data?.status !== 'completed'
+    ? '#dc2626'
+    : EVENT_COLORS[event.kind] ?? 'var(--text-muted)';
   const fullLabel = event.tool ? event.tool : event.kind;
   const label = event.tool
     ? shortTool(event.tool)
@@ -4392,6 +4500,8 @@ function StatusIcon({ value, title }: { value: string; title?: string }) {
     failed: { glyph: '✕', cls: 'fail' },
     running: { glyph: '', cls: 'run' },
     interrupted: { glyph: 'Ⅱ', cls: 'interrupted' },
+    cancelled: { glyph: 'Ⅱ', cls: 'interrupted' },
+    orphaned: { glyph: '?', cls: 'interrupted' },
     // Not crashes: waited out a timeout, or backed off on a transient API error.
     timed_out: { glyph: '⏱', cls: 'timed-out' },
     throttled: { glyph: '⧖', cls: 'throttled' },

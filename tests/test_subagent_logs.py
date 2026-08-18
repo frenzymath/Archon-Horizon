@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 from archon_horizon.harnesses.command import CommandHarness
@@ -269,6 +271,61 @@ def test_codex_rollout_parser_maps_substance() -> None:
     assert events[3].usage.tokens_in == 100 and events[3].usage.cached_tokens_in == 10
 
 
+def test_codex_rollout_parser_separates_context_and_cumulative_usage() -> None:
+    token_count = json.dumps({
+        "timestamp": "2026-08-11T09:00:00Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "model_context_window": 258_400,
+                "last_token_usage": {
+                    "input_tokens": 86_000,
+                    "output_tokens": 1_200,
+                    "cached_input_tokens": 75_000,
+                },
+                "total_token_usage": {
+                    "input_tokens": 38_214_171,
+                    "output_tokens": 71_624,
+                    "cached_input_tokens": 36_971_776,
+                },
+            },
+        },
+    })
+    (event,) = parse_codex_rollout_line(token_count)
+    assert event.kind is TranscriptKind.USAGE
+    assert event.usage.tokens_in == 86_000
+    assert event.data["request_cached_tokens_in"] == 75_000
+    assert event.data["cumulative_tokens_in"] == 38_214_171
+    assert event.data["model_context_window"] == 258_400
+
+    compacted = parse_codex_rollout_line(json.dumps({
+        "timestamp": "2026-08-11T09:01:00Z",
+        "type": "compacted",
+        "payload": {"trigger": "automatic", "tokens_before": 245_000, "tokens_after": 92_000},
+    }))[0]
+    assert compacted.kind is TranscriptKind.COMPACTION
+    assert compacted.data["trigger"] == "automatic"
+    assert compacted.data["tokens_before"] == 245_000
+
+    context_compacted = parse_codex_rollout_line(json.dumps({
+        "timestamp": "2026-08-11T09:02:00Z",
+        "type": "event_msg",
+        "payload": {"type": "context_compacted", "reason": "manual"},
+    }))[0]
+    assert context_compacted.kind is TranscriptKind.COMPACTION
+    assert context_compacted.data["trigger"] == "manual"
+
+    aborted = parse_codex_rollout_line(json.dumps({
+        "timestamp": "2026-08-11T09:03:00Z",
+        "type": "event_msg",
+        "payload": {"type": "turn_aborted", "reason": "interrupted", "duration_ms": 1200},
+    }))[0]
+    assert aborted.kind is TranscriptKind.SUBAGENT_END
+    assert aborted.data["status"] == "interrupted"
+    assert aborted.data["duration_seconds"] == 1.2
+
+
 def _fake_codex_script(tid: str) -> str:
     # Emits one parent-stream collab line spawning a child thread `tid`.
     item = {"type": "item.completed", "item": {
@@ -321,3 +378,117 @@ def test_codex_harness_ingests_child_rollout(tmp_path: Path) -> None:
     )
     child_dir = tmp_path / "a" / "subagents" / "0001-Harvey"
     assert (child_dir / "report.md").read_text("utf-8") == "child subagent report\n"
+
+
+def test_codex_harness_watches_metadata_only_nested_children_live(tmp_path: Path) -> None:
+    parent_id = "019f0000-0000-7000-8000-000000000001"
+    child_id = "019f0000-0000-7000-8000-000000000002"
+    nested_id = "019f0000-0000-7000-8000-000000000003"
+    codex_home = tmp_path / "codex_home"
+    sessions = codex_home / "sessions" / "2026" / "08" / "11"
+    sessions.mkdir(parents=True)
+
+    def rollout(thread_id: str, rows: list[dict]) -> Path:
+        path = sessions / f"rollout-2026-08-11T09-00-00-{thread_id}.jsonl"
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", "utf-8")
+        return path
+
+    rollout(parent_id, [
+        {"timestamp": "2026-08-11T09:00:00Z", "type": "session_meta", "payload": {}},
+        {"timestamp": "2026-08-11T09:00:01Z", "type": "event_msg", "payload": {
+            "type": "token_count", "info": {
+                "model_context_window": 258_400,
+                "last_token_usage": {"input_tokens": 90_000, "cached_input_tokens": 80_000},
+                "total_token_usage": {"input_tokens": 500_000, "cached_input_tokens": 420_000},
+            }}},
+        {"timestamp": "2026-08-11T09:00:02Z", "type": "compacted", "payload": {}},
+        {"timestamp": "2026-08-11T09:00:02.100Z", "type": "event_msg", "payload": {
+            "type": "context_compacted", "reason": "automatic"}},
+    ])
+    rollout(child_id, [
+        {"timestamp": "2026-08-11T09:00:03Z", "type": "session_meta", "payload": {
+            "model": "gpt-5.6-sol", "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": parent_id, "agent_path": "/root/audit", "agent_nickname": "Harvey",
+            }}}}},
+        {"timestamp": "2026-08-11T09:00:04Z", "type": "response_item", "payload": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": "direct child report"}]}},
+        {"timestamp": "2026-08-11T09:00:05Z", "type": "event_msg", "payload": {
+            "type": "task_complete"}},
+    ])
+    rollout(nested_id, [
+        {"timestamp": "2026-08-11T09:00:06Z", "type": "session_meta", "payload": {
+            "model": "gpt-5.6-terra", "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": child_id, "agent_path": "/root/audit/nested", "agent_role": "worker",
+            }}}}},
+        {"timestamp": "2026-08-11T09:00:07Z", "type": "response_item", "payload": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "output_text", "text": "nested child still working"}]}},
+    ])
+
+    script = tmp_path / "fake_codex_live.py"
+    script.write_text(
+        "import json, time\n"
+        f"print(json.dumps({{'type':'thread.started','thread_id':'{parent_id}'}}), flush=True)\n"
+        "time.sleep(1.5)\n"
+        "print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'done'}}), flush=True)\n",
+        "utf-8",
+    )
+    harness = CodexHarness(
+        "codex", [sys.executable, str(script)],
+        parser=parse_codex_line, session_id_of=codex_session_id, codex_home=str(codex_home),
+    )
+    artifact = tmp_path / "a"
+    result_box: list = []
+    worker = threading.Thread(target=lambda: result_box.append(
+        harness.run(HarnessRequest(prompt="go", cwd=tmp_path, artifact_dir=artifact))
+    ))
+    worker.start()
+    deadline = time.time() + 1.2
+    live_events = []
+    while time.time() < deadline:
+        live_events = read_transcript(artifact / "transcript.jsonl")
+        if any(e.kind is TranscriptKind.SUBAGENT_START for e in live_events):
+            break
+        time.sleep(0.05)
+    assert worker.is_alive(), "child lifecycle should be visible before the parent exits"
+    assert any(e.kind is TranscriptKind.SUBAGENT_START for e in live_events)
+    worker.join(timeout=5)
+    assert result_box and result_box[0].ok
+
+    events = read_transcript(artifact / "transcript.jsonl")
+    starts = [e for e in events if e.kind is TranscriptKind.SUBAGENT_START]
+    assert {(e.data["subagent_key"], e.data["depth"]) for e in starts} == {
+        (child_id, 1), (nested_id, 2),
+    }
+    assert sum(e.text == "direct child report" for e in events) == 1
+    assert any(e.kind is TranscriptKind.SUBAGENT_END and e.data.get("subagent_key") == child_id
+               and e.data.get("status") == "completed" for e in events)
+    assert any(e.kind is TranscriptKind.SUBAGENT_END and e.data.get("subagent_key") == nested_id
+               and e.data.get("status") == "orphaned" for e in events)
+    assert sum(e.kind is TranscriptKind.COMPACTION for e in events) == 1
+    usage_snapshot = json.loads((artifact / "usage.json").read_text("utf-8"))
+    assert usage_snapshot["compaction_count"] == 1
+    context = next(e for e in events if e.kind is TranscriptKind.CONTEXT)
+    assert context.data["request_tokens_in"] == 90_000
+    assert context.data["cumulative_tokens_in"] == 500_000
+    assert context.data["model_context_window"] == 258_400
+
+    child_dir = artifact / "subagents" / "0001-Harvey"
+    nested_dir = child_dir / "subagents" / "0001-nested"
+    child_meta = json.loads((child_dir / "meta.json").read_text("utf-8"))
+    nested_meta = json.loads((nested_dir / "meta.json").read_text("utf-8"))
+    assert child_meta["status"] == "completed"
+    assert child_meta["model"] == "gpt-5.6-sol"
+    assert child_meta["agent_nickname"] == "Harvey"
+    assert child_meta["depth"] == 1
+    assert child_meta["report_ref"] == "report.md"
+    assert nested_meta["status"] == "orphaned"
+    assert nested_meta["model"] == "gpt-5.6-terra"
+    assert nested_meta["depth"] == 2
+    child_events = read_transcript(child_dir / "transcript.jsonl")
+    nested_events = read_transcript(nested_dir / "transcript.jsonl")
+    assert child_events[-1].kind is TranscriptKind.SESSION_END
+    assert child_events[-1].data["ok"] is True
+    assert nested_events[-1].kind is TranscriptKind.SESSION_END
+    assert nested_events[-1].data["failure_reason"] == "orphaned"

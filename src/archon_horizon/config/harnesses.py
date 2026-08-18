@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import functools
 import json
+from pathlib import Path
 import shutil
 import subprocess
 
@@ -250,6 +251,14 @@ def _auth_mode(cfg: HarnessConfig) -> str | None:
         return None
     env = _env_overrides(cfg)
     present = any(env.get(v) or os.environ.get(v) for v in key_vars)
+    if not present and cfg.kind == "codex":
+        config_dir = _config_dir(cfg)
+        if config_dir:
+            try:
+                auth = json.loads((Path(config_dir).expanduser() / "auth.json").read_text("utf-8"))
+            except (OSError, ValueError, TypeError):
+                auth = {}
+            present = any(auth.get(v) for v in key_vars) if isinstance(auth, dict) else False
     return "api-key" if present else "subscription"
 
 

@@ -103,7 +103,7 @@ class _UsageFile:
     def __init__(self, path: Path | None) -> None:
         self._path = path
         self._totals = {
-            "schema_version": 2,
+            "schema_version": 3,
             "tokens_in": 0,
             "tokens_out": 0,
             "cached_tokens_in": 0,
@@ -112,14 +112,39 @@ class _UsageFile:
             "usage_events": 0,
             "started_at": time.time(),
             "updated_at": None,
+            "compaction_count": 0,
+            "last_compaction_at": None,
+            "context": {},
         }
         self._dirty = False
         self._written_at = 0.0
         self._last_cumulative_cost: float | None = None
+        self._lock = threading.RLock()
 
     def add(self, event: TranscriptEvent) -> None:
-        if (self._path is None or event.kind is not TranscriptKind.USAGE
-                or event.usage is None):
+        with self._lock:
+            self._add(event)
+
+    def _add(self, event: TranscriptEvent) -> None:
+        if self._path is None:
+            return
+        if event.kind is TranscriptKind.COMPACTION:
+            self._totals["compaction_count"] += 1
+            self._totals["last_compaction_at"] = event.at.isoformat()
+            self._dirty = True
+            self.flush()
+            return
+        if event.kind is TranscriptKind.CONTEXT:
+            keys = (
+                "request_tokens_in", "request_tokens_out", "request_cached_tokens_in",
+                "cumulative_tokens_in", "cumulative_tokens_out", "cumulative_cached_tokens_in",
+                "model_context_window",
+            )
+            self._totals["context"] = {key: event.data.get(key, 0) for key in keys}
+            self._dirty = True
+            self.flush()
+            return
+        if event.kind is not TranscriptKind.USAGE or event.usage is None:
             return
         usage = event.usage
         # Only canonical USAGE events count. Text/tool rows may repeat the same
@@ -144,6 +169,10 @@ class _UsageFile:
         self.flush()
 
     def flush(self, *, force: bool = False) -> None:
+        with self._lock:
+            self._flush(force=force)
+
+    def _flush(self, *, force: bool = False) -> None:
         if self._path is None or not self._dirty:
             return
         now = time.monotonic()
@@ -163,7 +192,8 @@ class _UsageFile:
 
     @property
     def tokens_out(self) -> int:
-        return int(self._totals["tokens_out"])
+        with self._lock:
+            return int(self._totals["tokens_out"])
 
 
 def _interruptible_sleep(seconds: float, cancel) -> bool:
@@ -283,6 +313,17 @@ class CommandHarness(Harness):
 
     def _after_stream(self, request: HarnessRequest, sink: TranscriptSink) -> None:
         """Hook after stdout streaming ends — e.g. ingest a file-based transcript."""
+        return None
+
+    def _after_stream_line(
+        self, request: HarnessRequest, sink: TranscriptSink, line: str,
+    ) -> None:
+        """Observe one raw engine line while the process is still running.
+
+        File-backed engines use this to start live side-channel watchers as soon
+        as the parent session id appears. The default is intentionally empty so
+        ordinary command harnesses pay no work beyond the call.
+        """
         return None
 
     # Transient API failures (rate limit, overload, 5xx, network) are retried with
@@ -554,3 +595,4 @@ class CommandHarness(Harness):
                 usage_file = getattr(self, "_usage_file", None)
                 if usage_file is not None:
                     usage_file.add(event)
+            self._after_stream_line(request, sink, stripped)

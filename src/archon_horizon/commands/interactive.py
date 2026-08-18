@@ -61,6 +61,10 @@ def build_interactive_launch(
     from archon_horizon.config.harnesses import _env_overrides, _resolve_claude_provider
 
     env = dict(os.environ)
+    # A Stop event means "end of this reply" in an interactive TUI, not "the
+    # harness session is exiting". The lifecycle hook uses this marker to avoid
+    # demanding a final report after every conversational turn.
+    env["ARCHON_HORIZON_INTERACTIVE"] = "1"
     description = f"{harness.kind} harness {harness.name!r}"
 
     if harness.kind == "claude-code":

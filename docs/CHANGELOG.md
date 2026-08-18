@@ -9,6 +9,39 @@ minor releases; `horizon init --update` migrates a workspace's managed files.
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-08-18
+
+### Added
+
+- Live Codex rollout telemetry now discovers native and nested subagents from
+  spawn provenance while the parent is running, records their model/role/depth
+  and terminal status, and surfaces context compactions separately from current
+  request and cumulative token counters.
+- `horizon attempt save` preserves rejected drafts and diagnostics as explicit
+  session artifacts; `horizon check` serializes resource-heavy Lean checks,
+  coalesces identical concurrent requests, enforces timeouts, and records results.
+
+### Changed
+
+- Session change panels distinguish agent and integration commits, rejected
+  attempts, and recorded checks. Long sessions get elapsed-time progress/commit
+  checkpoints, including task/roadmap/inbox writes.
+- The transcript keeps only the newest Codex context snapshot visible while the
+  append-only log retains every raw telemetry event. Current-request, cached,
+  cumulative, context-window, and compaction values remain in session details.
+- Live dashboard state derives large changing transcripts from a bounded tail and
+  only rematerializes subagents when appended rows contain child activity; the
+  latest state-generation timing is available at `/api/performance`.
+
+### Fixed
+
+- Headless Codex runs now reconstruct native and nested subagents from rollout
+  spawn provenance, stream their activity before the parent exits, suppress
+  duplicate reconciliation events, and distinguish completed, failed,
+  interrupted, cancelled, and orphaned children.
+- Both Codex compaction record shapes are normalized without conflating current
+  request input, cached input, cumulative usage, or the model context window.
+
 ## [0.1.2] — 2026-07
 
 The "lightweight harness, finished" release, extended with multi-team
@@ -181,5 +214,6 @@ a **Ground agent** (blueprints, DAG, roadmap, reports, inboxes) and a
 - **Install / update.** `curl … | bash` installer (`install.sh`) and a
   `horizon update` self-update command.
 
-[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.2...v0.1.3
 [0.1.0]: https://github.com/frenzymath/Archon-Horizon/releases/tag/v0.1.0

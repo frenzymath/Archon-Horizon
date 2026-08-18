@@ -112,3 +112,10 @@ When a workspace is initialized or updated (`horizon init --update`, and again a
 - **Subagents** (both engines): Specialized roles such as `ground`, `work-reviewer`, and `blueprint` are compiled to workspace-local `.claude/agents/<name>.md` (Claude) and `.codex/agents/<name>.toml` (Codex). Read-only is engine-enforced (Claude `disallowedTools`; Codex `sandbox_mode = "read-only"`).
 - **Model ownership:** descriptors do not pin a model, tier, or effort. Helpers inherit the parent by default; Horizon chooses a lighter capable model for mechanical work or the same/high-effort model for mathematical review through the engine's native dispatch mechanism.
 - **Skills**: Modular capability guides are provisioned under `.claude/skills/<name>/SKILL.md`. **Claude Code** auto-discovers them. **Codex** has no such discovery, so Horizon inlines a skills index (names, descriptions, and the absolute `SKILL.md` paths to read on demand) into each compiled Codex agent.
+
+Claude reports child events inline. Headless Codex instead writes every native
+child to its own rollout file, so [`CodexHarness`](../../src/archon_horizon/harnesses/codex.py)
+tails the rollout store, discovers direct and nested children from
+`thread_spawn` provenance, assigns source-line event ids for idempotent
+reconciliation, and normalizes child lifecycle, token, and compaction events
+into the backend-neutral transcript model.

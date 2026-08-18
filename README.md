@@ -7,7 +7,7 @@
 *Workspace-first orchestration for long-horizon Lean 4 formalization agents*
 
 [![Live demo](https://img.shields.io/badge/live%20demo-open%20dashboard-brightgreen?logo=githubpages)](https://frenzymath.github.io/Archon-Horizon/)
-![Version](https://img.shields.io/badge/version-0.1.2-blue)
+![Version](https://img.shields.io/badge/version-0.1.3-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Lean](https://img.shields.io/badge/domain-Lean%204-1f6feb)
@@ -51,7 +51,7 @@ The **Horizon Agent** owns the proof loop and decides when to dispatch helpers. 
 - **Async inboxes, per-team ownership & standing protections.** Humans and agents collaborate through a local filesystem inbox and an optional GitHub shadow-sync, observed only at round boundaries so proof searches are never interrupted mid-flight. Items can be shared or **owned by one task** (a private per-team inbox), carry **per-team read-state** (`inbox read`/`unread`, `list --mine/--unread`), and be **direct-messaged** to another running team. Standing protections soft-freeze foundational signatures and files so autonomous runs can't quietly break your API. → [Inboxes](./docs/inboxes-and-communication/README.md)
 - **Parallel teams on a shared board.** Each `horizon run` is a team (a lead agent plus its subagent workers); parallel teams coordinate through shared state — a roadmap that doubles as a **project board** (owner, milestone labels, pinned commits, a live `/board` view), the inbox, and the commit ledger — rather than synchronous meetings. A stderr **synchronizer** keeps each agent aware of unread messages and other live runs, and launching work for *other* teams is gated by an opt-in `workspace.delegation` policy (default deny). → [Architecture](./docs/architecture/README.md)
 - **Blueprints & dependency graphs.** LaTeX-subset blueprints and Lean sources synchronize into a vendored, plain-files semantic graph. `horizon graph` exposes frontier, dependency, review, and comment operations; the dashboard renders a deterministic chapter-collapsed Graphviz view. → [Blueprints & semantic graphs](./docs/blueprints-and-graph/README.md)
-- **Dashboard & offline search.** A live web dashboard renders the DAG (KaTeX), run logs, and inbox, and can export a self-contained static snapshot for GitHub Pages. `horizon search` runs BM25, Loogle-style name, and signature-pattern search over `.lean` sources with no GPU, API key, or network. → [Dashboard & Search](./docs/dashboard-and-search/README.md)
+- **Dashboard & offline search.** A live web dashboard renders the DAG (KaTeX), run logs, native Codex subagent trees, context compactions, and inbox, and can export a self-contained static snapshot for GitHub Pages. `horizon search` runs BM25, Loogle-style name, and signature-pattern search over `.lean` sources with no GPU, API key, or network. → [Dashboard & Search](./docs/dashboard-and-search/README.md)
 - **Public demo workspace.** A tiny two-chapter Lean/blueprint fixture ships outside the Python package with synthetic Claude Code and Codex runs, so the dashboard can be explored without credentials. → [Open the live demo](https://frenzymath.github.io/Archon-Horizon/)
 
 *More depth on every topic — including the full [`config.yaml`](./docs/configuration/README.md) reference — lives in [`docs/`](./docs/README.md).*
@@ -122,6 +122,8 @@ Every command supports `--json` for machine-readable output on `stdout`. Run `ho
 - `horizon init` — scaffold a workspace or refresh managed files (`--update`).
 - `horizon run <target>` — run autoformalization on a task or project, everything (`*`), or a single role (`ground` / `horizon`, optionally `--backend interactive`).
 - `horizon discuss` — open an interactive session to talk with the workspace: status, recent runs, and edits to projects/tasks/inbox/roadmap on request.
+- `horizon attempt save` — preserve a rejected draft and optional diagnostics as a session artifact.
+- `horizon check` — serialize and record resource-heavy Lean checks across concurrent sessions.
 - `horizon dashboard` — live server, or static HTML export (`--static`).
 
 👉 See the [full CLI reference](./docs/cli-reference/README.md) for all commands and flags.
