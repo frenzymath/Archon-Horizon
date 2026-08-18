@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -42,6 +43,9 @@ from archon_horizon.inboxes.filesystem import FilesystemInboxProvider
 
 _DEFAULT_REMINDER_EVERY = 20
 _COMMIT_REMINDER_EVERY = 20
+_COMMIT_REMINDER_SECONDS = 15 * 60
+_PROGRESS_REMINDER_EVERY = 100
+_PROGRESS_REMINDER_SECONDS = 45 * 60
 _ITEM_LIMIT = 3
 _SNIPPET_LIMIT = 320
 _HOOK_STATE_VERSION = 2
@@ -52,6 +56,16 @@ _COMMIT_COMMAND = re.compile(
 _MUTATING_COMMAND = re.compile(
     r"(?:^|[;&|]\s*)(?:apply_patch|sed\s+-i|perl\s+-pi|git\s+apply|"
     r"(?:cat|tee|printf|echo)\b[^\n]*(?:>|>>)|touch\s|cp\s|mv\s|rm\s|mkdir\s)"
+)
+_HORIZON_STATE_COMMAND = re.compile(
+    r'(?:^|[;&|]\s*)(?:"?\$HORIZON_BIN"?|(?:[^\s;&|]*/)?horizon)'
+    r'(?:\s+--root(?:=\S+|\s+\S+))?\s+'
+    r'(?:task\s+(?:add|set|comment|remove)|'
+    r'roadmap\s+(?:add|set|comment|remove)|'
+    r'inbox\s+(?:add|dm|comment|protect|edit|edit-comment|label|complete|archive|'
+    r'reject|read|unread|own|delete)|'
+    r'project\s+(?:add|remove)|freeze\s+(?:add|remove)|skills\s+install|'
+    r'graph(?:\s+[^\s;&|]+){0,6}\s+(?:add\s+(?:comment|review)|modify\s+node|sync))\b'
 )
 _MUTATING_TOOLS = {"edit", "write", "notebookedit", "apply_patch", "applypatch"}
 _REPORT_SECTION = re.compile(
@@ -365,7 +379,33 @@ def _is_mutating_tool(payload: dict[str, Any]) -> bool:
     if not isinstance(tool_input, dict):
         return False
     command = tool_input.get("command") or tool_input.get("cmd")
-    return isinstance(command, str) and bool(_MUTATING_COMMAND.search(command))
+    return isinstance(command, str) and bool(
+        _MUTATING_COMMAND.search(command) or _HORIZON_STATE_COMMAND.search(command)
+    )
+
+
+def _tool_succeeded(payload: dict[str, Any]) -> bool:
+    """Treat absent engine result metadata as success for backward compatibility."""
+    for key in ("tool_response", "tool_result", "result"):
+        result = payload.get(key)
+        if not isinstance(result, dict):
+            continue
+        for code_key in ("exit_code", "exitCode", "returncode"):
+            if code_key in result:
+                try:
+                    return int(result[code_key]) == 0
+                except (TypeError, ValueError):
+                    return False
+        if "is_error" in result:
+            return not bool(result["is_error"])
+    return True
+
+
+def _seconds_setting(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
 
 
 def _has_final_report(payload: dict[str, Any]) -> bool:
@@ -454,6 +494,8 @@ def hook_response(root: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
     inbox_stamp = _inbox_stamp(root)
 
     with _locked_state(state_path) as state:
+        now = time.time()
+        state.setdefault("started_at", now)
         calls = int(state.get("tool_calls") or 0)
         last_notice = int(state.get("last_notice_call") or 0)
         previous_signature = str(state.get("signature") or "")
@@ -464,11 +506,14 @@ def hook_response(root: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
         if event == "PostToolUse":
             calls += 1
             state["tool_calls"] = calls
-            if _is_commit_tool(payload):
+            if _is_commit_tool(payload) and _tool_succeeded(payload):
                 state.pop("dirty_since_call", None)
+                state.pop("dirty_since_at", None)
                 state["last_commit_call"] = calls
+                state["last_commit_at"] = now
             elif _is_mutating_tool(payload):
                 state.setdefault("dirty_since_call", calls)
+                state.setdefault("dirty_since_at", now)
 
         # Full inbox parsing is relatively expensive in mature workspaces. The
         # common PostToolUse path checks only the sharded-file stamp and reuses
@@ -614,22 +659,80 @@ def hook_response(root: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
             )
         if not notices:
             dirty_since = state.get("dirty_since_call")
+            dirty_since_at = state.get("dirty_since_at")
             last_checkpoint = int(state.get("last_checkpoint_notice") or 0)
+            last_checkpoint_at = float(state.get("last_checkpoint_at") or 0)
             checkpoint_due = (
                 event == "PostToolUse"
                 and isinstance(dirty_since, int)
-                and calls - dirty_since >= _COMMIT_REMINDER_EVERY
-                and calls - last_checkpoint >= _COMMIT_REMINDER_EVERY
+                and (
+                    calls - dirty_since >= _COMMIT_REMINDER_EVERY
+                    or (
+                        isinstance(dirty_since_at, (int, float))
+                        and now - float(dirty_since_at) >= _seconds_setting(
+                            "ARCHON_HORIZON_COMMIT_REMINDER_SECONDS",
+                            _COMMIT_REMINDER_SECONDS,
+                        )
+                    )
+                )
+                and (
+                    not last_checkpoint
+                    or calls - last_checkpoint >= _COMMIT_REMINDER_EVERY
+                )
+                and (
+                    not last_checkpoint_at
+                    or now - last_checkpoint_at >= _seconds_setting(
+                        "ARCHON_HORIZON_COMMIT_REMINDER_SECONDS",
+                        _COMMIT_REMINDER_SECONDS,
+                    )
+                )
             )
-            if not checkpoint_due:
+            if checkpoint_due:
+                state["last_checkpoint_notice"] = calls
+                state["last_checkpoint_at"] = now
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": event,
+                        "additionalContext": (
+                            "HORIZON COMMIT CHECKPOINT: coherent edits are still uncommitted "
+                            "(including task, roadmap, or inbox state). Checkpoint explicit "
+                            "paths with `$HORIZON_GIT` "
+                            "before expanding scope. Preserve rejected drafts first with "
+                            "`$HORIZON_BIN attempt save ... --reason ...`."
+                        ),
+                    }
+                }
+            started_at = float(state.get("started_at") or now)
+            last_progress_call = int(state.get("last_progress_notice") or 0)
+            last_progress_at = float(state.get("last_progress_notice_at") or 0)
+            progress_due = (
+                event == "PostToolUse"
+                and calls >= _PROGRESS_REMINDER_EVERY
+                and now - started_at >= _seconds_setting(
+                    "ARCHON_HORIZON_PROGRESS_REMINDER_SECONDS",
+                    _PROGRESS_REMINDER_SECONDS,
+                )
+                and calls - last_progress_call >= _PROGRESS_REMINDER_EVERY
+                and (
+                    not last_progress_at
+                    or now - last_progress_at >= _seconds_setting(
+                        "ARCHON_HORIZON_PROGRESS_REMINDER_SECONDS",
+                        _PROGRESS_REMINDER_SECONDS,
+                    )
+                )
+            )
+            if not progress_due:
                 return None
-            state["last_checkpoint_notice"] = calls
+            state["last_progress_notice"] = calls
+            state["last_progress_notice_at"] = now
             return {
                 "hookSpecificOutput": {
                     "hookEventName": event,
                     "additionalContext": (
-                        "HORIZON COMMIT CHECKPOINT: coherent edits are still uncommitted. "
-                        "Checkpoint explicit paths with `$HORIZON_GIT` before expanding scope."
+                        "HORIZON PROGRESS CHECKPOINT: this session has been active for a long "
+                        "interval. Reassess the bounded objective now: commit a coherent result, "
+                        "preserve and report a failed attempt, or record the concrete blocker "
+                        "before continuing exploratory work."
                     ),
                 }
             }

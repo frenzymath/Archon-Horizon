@@ -37,7 +37,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _session_usage(session_dir: Path) -> dict[str, Any]:
     """A session's usage, repairing legacy completed totals from its transcript."""
     live = _read_json(session_dir / "usage.json")
-    if live.get("schema_version") == 2 and live.get("usage_events"):
+    if int(live.get("schema_version") or 0) >= 2 and (
+        live.get("usage_events") or live.get("compaction_count") or live.get("context")
+    ):
         return live
     meta = _read_json(session_dir / "meta.json")
     transcript_path = session_dir / "transcript.jsonl"

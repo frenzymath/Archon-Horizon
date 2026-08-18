@@ -45,6 +45,7 @@ from archon_horizon.runlog import RunLog, SessionLog
 from archon_horizon.store import serde
 from archon_horizon.transcript.parsers import aggregate_usage, observed_effort, observed_model
 from archon_horizon.transcript.sink import (
+    event_from_dict,
     latest_report_text,
     read_transcript,
     read_transcript_page,
@@ -159,7 +160,7 @@ def _sum_usage(usages: Any) -> dict[str, Any]:
 # Bump whenever _compute_session_state changes derived fields. Version 2 fixes
 # historical Claude usage by deltaing cumulative cost snapshots instead of
 # preserving the previously cached sum of every transcript event's usage.
-_SESSION_CACHE_VERSION = 2
+_SESSION_CACHE_VERSION = 3
 
 
 class WorkspaceService:
@@ -209,6 +210,12 @@ class WorkspaceService:
         # stat-walk stamp of their directory: hundreds of per-item YAML/JSON
         # loads become one walk when nothing changed.
         self._subtree_cache: dict[str, tuple[str, Any]] = {}
+        # Track which transcript tail was inspected for inline subagents. Most
+        # live appends contain ordinary text/tools; avoid re-reading and
+        # rematerializing the entire transcript unless the new bytes actually
+        # mention a child lifecycle/id.
+        self._subagent_scan_offsets: dict[str, int] = {}
+        self._last_state_performance: dict[str, Any] = {}
 
     def _session_cache_path(self) -> Path:
         return self.workspace.state_path / "cache" / "session-states.json"
@@ -517,8 +524,9 @@ class WorkspaceService:
         return payload
 
     def state(self, *, events_tail: int = 50) -> dict[str, Any]:
+        state_started = time.perf_counter()
         events = self._events_all_jsonable()
-        return {
+        payload = {
             "workspace": self.workspace.name,
             "workspace_root": self.workspace.root.as_posix(),
             # The workspace's Horizon state/config directory (.archon-horizon),
@@ -567,6 +575,15 @@ class WorkspaceService:
             "harnesses": self._harness_state(),
             "events": events[-events_tail:],
         }
+        self._last_state_performance = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": round((time.perf_counter() - state_started) * 1000, 2),
+            "run_count": len(payload["runs"]),
+            "session_count": sum(int(run.get("session_count") or 0) for run in payload["runs"]),
+            "event_count": len(events),
+            "session_cache_entries": len(self._session_cache),
+        }
+        return payload
 
     def _discover_projects(self) -> list[str]:
         projs = list(self.workspace.projects.keys())
@@ -766,9 +783,13 @@ class WorkspaceService:
             and (process_live or _is_recent(latest_status_session.get("last_at", "")))
         )
         active_session_id = id(latest_status_session) if active else None
-        for session in flat:
-            if session["status"] == "running" and id(session) != active_session_id:
-                session["status"] = "interrupted"
+        for session in sessions:
+            if session["status"] != "running" or id(session) == active_session_id:
+                continue
+            session["status"] = "interrupted"
+            for child in _flatten_sessions(session.get("children", [])):
+                if child["status"] == "running":
+                    child["status"] = "interrupted"
         last_status = latest_status_session["status"] if latest_status_session else "created"
         if last_status == "running" and not active:
             last_status = "interrupted"
@@ -838,10 +859,59 @@ class WorkspaceService:
         # materialized. It happens only on a cache miss — once per session per
         # server lifetime — never on every poll.
         try:
-            materialize_subagent_sessions(session.path)
-        except Exception:
-            pass
-        events = read_transcript(session.transcript_path) if session.transcript_path.exists() else []
+            transcript_size = session.transcript_path.stat().st_size
+        except OSError:
+            transcript_size = 0
+        scan_key = str(session.transcript_path)
+        previous_offset = self._subagent_scan_offsets.get(scan_key, 0)
+        materialize = previous_offset == 0 or transcript_size < previous_offset
+        if not materialize and transcript_size > previous_offset:
+            try:
+                with session.transcript_path.open("rb") as handle:
+                    handle.seek(previous_offset)
+                    appended = handle.read()
+                materialize = any(
+                    marker in appended
+                    for marker in (
+                        b'"subagent_thread_id"', b'"parent_tool_use_id"', b'"subagent_key"',
+                    )
+                )
+            except OSError:
+                materialize = True
+        self._subagent_scan_offsets[scan_key] = transcript_size
+        if materialize:
+            try:
+                materialize_subagent_sessions(session.path)
+            except Exception:
+                pass
+
+        meta = session.read_meta()
+        meta_data = meta.get("data") if isinstance(meta.get("data"), dict) else {}
+        terminal_meta = "ok" in meta or "ok" in meta_data or bool(meta.get("ended_at"))
+        # A live transcript changes every few seconds. Once it is large, derive
+        # the poll summary from its bounded tail and the harness's usage.json;
+        # the paginated transcript endpoint remains the source for older rows.
+        tail_only = not terminal_meta and transcript_size > 512 * 1024
+        if tail_only:
+            page = read_transcript_page(session.transcript_path, limit=500)
+            events = []
+            for raw in page.get("events", []):
+                try:
+                    events.append(event_from_dict(raw))
+                except (KeyError, TypeError, ValueError):
+                    continue
+        else:
+            events = read_transcript(session.transcript_path) if session.transcript_path.exists() else []
+        started_at = str(meta.get("started_at") or meta_data.get("started_at") or "")
+        if tail_only and not started_at:
+            try:
+                with session.transcript_path.open("r", encoding="utf-8") as handle:
+                    first_raw = next((line for line in handle if line.strip()), "")
+                if first_raw:
+                    first_event = event_from_dict(json.loads(first_raw))
+                    started_at = first_event.at.isoformat()
+            except (OSError, StopIteration, ValueError, KeyError, TypeError):
+                pass
         end = next((event for event in reversed(events) if event.kind == "session_end"), None)
         transcript_usage = aggregate_usage(events)
         usage = {
@@ -851,7 +921,39 @@ class WorkspaceService:
             "reasoning_tokens_out": transcript_usage.reasoning_tokens_out,
             "cost_usd": transcript_usage.cost_usd,
         }
-        meta = session.read_meta()
+        usage_snapshot: dict[str, Any] = {}
+        try:
+            value = json.loads((session.path / "usage.json").read_text("utf-8"))
+            if isinstance(value, dict):
+                usage_snapshot = value
+        except (OSError, ValueError):
+            pass
+        if tail_only and int(usage_snapshot.get("schema_version") or 0) >= 2:
+            for key in ("tokens_in", "tokens_out", "cached_tokens_in", "reasoning_tokens_out", "cost_usd"):
+                if key in usage_snapshot:
+                    usage[key] = usage_snapshot[key]
+        context_events = [event for event in events if event.kind == "context"]
+        compaction_events = [event for event in events if event.kind == "compaction"]
+        snapshot_context = (
+            usage_snapshot.get("context")
+            if isinstance(usage_snapshot.get("context"), dict)
+            else {}
+        )
+        last_context = snapshot_context or (context_events[-1].data if context_events else {})
+        telemetry = {
+            "compaction_count": int(usage_snapshot.get("compaction_count") or len(compaction_events)),
+            "last_compaction_at": str(
+                usage_snapshot.get("last_compaction_at")
+                or (compaction_events[-1].at.isoformat() if compaction_events else "")
+            ),
+            "request_tokens_in": int(last_context.get("request_tokens_in") or 0),
+            "request_tokens_out": int(last_context.get("request_tokens_out") or 0),
+            "request_cached_tokens_in": int(last_context.get("request_cached_tokens_in") or 0),
+            "cumulative_tokens_in": int(last_context.get("cumulative_tokens_in") or 0),
+            "cumulative_tokens_out": int(last_context.get("cumulative_tokens_out") or 0),
+            "cumulative_cached_tokens_in": int(last_context.get("cumulative_cached_tokens_in") or 0),
+            "model_context_window": int(last_context.get("model_context_window") or 0),
+        }
 
         def _fail_status(reason: Any, timed_out: Any) -> str:
             # A timeout or an exhausted-retry transient error is NOT a crash: give
@@ -861,6 +963,8 @@ class WorkspaceService:
                 return "timed_out"
             if reason in ("overloaded", "server_error", "rate_limit"):
                 return "throttled"
+            if reason in ("interrupted", "cancelled", "orphaned"):
+                return str(reason)
             return "failed"
 
         status = "created"
@@ -894,10 +998,15 @@ class WorkspaceService:
             # it on session-meta from turn_context) over the configured tier, so the
             # UI confirms what the session actually ran with — matching model above.
             "effort": observed_effort(events) or meta.get("effort"),
-            "started_at": events[0].at.isoformat() if events else "",
-            "ended_at": end.at.isoformat() if end else "",
+            "started_at": started_at or (events[0].at.isoformat() if events else ""),
+            "ended_at": str(
+                meta.get("ended_at")
+                or meta_data.get("ended_at")
+                or (end.at.isoformat() if end else "")
+            ),
             "last_at": events[-1].at.isoformat() if events else "",
             "usage": usage,
+            "telemetry": telemetry,
         }
 
     @staticmethod
@@ -1169,6 +1278,34 @@ class WorkspaceService:
 
         inbox_activity = self._session_inbox_activity(run_id, session)
         roadmap_activity = self._session_roadmap_activity(run_id, session)
+        attempts: list[dict[str, Any]] = []
+        checks: list[dict[str, Any]] = []
+        try:
+            attempt_session = self._find_session_log(self.stores.run_logs.get(run_id), session)
+            attempts_dir = attempt_session.path / "attempts" if attempt_session is not None else None
+            if attempts_dir is not None and attempts_dir.is_dir():
+                for manifest_path in sorted(attempts_dir.glob("*/manifest.json"), reverse=True):
+                    try:
+                        manifest = json.loads(manifest_path.read_text("utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if isinstance(manifest, dict):
+                        attempts.append({
+                            **manifest,
+                            "id": manifest_path.parent.name,
+                            "artifact_ref": manifest_path.relative_to(self.root).as_posix(),
+                        })
+            checks_dir = attempt_session.path / "checks" if attempt_session is not None else None
+            if checks_dir is not None and checks_dir.is_dir():
+                for result_path in sorted(checks_dir.glob("*.json"), reverse=True):
+                    try:
+                        result = json.loads(result_path.read_text("utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    if isinstance(result, dict):
+                        checks.append(result)
+        except (FileNotFoundError, ValueError):
+            pass
         wsgit = WorkspaceGit(self.root) if git_available() else None
         if wsgit is None:
             return {
@@ -1176,6 +1313,17 @@ class WorkspaceService:
                 "session": session,
                 "inbox": inbox_activity,
                 "roadmap": roadmap_activity,
+                "attempts": attempts,
+                "checks": checks,
+                "commit_counts": {},
+                "outcome": {
+                    "execution_status": "unknown",
+                    "objective_status": "unknown",
+                    "durable_result": "unavailable",
+                    "discarded_attempts": len(attempts),
+                    "checks_run": len(checks),
+                    "failed_checks": sum(not bool(check.get("ok")) for check in checks),
+                },
                 "commits": [],
                 "total": 0,
                 "offset": max(0, offset),
@@ -1188,7 +1336,39 @@ class WorkspaceService:
             session_meta = session_log.read_meta() if session_log is not None else {}
         except Exception:
             session_meta = {}
-        projects = [p for p in (info.get("projects") or session_meta.get("projects") or []) if p]
+
+        session_data = (
+            session_meta.get("data") if isinstance(session_meta.get("data"), dict) else {}
+        )
+        task_status = "unknown"
+        task_id = str(session_meta.get("task_id") or session_data.get("task_id") or "")
+        if task_id:
+            try:
+                task_status = self.stores.tasks.get(task_id).status.value
+            except (FileNotFoundError, KeyError, ValueError):
+                pass
+
+        def execution_status() -> str:
+            if "ok" in session_meta:
+                return "completed" if session_meta.get("ok") else "failed"
+            if "ok" in session_data:
+                return "completed" if session_data.get("ok") else "failed"
+            return str(session_meta.get("status") or "unknown")
+        blocker = str(
+            session_meta.get("failure_reason")
+            or session_data.get("failure_reason")
+            or ""
+        )
+        projects = [
+            p
+            for p in (
+                info.get("projects")
+                or session_meta.get("projects")
+                or session_data.get("projects")
+                or []
+            )
+            if p
+        ]
         paths = self._project_paths(projects) or tuple()
         commits_out: list[dict[str, Any]] = []
         rows = wsgit.session_commits_detailed(run_id, session)
@@ -1199,6 +1379,20 @@ class WorkspaceService:
                 known.add(row["sha"])
         rows.sort(key=lambda row: row.get("date", ""), reverse=True)  # latest commit first (GH #6)
         total = len(rows)
+        commit_counts: dict[str, int] = {}
+        for row in rows:
+            kind = str(row.get("kind") or "unknown")
+            commit_counts[kind] = commit_counts.get(kind, 0) + 1
+        agent_commits = commit_counts.get("agent", 0)
+        integration_commits = commit_counts.get("integration", 0)
+        if agent_commits:
+            durable_result = "agent_commit"
+        elif integration_commits:
+            durable_result = "integration_only"
+        elif total:
+            durable_result = "other_commit"
+        else:
+            durable_result = "no_commit"
         start = max(0, offset)
         if limit is not None:
             page_size = max(1, min(100, limit))
@@ -1226,6 +1420,20 @@ class WorkspaceService:
             "session": session,
             "inbox": inbox_activity,
             "roadmap": roadmap_activity,
+            "commit_counts": commit_counts,
+            "outcome": {
+                "execution_status": execution_status(),
+                "objective_status": task_status,
+                "durable_result": durable_result,
+                "agent_commits": agent_commits,
+                "integration_commits": integration_commits,
+                "discarded_attempts": len(attempts),
+                "checks_run": len(checks),
+                "failed_checks": sum(not bool(check.get("ok")) for check in checks),
+                "blocker": blocker,
+            },
+            "attempts": attempts,
+            "checks": checks,
             "commits": commits_out,
             "total": total,
             "offset": start,
@@ -1503,7 +1711,10 @@ class WorkspaceService:
     def endpoints(self) -> list[str]:
         """Every GET path the dashboard reads. The live server and the static
         exporter both go through this, so they can never drift."""
-        eps = ["/api/state", "/api/blueprints", "/api/transcripts", "/api/git/log", "/api/git/diff", "/api/projects"]
+        eps = [
+            "/api/state", "/api/performance", "/api/blueprints", "/api/transcripts",
+            "/api/git/log", "/api/git/diff", "/api/projects",
+        ]
         for transcript in self.transcripts():
             ref = transcript["ref"]
             eps.append(f"/api/report?ref={ref}")
@@ -1584,6 +1795,8 @@ class WorkspaceService:
         query = parse_qs(parsed.query)
         if parsed.path == "/api/state":
             return self.state()
+        if parsed.path == "/api/performance":
+            return dict(self._last_state_performance)
         if parsed.path == "/api/blueprints":
             # Light per-project DAGs, split out of /api/state: they change only
             # on publish/sync, so the browser's ETag cache keeps this a 304

@@ -36,6 +36,11 @@ class TranscriptKind(StrEnum):
     # tailer periodically snapshots them into this append-only event stream.
     WORKFLOW_PROGRESS = "workflow_progress"
     USAGE = "usage"
+    # Point-in-time context telemetry from engines that expose both the current
+    # request and cumulative token counters (Codex rollout ``token_count``).
+    CONTEXT = "context"
+    # Automatic/manual context compaction recorded by an engine.
+    COMPACTION = "compaction"
     # A transient, non-fatal notice (e.g. "retrying after a 529") — surfaced in
     # the transcript but NEVER counted as a session failure. Distinct from ERROR
     # precisely so a run that is merely waiting to retry does not show as failed.

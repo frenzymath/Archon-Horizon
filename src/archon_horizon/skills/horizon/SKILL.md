@@ -204,7 +204,11 @@ required LSP loop: query the target with `lean_diagnostic_messages` or
 build` for the final session boundary or a specifically required kernel check;
 LSP is enough between edits and proof obligations. Use the narrowest `lake env
 lean` fallback when LSP is unavailable, and do not duplicate that check when the
-configured final build covers the same files.
+configured final build covers the same files. Run broad or final checks through
+`"$HORIZON_BIN" check [lake-target ...]`; use `--lean FILE` for a serialized
+file check when LSP is unavailable. Horizon gives these checks one shared
+resource slot, coalesces identical concurrent requests, applies a timeout, and
+records their result in the session.
 
 **Do not `grep` for a lemma.** Grep matches names you already guessed; it cannot
 find the lemma whose name you don't know, and that is the one that costs you an
@@ -219,7 +223,7 @@ mathlib — query it:
 | "does something in scope close this goal?" | LSP `lean_local_search` / `lean_hover_info` | reading files |
 | "what should I prove next?" | `"$HORIZON_BIN" graph -p <project> frontier` (ranked) | scanning the blueprint |
 | "what does this node depend on / block?" | `"$HORIZON_BIN" graph -p <project> get label:<id>` | reading imports |
-| "is the proof right?" | `lake env lean <file>` (narrowest faithful check) | `lean_diagnostic_messages` alone |
+| "is the proof right?" | `"$HORIZON_BIN" check --lean <file>` (narrowest faithful check) | `lean_diagnostic_messages` alone |
 
 `"$HORIZON_BIN" search` covers **your projects and mathlib together**, which is
 its whole point: the premise you need is usually already in mathlib under a name
@@ -280,6 +284,12 @@ staging explicit files over `add -A`. Beyond commits:
 - Commit after each independently useful verified proof, file, or bounded tooling
   change; commit before long builds/reviews and before expanding scope. Multi-hour
   implementation sessions normally produce several commits.
+- A rejected proof attempt is evidence, not a commit. Before deleting or replacing
+  a substantial draft, preserve it with
+  `"$HORIZON_BIN" attempt save <files...> --reason "why it failed"`
+  (optionally `--diagnostics <file>`). The dashboard reports the artifact
+  separately from durable commits, so the next session can inspect the dead end
+  without restoring it to the working tree.
 - Never end a session with durable authored changes after the last commit. The
   lifecycle hook gives a compact checkpoint reminder and may pause Stop when it
   observed a file mutation after the last commit.

@@ -106,6 +106,26 @@ Read the workspace's standing delegation consent — what a running agent is all
 | :--- | :--- |
 | `--json` | Emit the delegation config as JSON to `stdout`. |
 
+### `horizon attempt`
+
+Preserve a substantial rejected or paused draft outside the working tree so a
+later session can inspect the dead end without treating it as a durable commit.
+Artifacts live under the active session's `attempts/` directory.
+([`commands/attempt.py`](../../src/archon_horizon/commands/attempt.py))
+
+- `horizon attempt save <files...> --reason <text> [--diagnostics <file>] [--json]`
+- `horizon attempt list [--json]`
+
+### `horizon check`
+
+Run `lake build` or one standalone Lean file while holding a workspace-wide
+check lock. Identical concurrent successful requests are reused after waiting;
+results and timeouts are recorded under the active session's `checks/`
+directory. ([`commands/check.py`](../../src/archon_horizon/commands/check.py))
+
+- `horizon check [targets...] [--timeout <seconds>] [--json]`
+- `horizon check --lean <file> [--timeout <seconds>] [--json]`
+
 ---
 
 ## 4. Inbox & communication

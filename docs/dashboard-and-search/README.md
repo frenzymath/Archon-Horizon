@@ -7,6 +7,7 @@ Archon Horizon includes both an interactive Single Page Application (SPA) dashbo
 ## Table of Contents
 
 - [1. Live Web Dashboard Server](#1-live-web-dashboard-server)
+  - [Native Agent & Context Telemetry](#native-agent--context-telemetry)
   - [Clickable Local-Reference Chips](#clickable-local-reference-chips)
   - [Board View (`/board`)](#board-view-board)
   - [Commit Resolution API & Log Ordering](#commit-resolution-api--log-ordering)
@@ -47,6 +48,22 @@ The server is implemented in [`server/app.py`](../../src/archon_horizon/server/a
 - **Board view**: A GitHub-Projects-style kanban that groups the roadmap by milestone (see [Board View](#board-view-board)).
 - **Inbox Management**: Directly review, triage, and comment on workspace inbox hints and issues.
 - **Clickable reference chips**: Ids and commit SHAs mentioned anywhere in rendered text become links that jump straight to the entity (see [Clickable Local-Reference Chips](#clickable-local-reference-chips)).
+
+### Native Agent & Context Telemetry
+
+Headless Codex stores each native subagent in a separate rollout file. Horizon
+tails those files while the parent is running, reconstructs parent/child and
+nested relationships from spawn provenance, and renders role, nickname, model,
+depth, duration, and terminal status in the same transcript tree used for other
+engines. A child that disappears without a completion record is shown as
+orphaned rather than silently left running.
+
+Codex token-count records distinguish current-request input, cached input,
+cumulative session input, and the model context window; native automatic or
+manual compactions are separate events. Since Codex emits a token-count record
+after nearly every model step, the transcript displays only the newest context
+snapshot. The complete append-only history remains on disk, while the latest
+snapshot and compaction count remain available in session details.
 
 ### Clickable Local-Reference Chips
 

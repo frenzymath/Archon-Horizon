@@ -393,3 +393,60 @@ def test_hidden_cli_emits_only_hook_json(tmp_path: Path, monkeypatch, capsys) ->
 
     response = json.loads(capsys.readouterr().out)
     assert "CLI delivery" in _additional(response)
+
+
+def test_horizon_state_mutations_and_failed_commits_remain_dirty(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root, _ = _workspace(tmp_path, monkeypatch)
+    mutation = _payload(
+        "PostToolUse",
+        tool_name="Bash",
+        tool_input={"command": '"$HORIZON_BIN" task comment T-1 --body "checkpoint"'},
+    )
+    assert hook_response(root, mutation) is None
+    failed_commit = _payload(
+        "PostToolUse",
+        tool_name="Bash",
+        tool_input={"command": '$HORIZON_GIT commit -m "checkpoint" -- .archon-horizon/tasks'},
+        tool_response={"exit_code": 1},
+    )
+    assert hook_response(root, failed_commit) is None
+
+    blocked = hook_response(root, _payload(
+        "Stop", stop_hook_active=False, last_assistant_message=_REPORT,
+    ))
+    assert blocked is not None
+    assert "COMMIT CHECKPOINT" in blocked["reason"]
+
+
+def test_elapsed_time_can_trigger_commit_and_progress_checkpoints(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    root, _ = _workspace(tmp_path, monkeypatch)
+    now = [100.0]
+    monkeypatch.setattr(agent_hook_module.time, "time", lambda: now[0])
+    monkeypatch.setenv("ARCHON_HORIZON_COMMIT_REMINDER_SECONDS", "10")
+    assert hook_response(root, _payload(
+        "PostToolUse", tool_name="Edit", tool_input={"file_path": "Foo.lean"},
+    )) is None
+    now[0] += 11
+    reminder = hook_response(root, _payload(
+        "PostToolUse", tool_name="Bash", tool_input={"command": "lake env lean Foo.lean"},
+    ))
+    assert reminder is not None
+    assert "COMMIT CHECKPOINT" in _additional(reminder)
+
+    root2, _ = _workspace(tmp_path / "other", monkeypatch)
+    now[0] = 200.0
+    monkeypatch.setattr(agent_hook_module, "_PROGRESS_REMINDER_EVERY", 2)
+    monkeypatch.setenv("ARCHON_HORIZON_PROGRESS_REMINDER_SECONDS", "10")
+    assert hook_response(root2, _payload(
+        "PostToolUse", tool_name="Bash", tool_input={"command": "rg theorem Foo.lean"},
+    )) is None
+    now[0] += 11
+    progress = hook_response(root2, _payload(
+        "PostToolUse", tool_name="Bash", tool_input={"command": "rg lemma Foo.lean"},
+    ))
+    assert progress is not None
+    assert "PROGRESS CHECKPOINT" in _additional(progress)
