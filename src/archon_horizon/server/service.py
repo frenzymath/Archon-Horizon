@@ -202,6 +202,8 @@ class WorkspaceService:
         self._events_offset = 0
         self._events_sig: tuple[int, int] | None = None
         self._events_json: list[dict[str, Any]] = []
+        self._session_integrations_token: tuple[int, int] | None = None
+        self._session_integrations_index: dict[str, dict[str, dict[str, Any]]] = {}
         # Published blueprint DAGs change only on an explicit sync/publish;
         # cache the lightened copy by the cache files' signatures.
         self._dags_sig: tuple | None = None
@@ -523,7 +525,18 @@ class WorkspaceService:
             row["activity"] = activity
         return payload
 
-    def state(self, *, events_tail: int = 50) -> dict[str, Any]:
+    def state(
+        self,
+        *,
+        events_tail: int = 50,
+        session_refs: set[str] | None = None,
+    ) -> dict[str, Any]:
+        """Return dashboard state, optionally restricted to transcript refs.
+
+        The live dashboard keeps the complete run tree. Static snapshots pass a
+        bounded ref set so old sessions do not need their derived state rebuilt
+        merely to publish a recent snapshot.
+        """
         state_started = time.perf_counter()
         events = self._events_all_jsonable()
         payload = {
@@ -553,7 +566,7 @@ class WorkspaceService:
                 (self.workspace.state_path / "tasks",),
                 lambda: [serde.to_jsonable(t) for t in self.stores.tasks.list()],
             ),
-            "runs": self._runs_state(events),
+            "runs": self._runs_state(events, session_refs=session_refs),
             "local_inbox": self._cached_by_stamp(
                 "local_inbox",
                 (self.workspace.state_path / "inbox" / "local",),
@@ -714,7 +727,12 @@ class WorkspaceService:
             for name, cfg in self.cfg.harnesses.items()
         }
 
-    def _runs_state(self, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    def _runs_state(
+        self,
+        events: list[dict[str, Any]] | None = None,
+        *,
+        session_refs: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         records = {run.id: serde.to_jsonable(run) for run in self.stores.runs.list()}
         try:
             from archon_horizon.commands.ps import live_runs
@@ -730,15 +748,17 @@ class WorkspaceService:
             run_id = event.get("data", {}).get("run_id")
             if isinstance(run_id, str) and run_id:
                 run_events.setdefault(run_id, []).append(event)
-        states = [
-            self._run_state(
+        states = []
+        for run_id in reversed(self.stores.run_logs.ids()):
+            state = self._run_state(
                 self.stores.run_logs.get(run_id),
                 records.get(run_id, {}),
                 run_events.get(run_id, []),
                 process_live=run_id in live_ids,
+                session_refs=session_refs,
             )
-            for run_id in reversed(self.stores.run_logs.ids())
-        ]
+            if state is not None:
+                states.append(state)
         self._save_session_cache()
         return states
 
@@ -749,9 +769,24 @@ class WorkspaceService:
         events: list[dict[str, Any]],
         *,
         process_live: bool = False,
-    ) -> dict[str, Any]:
-        sessions = [self._session_state(run.id, session, "") for session in run.sessions()]
-        baseline_session = self._baseline_session_state(run.id, events)
+        session_refs: set[str] | None = None,
+    ) -> dict[str, Any] | None:
+        sessions = []
+        for session in run.sessions():
+            node = (
+                self._session_state(run.id, session, "")
+                if session_refs is None
+                else self._session_state(run.id, session, "", session_refs=session_refs)
+            )
+            if node is not None:
+                sessions.append(node)
+        if session_refs is not None and not sessions:
+            return None
+        baseline_session = (
+            self._baseline_session_state(run.id, events)
+            if session_refs is None or sessions
+            else None
+        )
         if baseline_session is not None:
             sessions.insert(0, baseline_session)
         # Tag each top-level session with the ledger commit it produced (from its
@@ -820,7 +855,14 @@ class WorkspaceService:
             "sessions": sessions,
         }
 
-    def _session_state(self, run_id: str, session: SessionLog, parent: str) -> dict[str, Any]:
+    def _session_state(
+        self,
+        run_id: str,
+        session: SessionLog,
+        parent: str,
+        *,
+        session_refs: set[str] | None = None,
+    ) -> dict[str, Any] | None:
         """One session's derived state, served from the signature-keyed cache.
 
         A completed session's transcript and meta never change, so after the
@@ -829,6 +871,8 @@ class WorkspaceService:
         live session's subagents appear as they materialize) and is returned as
         a shallow copy because ``_run_state`` annotates/flips top-level keys.
         """
+        if session_refs is not None and not self._session_tree_matches(session, session_refs):
+            return None
         key = str(session.path)
         sig = self._session_sig(session)
         with self._session_cache_lock:
@@ -847,10 +891,25 @@ class WorkspaceService:
                     self._session_cache_dirty = True
         node["run"] = run_id
         node["parent"] = parent
-        node["children"] = [
-            self._session_state(run_id, child, session.name) for child in session.subsessions()
-        ]
+        children = []
+        for child in session.subsessions():
+            child_node = self._session_state(
+                run_id, child, session.name, session_refs=session_refs
+            )
+            if child_node is not None:
+                children.append(child_node)
+        node["children"] = children
         return node
+
+    def _session_tree_matches(self, session: SessionLog, refs: set[str]) -> bool:
+        """Whether a session or one of its descendants is in ``refs``."""
+        try:
+            ref = session.transcript_path.relative_to(self.root).as_posix()
+        except ValueError:
+            ref = ""
+        if ref in refs:
+            return True
+        return any(self._session_tree_matches(child, refs) for child in session.subsessions())
 
     def _compute_session_state(self, session: SessionLog) -> dict[str, Any]:
         # Fold any inline subagent events into on-disk child sessions. The write
@@ -1047,15 +1106,21 @@ class WorkspaceService:
     def _session_integrations(self, run_id: str) -> dict[str, dict[str, Any]]:
         """Map each session name in ``run_id`` to its integration event data
         (the ledger commit sha + the projects it was scoped to)."""
-        integrated: dict[str, dict[str, Any]] = {}
-        for raw in self.stores.events.read_all():
-            event = serde.to_jsonable(raw)
-            data = event.get("data", {})
-            if event.get("type") == "workspace.session.integrated" and data.get("run_id") == run_id:
+        events = self._events_all_jsonable()
+        token = (id(events), len(events))
+        if token != self._session_integrations_token:
+            index: dict[str, dict[str, dict[str, Any]]] = {}
+            for event in events:
+                data = event.get("data", {})
+                if event.get("type") != "workspace.session.integrated":
+                    continue
+                event_run = data.get("run_id")
                 name = data.get("session")
-                if name:
-                    integrated[name] = data
-        return integrated
+                if event_run and name:
+                    index.setdefault(str(event_run), {})[str(name)] = data
+            self._session_integrations_index = index
+            self._session_integrations_token = token
+        return self._session_integrations_index.get(run_id, {})
 
     def _project_paths(self, names: list[str]) -> tuple[str, ...]:
         paths: list[str] = []
@@ -1708,28 +1773,45 @@ class WorkspaceService:
 
     # ── endpoint registry (shared by live server + static export) ────
 
-    def endpoints(self) -> list[str]:
-        """Every GET path the dashboard reads. The live server and the static
-        exporter both go through this, so they can never drift."""
+    def endpoints(
+        self,
+        *,
+        session_refs: set[str] | None = None,
+        include_session_details: bool = True,
+        transcript_page_limit: int | None = None,
+    ) -> list[str]:
+        """Every GET path the dashboard reads.
+
+        The live server uses the default full-history registry. Static export
+        passes a bounded ref set and omits commit/file-diff endpoints, which
+        remain lazy live-dashboard requests rather than snapshot work.
+        """
         eps = [
             "/api/state", "/api/performance", "/api/blueprints", "/api/transcripts",
             "/api/git/log", "/api/git/diff", "/api/projects",
         ]
-        for transcript in self.transcripts():
+        transcripts = self.transcripts()
+        if session_refs is not None:
+            transcripts = [item for item in transcripts if item.get("ref") in session_refs]
+        for transcript in transcripts:
             ref = transcript["ref"]
             eps.append(f"/api/report?ref={ref}")
             before: int | None = None
+            page_count = 0
             while True:
+                if transcript_page_limit is not None and page_count >= max(0, transcript_page_limit):
+                    break
                 suffix = f"&before={before}" if before is not None else ""
                 eps.append(f"/api/transcript?ref={ref}&limit=120{suffix}")
                 page = self.transcript_page(ref, before=before, limit=120)
+                page_count += 1
                 if not page.get("has_more") or page.get("before") is None:
                     break
                 before = int(page["before"])
         # The commit-granular git view: one commits endpoint per session, plus a
         # per-commit file-diff endpoint per changed Lean/blueprint file so the
         # click-to-diff works on the static page too.
-        for run_id in self.stores.run_logs.ids():
+        for run_id in (self.stores.run_logs.ids() if include_session_details else ()):
             try:
                 sessions = self.stores.run_logs.get(run_id).sessions()
             except Exception:

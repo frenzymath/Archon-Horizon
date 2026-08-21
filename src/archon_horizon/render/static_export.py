@@ -7,6 +7,10 @@ writes exactly those files — the hash MUST match the browser's
 ``crypto.subtle.digest('SHA-256', ...)``, which is plain
 ``hashlib.sha256(path).hexdigest()`` over the same path string.
 
+Static exports deliberately use a bounded recent-session history. The live
+dashboard remains the complete archive, while the published site avoids
+precomputing old-session commit and file-diff requests.
+
 With a built SPA (``dist_dir``) it lays the app down and injects the
 ``window.__ARCHON_STATIC__`` marker that flips it into static mode. Without
 one, the data files are still exported and the index page explains how to
@@ -19,6 +23,7 @@ import hashlib
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from archon_horizon.server.service import WorkspaceService
 
@@ -29,6 +34,12 @@ from archon_horizon.server.service import WorkspaceService
 # NOT rebuild in CI, so it needs no Python/Node toolchain and never depends on
 # the (gitignored) SPA build being present in a fresh checkout.
 PAGES_WORKFLOW_FILENAME = "horizon-dashboard-pages.yml"
+
+# A published snapshot is a report, not an archive of every transcript ever
+# written. Keep enough recent history to inspect the latest work while leaving
+# the live dashboard as the place for the complete session and commit history.
+DEFAULT_HISTORY_LIMIT = 8
+DEFAULT_TRANSCRIPT_PAGE_LIMIT = 2
 
 _PAGES_WORKFLOW = """name: Deploy Horizon dashboard
 
@@ -133,14 +144,49 @@ def _inject_static_marker(index_html: str, marker: dict[str, object]) -> str:
     return script + index_html
 
 
-def export_static(service: WorkspaceService, out_dir: Path, *, dist_dir: Path | None = None) -> Path:
+def _recent_transcripts(
+    transcripts: list[dict[str, Any]], history_limit: int
+) -> list[dict[str, Any]]:
+    def activity_key(item: dict[str, Any]) -> tuple[str, str, str, str]:
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        return (
+            str(meta.get("ended_at") or ""),
+            str(meta.get("last_at") or ""),
+            str(meta.get("started_at") or ""),
+            str(item.get("ref") or ""),
+        )
+
+    return sorted(transcripts, key=activity_key, reverse=True)[: max(0, history_limit)]
+
+
+def export_static(
+    service: WorkspaceService,
+    out_dir: Path,
+    *,
+    dist_dir: Path | None = None,
+    history_limit: int = DEFAULT_HISTORY_LIMIT,
+    transcript_page_limit: int = DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Dump one JSON file per endpoint, keyed by sha256(path).
+    # 1. Select a bounded recent history before deriving run state. This keeps
+    # old sessions out of both the payload and the expensive state computation.
+    all_transcripts = service.transcripts()
+    selected_transcripts = _recent_transcripts(all_transcripts, history_limit)
+    selected_refs = {str(item["ref"]) for item in selected_transcripts if item.get("ref")}
+
+    # 2. Dump one JSON file per endpoint, keyed by sha256(path). The live
+    # endpoint registry is parameterized so static export can omit lazy commit
+    # and file-diff endpoints without drifting on project/roadmap paths.
     data_dir = out_dir / "data" / "api"
     data_dir.mkdir(parents=True, exist_ok=True)
-    paths = service.endpoints()
+    paths = service.endpoints(
+        session_refs=selected_refs,
+        include_session_details=False,
+        transcript_page_limit=transcript_page_limit,
+    )
     exported: list[str] = []
+    static_transcripts = selected_transcripts
     for path in paths:
         # A handler raises KeyError to mean "404" (e.g. /api/commit?sha=... for a
         # SHA that resolves in no project's git log — cited SHAs in inbox bodies,
@@ -149,7 +195,12 @@ def export_static(service: WorkspaceService, out_dir: Path, *, dist_dir: Path | 
         # plain; here it would abort the whole export, so skip the endpoint and
         # let the client take the same absent-data path.
         try:
-            payload = service.serve_endpoint(path)
+            if path == "/api/state":
+                payload = service.state(session_refs=selected_refs)
+            elif path == "/api/transcripts":
+                payload = static_transcripts
+            else:
+                payload = service.serve_endpoint(path)
         except KeyError:
             continue
         (data_dir / f"{endpoint_key(path)}.json").write_text(
@@ -161,7 +212,13 @@ def export_static(service: WorkspaceService, out_dir: Path, *, dist_dir: Path | 
     if reports_src.exists():
         shutil.copytree(reports_src, out_dir / "reports", dirs_exist_ok=True)
 
-    marker = {"generatedAt": "", "endpointCount": len(paths)}
+    marker = {
+        "generatedAt": "",
+        "endpointCount": len(paths),
+        "historyLimited": len(selected_transcripts) < len(all_transcripts),
+        "historyLimit": max(0, history_limit),
+        "transcriptPageLimit": max(0, transcript_page_limit),
+    }
 
     # 2. Lay down the app shell.
     if dist_dir is not None and (dist_dir / "index.html").exists():

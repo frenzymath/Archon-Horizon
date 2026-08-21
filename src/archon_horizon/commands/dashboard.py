@@ -36,12 +36,16 @@ class DashboardCommand:
         dist: str | None = None,
         as_json: bool = False,
         workflow: bool = False,
+        history_limit: int = 8,
+        transcript_page_limit: int = 2,
     ) -> None:
         self.root = root
         self.out = out
         self.dist = dist
         self.as_json = as_json
         self.workflow = workflow
+        self.history_limit = history_limit
+        self.transcript_page_limit = transcript_page_limit
 
     def run(self) -> None:
         from archon_horizon.render.static_export import export_static, write_pages_workflow
@@ -50,7 +54,13 @@ class DashboardCommand:
 
         service = WorkspaceService(self.root)
         dist = Path(self.dist) if self.dist else _packaged_dist()
-        out = export_static(service, self.root / self.out, dist_dir=dist)
+        out = export_static(
+            service,
+            self.root / self.out,
+            dist_dir=dist,
+            history_limit=self.history_limit,
+            transcript_page_limit=self.transcript_page_limit,
+        )
 
         workflow_path: Path | None = None
         workflow_status = ""
@@ -196,6 +206,16 @@ def dashboard(
         False, "--static", help="Export a static snapshot instead of running the live server."
     ),
     out: str = typer.Option("dashboard", "--out", help="Output directory for the --static export."),
+    history_limit: int = typer.Option(
+        8,
+        "--history-limit",
+        help="Maximum recent sessions to include in a static snapshot (live mode is unaffected).",
+    ),
+    transcript_page_limit: int = typer.Option(
+        2,
+        "--transcript-page-limit",
+        help="Maximum 120-event pages per session in a static snapshot (live mode is unaffected).",
+    ),
     workflow: bool = typer.Option(
         False, "--workflow",
         help="With --static, also write a GitHub Pages deploy workflow (.github/workflows/) "
@@ -213,7 +233,15 @@ def dashboard(
 ) -> None:
     """Run the live dashboard server, or export a static snapshot with --static."""
     if static:
-        DashboardCommand(ctx.obj["root"], out=out, dist=dist, as_json=as_json, workflow=workflow).run()
+        DashboardCommand(
+            ctx.obj["root"],
+            out=out,
+            dist=dist,
+            as_json=as_json,
+            workflow=workflow,
+            history_limit=history_limit,
+            transcript_page_limit=transcript_page_limit,
+        ).run()
     elif workflow:
         raise typer.BadParameter("--workflow only applies with --static.")
     else:

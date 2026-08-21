@@ -6,7 +6,13 @@
 
 declare global {
   interface Window {
-    __ARCHON_STATIC__?: { generatedAt?: string; endpointCount?: number };
+  __ARCHON_STATIC__?: {
+    generatedAt?: string;
+    endpointCount?: number;
+    historyLimited?: boolean;
+    historyLimit?: number;
+    transcriptPageLimit?: number;
+  };
   }
 }
 

@@ -2276,6 +2276,9 @@ function provenanceParts(provenance: any): string[] {
 
 function Transcripts({ state }: { state?: any }) {
   const TRANSCRIPT_PAGE_SIZE = 120;
+  const staticPageLimit = STATIC
+    ? Math.max(1, Number(window.__ARCHON_STATIC__?.transcriptPageLimit ?? 1))
+    : Number.POSITIVE_INFINITY;
   const runs = state?.runs ?? [];
   // Newest run first, so an in-progress run is at the top of the sidebar.
   const orderedRuns = [...runs].sort(compareRuns);
@@ -2296,6 +2299,7 @@ function Transcripts({ state }: { state?: any }) {
   );
   const activeTickSession = useMemo(() => activeRunSessionKey(selectedRun), [selectedRun]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const loadedPages = useRef(0);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -2335,6 +2339,7 @@ function Transcripts({ state }: { state?: any }) {
     setBefore(null);
     setHasOlder(false);
     setTranscriptError('');
+    loadedPages.current = 0;
     const load = async () => {
       const reportRequest = getReport(selected).then((value) => value, () => null);
       const tx = await getTranscriptPage(selected, undefined, TRANSCRIPT_PAGE_SIZE)
@@ -2345,8 +2350,9 @@ function Transcripts({ state }: { state?: any }) {
           ? mergeTranscriptPages(current ?? [], tx.events ?? [])
           : (tx.events ?? []));
         if (!initialized) {
+          loadedPages.current = 1;
           setBefore(tx.before ?? null);
-          setHasOlder(Boolean(tx.has_more));
+          setHasOlder(Boolean(tx.has_more) && loadedPages.current < staticPageLimit);
         }
         setTranscriptError('');
       } else if (!initialized) {
@@ -2368,14 +2374,15 @@ function Transcripts({ state }: { state?: any }) {
   }, [selected]);
 
   const loadOlder = () => {
-    if (!selected || before == null || loadingOlder) return;
+    if (!selected || before == null || loadingOlder || loadedPages.current >= staticPageLimit) return;
     setLoadingOlder(true);
     setTranscriptError('');
     getTranscriptPage(selected, before, TRANSCRIPT_PAGE_SIZE)
       .then((page) => {
         setEvents((current) => mergeTranscriptPages(page.events ?? [], current ?? []));
+        loadedPages.current += 1;
         setBefore(page.before ?? null);
-        setHasOlder(Boolean(page.has_more));
+        setHasOlder(Boolean(page.has_more) && loadedPages.current < staticPageLimit);
       })
       .catch(() => setTranscriptError('Unable to load older entries.'))
       .finally(() => setLoadingOlder(false));
@@ -2385,6 +2392,9 @@ function Transcripts({ state }: { state?: any }) {
     <div className="page transcripts-page">
       <aside className="sidebar">
         <h2>Runs</h2>
+        {STATIC && window.__ARCHON_STATIC__?.historyLimited && (
+          <p className="notice info">Showing the most recent published sessions. The live dashboard has the complete history.</p>
+        )}
         {orderedRuns.length === 0 && <p className="empty">No logs yet.</p>}
         <div className="session-list">
           {orderedRuns.map((run: any) => (
@@ -2756,6 +2766,7 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>('');
   useEffect(() => {
+    if (STATIC) return;
     let live = true;
     setCommits(null);
     setInbox(null);
@@ -2807,6 +2818,14 @@ function SessionCommitsPanel({ runId, session }: { runId: string; session: strin
       .catch(() => setError('Unable to load older commits.'))
       .finally(() => setLoadingMore(false));
   };
+  if (STATIC) {
+    return (
+      <details className="log-panel commits-panel" open>
+        <summary>Commits</summary>
+        <p className="empty commit-empty">Commit details are available in the live dashboard.</p>
+      </details>
+    );
+  }
   if (commits === null) {
     return (
       <details className="log-panel commits-panel" open>

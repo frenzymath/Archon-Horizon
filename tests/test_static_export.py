@@ -51,6 +51,73 @@ def test_export_with_spa_injects_static_marker(tmp_path: Path) -> None:
     assert (out / "assets" / "app.js").exists()    # SPA assets copied
 
 
+def test_static_export_bounds_history_and_skips_session_details(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    class FakeService:
+        def __init__(self) -> None:
+            self.workspace = SimpleNamespace(state_path=tmp_path / "state")
+            self.workspace.state_path.mkdir()
+            self._last_state_performance = {"session_count": 2}
+            self.transcript_rows = [
+                {"ref": "runs/old.jsonl", "meta": {"ended_at": "2024-01-01T00:00:00+00:00"}},
+                {"ref": "runs/new.jsonl", "meta": {"ended_at": "2024-01-03T00:00:00+00:00"}},
+                {"ref": "runs/newer.jsonl", "meta": {"ended_at": "2024-01-04T00:00:00+00:00"}},
+            ]
+            self.endpoint_args: dict[str, object] = {}
+            self.paths: list[str] = []
+            self.state_refs: set[str] | None = None
+
+        def transcripts(self) -> list[dict[str, object]]:
+            return list(self.transcript_rows)
+
+        def endpoints(self, **kwargs: object) -> list[str]:
+            self.endpoint_args = kwargs
+            self.paths = [
+                "/api/state",
+                "/api/performance",
+                "/api/transcripts",
+                "/api/report?ref=runs/newer.jsonl",
+                "/api/transcript?ref=runs/newer.jsonl&limit=120",
+            ]
+            return self.paths
+
+        def state(self, *, session_refs: set[str]) -> dict[str, object]:
+            self.state_refs = session_refs
+            return {"workspace": "fake", "runs": [{"session": ref} for ref in sorted(session_refs)]}
+
+        def serve_endpoint(self, path: str) -> object:
+            if path.startswith("/api/report"):
+                return {"markdown": "report"}
+            if path.startswith("/api/transcript"):
+                return {"events": [], "before": None, "has_more": False}
+            return self._last_state_performance
+
+    service = FakeService()
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html><head></head><body></body></html>", "utf-8")
+    out = export_static(
+        service,
+        tmp_path / "out",
+        dist_dir=dist,
+        history_limit=2,
+        transcript_page_limit=1,
+    )
+
+    assert service.state_refs == {"runs/new.jsonl", "runs/newer.jsonl"}
+    assert service.endpoint_args == {
+        "session_refs": {"runs/new.jsonl", "runs/newer.jsonl"},
+        "include_session_details": False,
+        "transcript_page_limit": 1,
+    }
+    exported = json.loads((out / "data" / "api" / f"{endpoint_key('/api/transcripts')}.json").read_text())
+    assert [row["ref"] for row in exported] == ["runs/newer.jsonl", "runs/new.jsonl"]
+    marker = (out / "index.html").read_text()
+    assert '"historyLimited": true' in marker
+    assert not any(path.startswith("/api/session/") for path in service.paths)
+
+
 def test_pages_workflow_written_with_relative_upload_path(tmp_path: Path) -> None:
     import yaml
 

@@ -92,7 +92,14 @@ npm --prefix src/archon_horizon/frontend install && npm --prefix src/archon_hori
 horizon dashboard --static --out ./public_dashboard --dist src/archon_horizon/frontend/dist
 ```
 
-The export writes one `data/api/<sha256(path)>.json` per endpoint — **including every session's transcript and report**, so the run logs travel with the snapshot. In static mode the SPA redirects `/api/*` fetches to those files, resolved against the page's directory so it works whether the page is opened at `…/repo/` or `…/repo/index.html`.
+The export writes one `data/api/<sha256(path)>.json` per endpoint. Static snapshots
+include the most recent 8 sessions and up to 2 transcript pages (120 events per
+page) by default; pass `--history-limit` and `--transcript-page-limit` to tune
+that budget. Older session commit/file-diff views stay lazy and are available in
+the live dashboard, so publishing does not reread or materialize the entire
+workspace history. In static mode the SPA redirects `/api/*` fetches to those
+files, resolved against the page's directory so it works whether the page is
+opened at `…/repo/` or `…/repo/index.html`.
 
 > [!IMPORTANT]
 > The static logs viewer only renders when a **built SPA** is supplied via `--dist` (or shipped in the installed package — `install.sh` builds it for you). Without one, the export falls back to a read-only single-file page that omits the run logs.
