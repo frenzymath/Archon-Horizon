@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -213,7 +214,7 @@ def export_static(
         shutil.copytree(reports_src, out_dir / "reports", dirs_exist_ok=True)
 
     marker = {
-        "generatedAt": "",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
         "endpointCount": len(paths),
         "historyLimited": len(selected_transcripts) < len(all_transcripts),
         "historyLimit": max(0, history_limit),
