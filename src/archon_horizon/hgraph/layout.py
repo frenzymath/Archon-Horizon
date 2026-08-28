@@ -243,7 +243,8 @@ def _dot_clustered(m: _Model, unit_of, n_units: int, label_fn) -> str:
     for i in range(m.n):
         by_u.setdefault(unit_of[i], []).append(i)
     out = ['strict digraph "" {',
-           '  rankdir=TB;bgcolor="transparent";pack=true;packmode="clust";splines=true;nodesep=0.3;ranksep=0.5;',
+           '  rankdir=TB;bgcolor="transparent";newrank=true;splines=true;overlap=false;'
+           'nodesep=0.5;ranksep=0.7;ordering=out;',
            '  node [shape=box,style="rounded,filled",fontname="Helvetica",fontsize=11,margin="0.11,0.05",penwidth=1.8];',
            '  edge [color="' + _EDGE + '",arrowhead=vee,arrowsize=0.7,penwidth=1];',
            '  graph [fontname="Helvetica",fontsize=13,labeljust="l"];']
@@ -279,7 +280,8 @@ def _dot_overview(m: _Model, unit_of, n_units: int, label_fn, id_prefix: str) ->
             continue
         em[(b, a)] = em.get((b, a), 0) + 1
     out = ['strict digraph "" {',
-           '  rankdir=TB;bgcolor="transparent";splines=true;nodesep=0.45;ranksep=0.65;',
+           '  rankdir=TB;bgcolor="transparent";newrank=true;splines=true;overlap=false;'
+           'nodesep=0.5;ranksep=0.7;ordering=out;',
            '  node [shape=box,style="rounded,filled",fontname="Helvetica",fontsize=12,margin="0.2,0.13",penwidth=1.8];',
            '  edge [color="' + _EDGE + '",arrowhead=vee,arrowsize=0.85,penwidth=1.2];',
            '  graph [fontname="Helvetica"];']

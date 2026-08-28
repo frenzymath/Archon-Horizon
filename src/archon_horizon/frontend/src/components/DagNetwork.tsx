@@ -257,7 +257,7 @@ export default function DagNetwork({
           <option value={0}>Coarse only</option>
         </select>
         <button type="button" onClick={fit}>Fit</button>
-        <span>{expanded == null ? 'Select a chapter to expand it' : 'Select a node for details; select the chapter background to collapse it'}</span>
+        <span>{expanded == null ? 'Select a chapter to expand it' : 'Showing this chapter only — select the background to collapse'}</span>
       </div>
       <div
         ref={canvasRef}
