@@ -16,6 +16,15 @@ def test_available_skills_have_names_and_descriptions() -> None:
     assert all(s.description for s in skills)  # every skill documents its purpose
 
 
+def test_skill_recommendations_are_advisory_metadata() -> None:
+    skills = {skill.name: skill for skill in available_skills()}
+    recommendation = skills["lean-check"].recommendation
+    assert recommendation
+    assert "in-place" in recommendation
+    assert "by sorry" in recommendation
+    assert "consider" in recommendation
+
+
 def test_install_skills_writes_claude_skill_files(tmp_path: Path) -> None:
     installed = install_skills(tmp_path)
     assert EXPECTED <= set(installed)

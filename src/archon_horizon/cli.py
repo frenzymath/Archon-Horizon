@@ -26,6 +26,7 @@ from archon_horizon.commands import freeze as freeze_cmd
 from archon_horizon.commands import inbox as inbox_cmd
 from archon_horizon.commands import init as init_cmd
 from archon_horizon.commands import graph as graph_cmd
+from archon_horizon.commands import ledger as ledger_cmd
 from archon_horizon.commands import permissions as permissions_cmd
 from archon_horizon.commands import project as project_cmd
 from archon_horizon.commands import ps as ps_cmd
@@ -145,6 +146,7 @@ app.add_typer(project_cmd.app, name="project")
 app.add_typer(freeze_cmd.app, name="freeze")
 app.add_typer(skills_cmd.app, name="skills")
 app.add_typer(attempt_cmd.app, name="attempt")
+app.add_typer(ledger_cmd.app, name="ledger")
 app.command("blueprint")(blueprint_cmd.blueprint)
 app.command(
     "graph",
@@ -164,12 +166,32 @@ app.command("permissions")(permissions_cmd.permissions)
 app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)
 app.command("subagent", hidden=True)(subagent_cmd.subagent)
-app.command("agent-hook", hidden=True)(agent_hook_cmd.agent_hook)
+
+
+@app.command("agent-hook", hidden=True)
+def _agent_hook(
+    ctx: typer.Context,
+    as_json: bool = typer.Option(True, "--json", hidden=True),
+) -> None:
+    """Manual/debug entry for the lifecycle hook (engines use agent-hook-fast)."""
+    del as_json
+    agent_hook_cmd.agent_hook(ctx)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Compatibility shim for tests and the console script entry point."""
+    """Compatibility shim for tests and the console script entry point.
+
+    Engine hooks prefer ``archon_horizon.__main__:main`` (``agent-hook-fast``)
+    so they never import this module. This entry still accepts the fast
+    subcommand when tests call ``cli.main`` directly.
+    """
     import sys
+
+    args = list(argv) if argv is not None else sys.argv[1:]
+    if args and args[0] == "agent-hook-fast":
+        from archon_horizon.commands.agent_hook import main_fast
+
+        return main_fast(args[1:])
 
     cmd = get_command(app)
     # Mirror the passed args into sys.argv so option-peeking (e.g. --json banner

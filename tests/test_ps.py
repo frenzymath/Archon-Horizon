@@ -20,18 +20,31 @@ def _marker(ws: Path, run_id: str, pid: int) -> Path:
     return path
 
 
-def test_ps_lists_live_and_zombie_markers(tmp_path: Path, capsys) -> None:
+def test_ps_lists_live_and_auto_reaps_zombies(tmp_path: Path, capsys) -> None:
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "config.yaml").write_text(_CONFIG, "utf-8")
-    _marker(ws, "0001", os.getpid())        # alive: this test process
-    _marker(ws, "0002", 2 ** 22 + 12345)    # almost certainly dead
+    live = _marker(ws, "0001", os.getpid())        # alive: this test process
+    dead = _marker(ws, "0002", 2 ** 22 + 12345)    # almost certainly dead
+    # Leave a still-running session meta under the dead run so reaping must
+    # finalize it to interrupted (session-states hygiene).
+    session = ws / ".archon-horizon" / "runs" / "0002" / "sessions" / "0001-horizon-T"
+    session.mkdir(parents=True)
+    (session / "meta.json").write_text(
+        json.dumps({"status": "running", "role": "horizon"}), "utf-8",
+    )
 
     assert main(["--root", str(ws), "ps", "--json"]) == 0
-    rows = {r["run"]: r for r in json.loads(capsys.readouterr().out)["processes"]}
+    payload = json.loads(capsys.readouterr().out)
+    rows = {r["run"]: r for r in payload["processes"]}
     assert rows["0001"]["alive"] is True
-    assert rows["0002"]["alive"] is False
-    assert rows["0002"]["status"] == "zombie-marker"
+    assert "0002" not in rows  # auto-reaped
+    assert "0002" in payload.get("reaped", [])
+    assert live.exists()
+    assert not dead.exists()
+    meta = json.loads((session / "meta.json").read_text("utf-8"))
+    assert meta["status"] == "interrupted"
+    assert meta.get("ended_at")
 
 
 def test_ps_clean_reaps_dead_markers_only(tmp_path: Path, capsys) -> None:

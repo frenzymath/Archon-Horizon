@@ -122,38 +122,73 @@ export function buildChapterGraph(rawNodes: any[], rawEdges: any[]): ChapterGrap
 export const CHAPTER_NODE_RE = /^__chapter_(\d+)$/;
 const chapterNode = (key: number) => `__chapter_${key}`;
 
+/** Graphviz attrs tuned for short dependency edges inside one chapter. */
+const DOT_GRAPH_ATTRS =
+  'rankdir=TB;bgcolor="transparent";newrank=true;splines=true;overlap=false;' +
+  'concentrate=false;nodesep=0.5;ranksep=0.7;ordering=out;';
+
+/**
+ * Build the chapter-collapsed Graphviz DOT.
+ *
+ * - Overview (`expanded === null`): one super-node per chapter, edges only
+ *   between chapters (aggregated cross-chapter dependencies).
+ * - Expanded chapter: only that chapter's nodes and intra-chapter edges.
+ *   Collapsed chapters are not drawn as peer nodes — cross-chapter edges used
+ *   to pull long curved routes across the canvas and wreck the layout.
+ */
 export function chapterDot(model: ChapterGraph, expanded: number | null, maxLevel: number): string {
-  const visibleId = (node: GraphNode): string | null => {
-    if (expanded === node.chapter) return node.level <= maxLevel ? node.id : null;
-    return chapterNode(node.chapter);
-  };
   let dot = 'strict digraph "" {\n';
-  dot += 'rankdir=TB;bgcolor="transparent";pack=true;packmode="clust";splines=true;nodesep=0.4;ranksep=0.6;\n';
+  dot += `${DOT_GRAPH_ATTRS}\n`;
   dot += 'node [shape=box,style="rounded,filled",fontname="Helvetica",fontsize=11,margin="0.11,0.05",penwidth=1.8];\n';
   dot += `edge [color="${COLORS.edge}",arrowhead=vee,arrowsize=0.8,penwidth=1];\n`;
   dot += 'graph [fontname="Helvetica",fontsize=13,labeljust="l"];\n';
+
+  if (expanded != null) {
+    const chapter = model.chapters.find((entry) => entry.key === expanded);
+    if (!chapter) return `${dot}}\n`;
+    const visible = new Set(
+      model.nodes
+        .filter((node) => node.chapter === expanded && node.level <= maxLevel)
+        .map((node) => node.id),
+    );
+    dot += `subgraph cluster_${chapter.key} { label="${escapeDot(chapter.label)}  (select background to collapse)";style="rounded,filled";fillcolor="${COLORS.expandedFill}";color="${COLORS.chapterBorder}";penwidth=2.4;fontcolor="${COLORS.expandedText}";fontsize=12.5;\n`;
+    model.nodes.forEach((node) => {
+      if (!visible.has(node.id)) return;
+      const definition = DEF_KINDS.has(String(node.raw.type || node.raw.kind || ''));
+      dot += `"${escapeDot(node.id)}" [shape=${definition ? 'box' : 'ellipse'},style=${definition ? '"rounded,filled"' : '"filled"'},fillcolor="${COLORS.fill[node.proof]}",color="${COLORS.border[node.statement]}",fontcolor="${COLORS.nodeText}",label="${dotLabel(node.raw.title || node.id)}"];\n`;
+    });
+    dot += '}\n';
+    const seen = new Set<string>();
+    model.edges.forEach(([source, target]) => {
+      // edges are dependency → dependent; keep only edges fully inside the chapter
+      if (!visible.has(source) || !visible.has(target) || source === target) return;
+      const key = `${source}\0${target}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      dot += `"${escapeDot(source)}" -> "${escapeDot(target)}" [style=dashed];\n`;
+    });
+    return `${dot}}\n`;
+  }
+
+  // Collapsed overview: chapter super-nodes + chapter→chapter edges only.
   model.chapters.forEach((chapter) => {
-    if (expanded === chapter.key) {
-      dot += `subgraph cluster_${chapter.key} { label="${escapeDot(chapter.label)}  (select background to collapse)";style="rounded,filled";fillcolor="${COLORS.expandedFill}";color="${COLORS.chapterBorder}";penwidth=2.4;fontcolor="${COLORS.expandedText}";fontsize=12.5;\n`;
-      model.nodes.filter((node) => node.chapter === chapter.key && node.level <= maxLevel).forEach((node) => {
-        const definition = DEF_KINDS.has(String(node.raw.type || node.raw.kind || ''));
-        dot += `"${escapeDot(node.id)}" [shape=${definition ? 'box' : 'ellipse'},style=${definition ? '"rounded,filled"' : '"filled"'},fillcolor="${COLORS.fill[node.proof]}",color="${COLORS.border[node.statement]}",fontcolor="${COLORS.nodeText}",label="${dotLabel(node.raw.title || node.id)}"];\n`;
-      });
-      dot += '}\n';
-    } else {
-      const pct = chapter.count ? Math.round(100 * chapter.done / chapter.count) : 0;
-      dot += `"${chapterNode(chapter.key)}" [label="${escapeDot(chapter.label)}\\n${chapter.count} statements · ${pct}%",fillcolor="${COLORS.chapterFill}",color="${COLORS.chapterBorder}",penwidth=2.6,fontcolor="${COLORS.chapterText}"];\n`;
-    }
+    if (!chapter.count) return;
+    const pct = Math.round((100 * chapter.done) / chapter.count);
+    dot += `"${chapterNode(chapter.key)}" [label="${escapeDot(chapter.label)}\\n${chapter.count} statements · ${pct}%",fillcolor="${COLORS.chapterFill}",color="${COLORS.chapterBorder}",penwidth=2.6,fontcolor="${COLORS.chapterText}"];\n`;
   });
   const seen = new Set<string>();
   model.edges.forEach(([source, target]) => {
-    const from = visibleId(model.byId.get(source)!);
-    const to = visibleId(model.byId.get(target)!);
-    if (!from || !to || from === to) return;
+    const sourceNode = model.byId.get(source);
+    const targetNode = model.byId.get(target);
+    if (!sourceNode || !targetNode || sourceNode.chapter === targetNode.chapter) return;
+    const from = chapterNode(sourceNode.chapter);
+    const to = chapterNode(targetNode.chapter);
     const key = `${from}\0${to}`;
     if (seen.has(key)) return;
     seen.add(key);
-    dot += `"${escapeDot(from)}" -> "${escapeDot(to)}" [style=dashed];\n`;
+    // Horizon edge shape is dependency → dependent, so chapter of the
+    // dependency points at the chapter of the dependent.
+    dot += `"${from}" -> "${to}" [style=dashed];\n`;
   });
-  return dot + '}\n';
+  return `${dot}}\n`;
 }

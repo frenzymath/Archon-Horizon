@@ -27,6 +27,7 @@ import random
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,6 +36,88 @@ from pathlib import Path
 
 class GitError(RuntimeError):
     pass
+
+
+# Single-flight porcelain status per (git_dir, work_tree, untracked mode).
+# Mature workspaces have tens of thousands of untracked paths; concurrent
+# dashboards/hooks/agents each launching `git status` can pin the machine for
+# minutes. A short-lived shared snapshot collapses the stampede.
+_STATUS_LOCK = threading.Lock()
+_STATUS_INFLIGHT: dict[tuple[str, str, str], threading.Event] = {}
+_STATUS_CACHE: dict[tuple[str, str, str], tuple[float, str]] = {}
+_STATUS_TTL_S = 2.0
+
+
+def status_porcelain(
+    git_dir: Path,
+    work_tree: Path,
+    *,
+    untracked: str = "no",
+    ttl_s: float = _STATUS_TTL_S,
+) -> str:
+    """Return ``git status --porcelain`` text, single-flight + briefly cached.
+
+    ``untracked`` is one of git's ``--untracked-files`` modes (``no`` /
+    ``normal`` / ``all``). Default ``no`` keeps large worktrees responsive.
+    """
+    mode = untracked if untracked in {"no", "normal", "all"} else "no"
+    key = (str(Path(git_dir).resolve()), str(Path(work_tree).resolve()), mode)
+    now = time.monotonic()
+    with _STATUS_LOCK:
+        cached = _STATUS_CACHE.get(key)
+        if cached is not None and now - cached[0] < ttl_s:
+            return cached[1]
+        inflight = _STATUS_INFLIGHT.get(key)
+        if inflight is None:
+            inflight = threading.Event()
+            _STATUS_INFLIGHT[key] = inflight
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        # Wait for the owner; fall through to cache (or empty on failure).
+        inflight.wait(timeout=max(ttl_s * 10, 30.0))
+        with _STATUS_LOCK:
+            cached = _STATUS_CACHE.get(key)
+            return cached[1] if cached is not None else ""
+    try:
+        text = _run(
+            [
+                "-c", "core.quotepath=false",
+                "status", "--porcelain=v1",
+                f"--untracked-files={mode}",
+            ],
+            git_dir=Path(key[0]),
+            work_tree=Path(key[1]),
+            cwd=Path(key[1]),
+            check=False,
+        ) or ""
+    except GitError:
+        text = ""
+    with _STATUS_LOCK:
+        _STATUS_CACHE[key] = (time.monotonic(), text)
+        _STATUS_INFLIGHT.pop(key, None)
+        inflight.set()
+    return text
+
+
+def invalidate_status_cache(
+    git_dir: Path | None = None,
+    work_tree: Path | None = None,
+) -> None:
+    """Drop cached porcelain rows (call after a successful commit)."""
+    with _STATUS_LOCK:
+        if git_dir is None and work_tree is None:
+            _STATUS_CACHE.clear()
+            return
+        gd = str(Path(git_dir).resolve()) if git_dir is not None else None
+        wt = str(Path(work_tree).resolve()) if work_tree is not None else None
+        for key in list(_STATUS_CACHE):
+            if gd is not None and key[0] != gd:
+                continue
+            if wt is not None and key[1] != wt:
+                continue
+            _STATUS_CACHE.pop(key, None)
 
 
 def _is_ref_race(exc: GitError) -> bool:
@@ -47,6 +130,45 @@ def _is_ref_race(exc: GitError) -> bool:
 
 def git_available() -> bool:
     return shutil.which("git") is not None
+
+
+def user_repo_git_dir(root: Path) -> Path | None:
+    """Return ``<root>/.git`` when the workspace has a normal user repository."""
+    candidate = Path(root).resolve() / ".git"
+    # Plain dir or gitfile (worktree / submodule pointer).
+    if candidate.is_dir() or candidate.is_file():
+        return candidate
+    return None
+
+
+def commit_user_repo_paths(
+    root: Path,
+    message: str,
+    paths: Sequence[str],
+) -> str | None:
+    """Stage and commit ``paths`` into the user's root ``.git`` (GitHub publish repo).
+
+    Returns the new HEAD SHA, or ``None`` when nothing changed / no user repo.
+    Does not touch the out-of-tree Horizon ledger. Used by static dashboard
+    export so Pages artifacts land on the repository humans push, not only on
+    the agent ledger.
+    """
+    root = Path(root).resolve()
+    if user_repo_git_dir(root) is None:
+        return None
+    rels = [p for p in paths if p]
+    if not rels:
+        return None
+    _run(["add", "--", *rels], cwd=root, check=True)
+    staged = _run(
+        ["diff", "--cached", "--name-only", "--", *rels],
+        cwd=root,
+        check=False,
+    )
+    if not staged.strip():
+        return None
+    _run(["commit", "-m", message, "--", *rels], cwd=root, check=True)
+    return _run(["rev-parse", "HEAD"], cwd=root, check=True).strip() or None
 
 
 def _run(
@@ -125,26 +247,33 @@ _COMMON_EXCLUDES = (
     "# Language caches / deps",
     "__pycache__/", "*.pyc", ".venv/", "venv/", "*.egg-info/",
     ".mypy_cache/", ".pytest_cache/", ".ruff_cache/", "node_modules/", ".cache/",
+    # Site / static export build trees (regenerable, often tens of thousands of files)
+    "_site/", "site/dist/", "**/_site/",
+    # Entire hgraph trees are regenerable (`horizon graph sync`) or optional agent
+    # scratch on disk. The durable graph for dashboards is
+    # `.archon-horizon/blueprints/<project>.json`; publish snapshots bake that in.
+    # Users who want hgraph history put it in their own root `.git`.
+    "**/hgraph/",
+    "# Volatile session scratch — never history (I-1913)",
+    "*.lock", "*.tmp", "**/*.lock", "**/*.tmp",
+    "*.archon_tmp",
+    # One-off probe / phase-audit snapshots left next to projects
+    "**/.phase*/", "**/.tmp-*/", "**/.tmp/",
     "# OS / editor / local AI tooling",
-    ".DS_Store", ".idea/", ".vscode/", ".claude/",
+    ".DS_Store", ".idea/", ".vscode/", ".claude/", ".codex/",
     "# Secrets — never commit credentials",
     ".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_ed25519",
     "*.p12", "*.pfx", ".netrc", "*.secret", "secrets.yaml", "secrets.yml",
 )
 
-# Workspace-ledger-only excludes: the project git dirs and ephemeral leases that
-# live under the workspace root (a project work tree never contains these). The
-# ``bin/`` dir holds the auto-installed ``hgit`` wrapper — a regenerable tool, not
-# project state, so it stays out of the ledger even under a broad ``git add -A``.
+# Workspace-ledger-only excludes. The ledger is the *agent source journal*
+# (Lean, blueprints, config.yaml) — not the live Horizon control plane.
+# Roadmap/inbox/tasks/runs stay on disk for the dashboard and agents; the user
+# root `.git` (or `horizon dashboard --static`) is how humans publish them.
+# The ``bin/`` dir holds the auto-installed ``hgit`` wrapper.
 _WORKSPACE_EXCLUDES = (
-    ".archon-horizon/vcs/",
-    ".archon-horizon/locks/",
-    ".archon-horizon/bin/",
-    ".archon-horizon/cache/",  # dashboard poll caches — derived, never history
-    # Raw model transcripts and live usage counters stay on the workspace
-    # filesystem for the dashboard; they are too large and may contain secrets.
-    ".archon-horizon/runs/**/sessions/**/transcript.jsonl",
-    ".archon-horizon/runs/**/sessions/**/usage.json",
+    # Whole state tree — never agent proof history.
+    ".archon-horizon/",
 )
 
 # A pre-commit guard installed into every out-of-tree git. Two protections:
@@ -185,7 +314,8 @@ if [ "$ARCHON_HORIZON_ALLOW_SECRETS" != "1" ]; then
     [ -f "$f" ] || continue
     LC_ALL=C grep -Eq "$ARCHON_SECRET_PAT" "$f" 2>/dev/null || continue
     if LC_ALL=C sed -E "s/($ARCHON_SECRET_PAT)/XXXX/g" "$f" > "$f.archon_tmp" 2>/dev/null && mv "$f.archon_tmp" "$f" 2>/dev/null; then
-      git add -- "$f" 2>/dev/null && archon_redacted="$archon_redacted $f"
+      # -f: path may already be staged despite info/exclude (legacy force-add).
+      git add -f -- "$f" 2>/dev/null && archon_redacted="$archon_redacted $f"
     else
       rm -f "$f.archon_tmp" 2>/dev/null
     fi
@@ -198,6 +328,31 @@ fi
 
 head=$(git rev-parse --verify --quiet HEAD) || head=""
 [ -n "$head" ] || exit 0   # first commit: nothing to clobber
+
+# Optional path allowlist file (one path/prefix per line in
+# ARCHON_COMMIT_PATHS_FILE). When set, the staged set must be a subset of those
+# paths/prefixes — concurrent writers' files that leaked into a broad add are
+# rejected (I-0409).
+if [ -n "$ARCHON_COMMIT_PATHS_FILE" ] && [ -f "$ARCHON_COMMIT_PATHS_FILE" ]; then
+  bad=$(git diff --cached --name-only 2>/dev/null | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    ok=0
+    while IFS= read -r allow; do
+      [ -n "$allow" ] || continue
+      case "$p" in
+        "$allow"|"$allow"/*) ok=1; break ;;
+      esac
+    done < "$ARCHON_COMMIT_PATHS_FILE"
+    [ "$ok" = "1" ] || printf '%s\n' "$p"
+  done)
+  if [ -n "$bad" ]; then
+    n=$(printf '%s\n' "$bad" | sed '/^$/d' | wc -l | tr -d ' ')
+    echo "Archon Horizon: this commit stages $n path(s) outside the explicit add set, e.g.:" >&2
+    printf '%s\n' "$bad" | sed '/^$/d' | head -8 >&2
+    echo "Re-seed from HEAD and add ONLY the paths you intend to commit." >&2
+    exit 1
+  fi
+fi
 
 if [ -n "$ARCHON_COMMIT_BASE" ]; then
   if [ "$ARCHON_COMMIT_BASE" != "$head" ]; then
@@ -329,6 +484,43 @@ def _prune_ignored_from_index(git_dir: Path, work_tree: Path, index_file: Path |
     for start in range(0, len(paths), 500):
         _run(
             ["rm", "--cached", "-q", "--", *paths[start:start + 500]],
+            git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
+        )
+
+
+def _is_volatile_ledger_path(path: str) -> bool:
+    """True for paths that must never enter the agent ledger."""
+    name = path.rsplit("/", 1)[-1]
+    if name in {"process.json", ".create.lock"}:
+        return True
+    if name.endswith(".lock") or name.endswith(".tmp") or name.endswith(".archon_tmp"):
+        return True
+    # Entire Horizon state tree (dashboard/inbox/runs live on disk only).
+    if path == ".archon-horizon" or path.startswith(".archon-horizon/"):
+        return True
+    # Generated or local-only semantic graph files.
+    if "/hgraph/" in f"/{path}/" or path.endswith("/hgraph") or path == "hgraph":
+        return True
+    return False
+
+
+def _is_non_ledger_path(path: str) -> bool:
+    """Public alias: path should not be recorded in the agent ledger."""
+    return _is_volatile_ledger_path(path)
+
+
+def _unstage_volatile_paths(
+    git_dir: Path, work_tree: Path, index_file: Path | None = None,
+) -> None:
+    """Drop staged lock/tmp/process-marker paths without undoing force-adds."""
+    listed = _run(
+        ["diff", "--cached", "--name-only", "-z"],
+        git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
+    )
+    paths = [p for p in listed.split("\0") if p and _is_volatile_ledger_path(p)]
+    for start in range(0, len(paths), 500):
+        _run(
+            ["rm", "--cached", "-q", "--ignore-unmatch", "--", *paths[start:start + 500]],
             git_dir=git_dir, work_tree=work_tree, cwd=work_tree, check=False, index_file=index_file,
         )
 
@@ -497,6 +689,16 @@ class WorkspaceGit:
 
         with tempfile.TemporaryDirectory(prefix="archon-index-") as tmp:
             index = Path(tmp) / "index"
+            allow_file: Path | None = None
+            if paths is not None:
+                # Feed the pre-commit allowlist so a concurrent writer's files
+                # that somehow land in the private index cannot ride along
+                # (I-0409). One path/prefix per line; empty lines ignored.
+                allow_file = Path(tmp) / "commit-paths"
+                allow_file.write_text(
+                    "".join(f"{p}\n" for p in paths if p),
+                    "utf-8",
+                )
             # Re-seed and retry if HEAD moves under us: the private index is built
             # from a snapshot of HEAD, so committing against a HEAD that has since
             # advanced would write a tree that silently reverts the other writer's
@@ -515,33 +717,49 @@ class WorkspaceGit:
 
                 if paths is None:
                     self._run(["add", "-A"], index_file=index)
+                    # Broad add still respects info/exclude; strip anything that
+                    # slipped through (state tree, hgraph, locks).
+                    _unstage_volatile_paths(self.git_dir, self.root, index)
                 else:
-                    # `.archon-horizon` state and config.yaml are force-added: the user's
-                    # own root .gitignore may exclude them, but the ledger must record
-                    # them. Project trees are added WITHOUT force, so the excludes and the
-                    # project's .gitignore apply — keeping .lake / .olean / .git.disabled
-                    # out of the ledger instead of force-committing the whole tree.
-                    # ``runs/`` is intentionally added without ``-f`` so the
-                    # raw transcript/usage excludes above apply to new files;
-                    # session metadata and reports remain tracked normally.
-                    state = [
+                    # ``config.yaml`` is force-added so a user root ``.gitignore``
+                    # that ignores it cannot hide workspace config from the
+                    # ledger. Project trees are added WITHOUT force so excludes
+                    # apply (``.lake``, ``**/hgraph/``, ``.archon-horizon/``, …).
+                    # Horizon state is never staged — it stays on disk only.
+                    config_paths = [p for p in paths if p == "config.yaml"]
+                    projects = [
                         p for p in paths
-                        if p == "config.yaml"
-                        or (p.split("/", 1)[0] == ".archon-horizon"
-                            and p != ".archon-horizon/runs")
+                        if p != "config.yaml" and not _is_volatile_ledger_path(p)
                     ]
-                    projects = [p for p in paths if p not in state]
-                    if state:
-                        self._run(["add", "-f", "--", *state], index_file=index)
+                    if config_paths:
+                        self._run(["add", "-f", "--", *config_paths], index_file=index)
                     if projects:
-                        self._run(["add", "-A", "--", *projects], index_file=index)
+                        # Fully-ignored pathspecs (e.g. ``_site/``, a project
+                        # that is only build artifacts) make ``git add`` exit
+                        # non-zero with "paths are ignored". That is success
+                        # for our floor excludes — treat it as "nothing to add"
+                        # rather than aborting the integration commit.
+                        self._run(
+                            ["add", "-A", "--", *projects],
+                            index_file=index,
+                            check=False,
+                        )
+                    _unstage_volatile_paths(self.git_dir, self.root, index)
+                    # After a broad ``add -A`` under a pathspec, drop anything
+                    # staged outside the explicit allowlist (belt-and-suspenders
+                    # with the pre-commit guard — keeps the private index clean
+                    # even if a future git quirk widens the add).
+                    self._drop_paths_outside_allowlist(index, paths)
 
                 # Only the index column (porcelain's first char) counts: a bare
                 # `status` is non-empty for untracked/dirty files we did not stage,
                 # which would push us into a `commit` that has nothing to record.
                 staged = any(
                     line[:1] not in (" ", "?", "")
-                    for line in self._run(["status", "--porcelain"], index_file=index).splitlines()
+                    for line in self._run(
+                        ["status", "--porcelain", "--untracked-files=no"],
+                        index_file=index,
+                    ).splitlines()
                 )
                 if not staged and not allow_empty:
                     return None
@@ -558,10 +776,16 @@ class WorkspaceGit:
                     # closing the window between the staleness check above and
                     # the commit, where a concurrent writer's files would be
                     # silently reverted by our (now stale) tree.
+                    # ARCHON_COMMIT_PATHS_FILE is the staged-path allowlist.
+                    extra: dict[str, str] = {}
+                    if head:
+                        extra["ARCHON_COMMIT_BASE"] = head
+                    if allow_file is not None:
+                        extra["ARCHON_COMMIT_PATHS_FILE"] = str(allow_file)
                     self._run(
                         [*args, "-m", message],
                         index_file=index,
-                        extra_env={"ARCHON_COMMIT_BASE": head} if head else None,
+                        extra_env=extra or None,
                     )
                 except GitError as exc:
                     # A writer we didn't see (an agent's plain `git`, another
@@ -577,6 +801,7 @@ class WorkspaceGit:
                 # HEAD moved; keep the shared index tracking it so the plain `git`
                 # an agent runs still sees a normal, HEAD-mirroring index.
                 _sync_index_to_head(self.git_dir, self.root)
+                invalidate_status_cache(self.git_dir, self.root)
                 return self.current_sha()
             # Every attempt lost the race. Surface it — falling through to None
             # would report "nothing changed" for a commit that was never made.
@@ -586,6 +811,42 @@ class WorkspaceGit:
             )
 
         raise GitError("ledger HEAD kept moving while staging; commit abandoned after 3 attempts")
+
+    def _drop_paths_outside_allowlist(
+        self, index_file: Path, allow: Sequence[str],
+    ) -> None:
+        """Unstage anything in the private index that is not under ``allow``.
+
+        ``git add -A -- <dir>`` is pathspec-scoped, but a force-add of a broad
+        Horizon state tree can still pick up concurrent writers' files when the
+        allowlist is a parent directory. The pre-commit guard is the last line
+        of defense; this keeps the staged set clean before we get there.
+        """
+        allowed = tuple(p for p in allow if p)
+        if not allowed:
+            return
+        listing = self._run(
+            ["diff", "--cached", "--name-only"],
+            index_file=index_file,
+            check=False,
+        )
+        outsiders = [
+            path for path in listing.splitlines()
+            if path and not any(
+                path == prefix or path.startswith(prefix + "/")
+                for prefix in allowed
+            )
+        ]
+        for start in range(0, len(outsiders), 500):
+            batch = outsiders[start:start + 500]
+            # ``rm --cached`` drops the path from the private index regardless
+            # of whether HEAD knows it; safer than ``reset`` against an empty
+            # private index mid-seed.
+            self._run(
+                ["rm", "--cached", "-q", "--ignore-unmatch", "--", *batch],
+                index_file=index_file,
+                check=False,
+            )
 
     def current_sha(self) -> str | None:
         # --verify --quiet: prints nothing (instead of echoing "HEAD") and exits
@@ -644,13 +905,135 @@ class WorkspaceGit:
         self._run(["rm", "--cached", "-q", "--ignore-unmatch", "--", path], check=False)
         return True
 
-    def changed_files(self) -> tuple[str, ...]:
-        """Workspace-relative paths with uncommitted changes (porcelain)."""
+    def list_non_ledger_tracked_paths(self) -> tuple[str, ...]:
+        """Tracked paths that current policy says must not live in the ledger.
+
+        Used by ``horizon ledger prune`` to drop historical ``.archon-horizon/``
+        and ``**/hgraph/`` trees from the index without deleting working-tree
+        files (dashboard/inbox/runs stay on disk).
+        """
         if not self.is_repo():
             return ()
-        # -uall lists untracked files individually instead of collapsing a
-        # fully-untracked directory to "dir/", which would hide the filenames.
-        status = self._run(["status", "--porcelain", "-uall"], check=False) or ""
+        # Refresh excludes first so --exclude-standard matches current policy.
+        _ensure_repo_hygiene(self.git_dir, extra_excludes=_WORKSPACE_EXCLUDES)
+        listed = self._run(
+            ["ls-files", "-z", "-ci", "--exclude-standard"],
+            check=False,
+        )
+        paths = [p for p in listed.split("\0") if p]
+        # Also catch anything that slipped past exclude patterns but is still
+        # non-ledger by path shape (e.g. odd force-adds of state).
+        all_tracked = self._run(["ls-files", "-z"], check=False)
+        extra = [
+            p for p in all_tracked.split("\0")
+            if p and _is_volatile_ledger_path(p) and p not in paths
+        ]
+        return tuple(dict.fromkeys([*paths, *extra]))
+
+    def prune_non_ledger_paths(
+        self,
+        *,
+        message: str = "ledger: drop Horizon state and generated hgraph from agent journal",
+        dry_run: bool = False,
+        gc: bool = False,
+    ) -> dict[str, object]:
+        """Remove non-ledger paths from HEAD (index-only), optionally ``git gc``.
+
+        Working-tree files are left intact. Returns a summary dict suitable for
+        CLI JSON output. Safe under concurrent agents: uses the usual private
+        index + deletion allow env for this intentional prune commit.
+        """
+        self.init()
+        victims = self.list_non_ledger_tracked_paths()
+        summary: dict[str, object] = {
+            "paths": len(victims),
+            "sample": list(victims[:20]),
+            "sha": None,
+            "dry_run": dry_run,
+            "gc": False,
+        }
+        if not victims:
+            return summary
+        if dry_run:
+            return summary
+        # Large trees + concurrent agent commits: re-seed and retry if HEAD moves
+        # while we batch ``rm --cached`` (same CAS idea as WorkspaceGit.commit).
+        last_err: str | None = None
+        for attempt in range(5):
+            victims = self.list_non_ledger_tracked_paths()
+            summary["paths"] = len(victims)
+            summary["sample"] = list(victims[:20])
+            if not victims:
+                return summary
+            with tempfile.TemporaryDirectory(prefix="archon-prune-") as tmp:
+                index = Path(tmp) / "index"
+                head = self.current_sha()
+                self._run(
+                    ["read-tree", head] if head else ["read-tree", "--empty"],
+                    index_file=index,
+                )
+                for start in range(0, len(victims), 500):
+                    batch = list(victims[start:start + 500])
+                    self._run(
+                        ["rm", "--cached", "-q", "--ignore-unmatch", "--", *batch],
+                        index_file=index,
+                    )
+                # Bail early if HEAD already moved during the long rm pass.
+                if head and self.current_sha() != head:
+                    last_err = "ledger HEAD advanced during prune staging"
+                    continue
+                extra: dict[str, str] = {"ARCHON_HORIZON_ALLOW_DELETIONS": "1"}
+                if head:
+                    extra["ARCHON_COMMIT_BASE"] = head
+                try:
+                    self._run(
+                        ["commit", "-m", message],
+                        index_file=index,
+                        extra_env=extra,
+                    )
+                    last_err = None
+                    break
+                except GitError as exc:
+                    text = str(exc)
+                    if "ledger HEAD advanced" in text or "cannot lock ref" in text:
+                        last_err = text
+                        continue
+                    raise
+        else:
+            raise GitError(
+                f"ledger prune lost the HEAD race {5} times"
+                + (f": {last_err}" if last_err else "")
+            )
+        sha = self.current_sha()
+        summary["sha"] = sha
+        _sync_index_to_head(self.git_dir, self.root)
+        invalidate_status_cache(self.git_dir, self.root)
+        if gc:
+            # Drop unreachable blobs from historical state/hgraph commits.
+            self._run(["gc", "--prune=now"], check=False)
+            summary["gc"] = True
+        return summary
+
+    def changed_files(
+        self,
+        *,
+        untracked: str = "no",
+    ) -> tuple[str, ...]:
+        """Workspace-relative paths with uncommitted changes (porcelain).
+
+        Defaults to ``untracked=no``: listing every untracked file under a large
+        worktree (references dumps, ``_site/``, ``.lake`` leftovers) is both
+        expensive and the root of multi-minute concurrent ``git status`` storms
+        on mature workspaces. Callers that truly need untracked files can pass
+        ``untracked="normal"`` or ``"all"``.
+        """
+        if not self.is_repo():
+            return ()
+        status = status_porcelain(
+            self.git_dir,
+            self.root,
+            untracked=untracked,
+        )
         return _parse_porcelain(status)
 
     # ── diffing (backs the per-session change view) ──────────────────────

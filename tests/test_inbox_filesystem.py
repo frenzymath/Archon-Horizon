@@ -106,3 +106,42 @@ def test_rejected_item_is_not_accepted(tmp_path: Path) -> None:
         InboxDraft(kind=InboxKind.ISSUE, body="x", labels=(REJECTED,))
     )
     assert not is_agent_ready(provider.get_item(item.id).labels)
+
+
+def test_status_filtered_list_skips_other_statuses_and_history(tmp_path: Path) -> None:
+    """Open-only list must not hydrate archived history or return closed rows."""
+    provider = _provider(tmp_path)
+    open_item = provider.create_item(InboxDraft(kind=InboxKind.HINT, body="keep open"))
+    closed = provider.create_item(InboxDraft(kind=InboxKind.HINT, body="close me"))
+    archived = provider.create_item(InboxDraft(kind=InboxKind.HINT, body="archive me"))
+    provider.update_status(closed.id, InboxStatus.CLOSED)
+    provider.update_status(archived.id, InboxStatus.ARCHIVED)
+    provider.add_comment(open_item.id, "live reply")
+    # History on the archived row must not appear when listing open items only.
+    provider._record(archived.id, "human", "status", before="open", after="archived")  # noqa: SLF001
+
+    opened = provider.list_items(InboxFilter(status=InboxStatus.OPEN))
+    assert [item.id for item in opened] == [open_item.id]
+    assert opened[0].metadata.get("comments")
+    assert "history" not in opened[0].metadata
+
+    all_items = provider.list_items()
+    by_id = {item.id: item for item in all_items}
+    assert set(by_id) == {open_item.id, closed.id, archived.id}
+    assert by_id[archived.id].metadata.get("history")
+
+    # Single-item fetch still hydrates comments + history.
+    full = provider.get_item(archived.id)
+    assert full.metadata.get("history")
+
+
+def test_create_does_not_require_parsing_existing_bodies(tmp_path: Path) -> None:
+    """Id allocation scans filenames only — a corrupt sibling must not block create."""
+    provider = _provider(tmp_path)
+    first = provider.create_item(InboxDraft(kind=InboxKind.HINT, body="ok"))
+    # Unparseable file that is not touched by create's id scan beyond its stem.
+    bad = provider._items_dir / "I-9999.yaml"  # noqa: SLF001
+    bad.write_text("not: valid: yaml: [", "utf-8")
+    second = provider.create_item(InboxDraft(kind=InboxKind.HINT, body="still ok"))
+    assert second.id == "I-10000"
+    assert provider.get_item(first.id).body == "ok"

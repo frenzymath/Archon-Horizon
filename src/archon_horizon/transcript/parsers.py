@@ -265,11 +265,39 @@ def _claude_model(obj: dict) -> str | None:
     return None
 
 
+# Event data keys that mark an event as belonging to a nested subagent thread
+# (or its dispatch), not the parent session. Parent model/effort readback must
+# ignore these — otherwise the first spawned child's model (e.g. luna) is shown
+# as the main session's model (e.g. gpt-5.6-sol).
+_SUBAGENT_EVENT_KEYS = (
+    "subagent_thread_id",
+    "subagent_type",
+    "subagent_id",
+    "subagent_key",
+    "parent_tool_use_id",
+    "native_subagent_id",
+)
+
+
+def _is_subagent_scoped_event(event: TranscriptEvent) -> bool:
+    """True when ``event`` is about a nested subagent, not the parent session."""
+    data = event.data or {}
+    if event.kind in (TranscriptKind.SUBAGENT_START, TranscriptKind.SUBAGENT_END):
+        return True
+    return any(data.get(key) not in (None, "") for key in _SUBAGENT_EVENT_KEYS)
+
+
 def observed_model(events: list[TranscriptEvent]) -> str | None:
-    """The model the engine actually used, scanned from canonical events — the
-    parsers stamp it onto the session-meta and usage events. ``None`` when no
-    engine reported one (e.g. the null harness)."""
+    """The model the **parent** session actually used, from canonical events.
+
+    Parsers stamp model onto session-meta and usage events. Nested subagent
+    events also carry a ``model`` (often a different, cheaper one) — those are
+    skipped so the run view does not mislabel the main agent. ``None`` when no
+    parent engine reported one (e.g. the null harness).
+    """
     for event in events:
+        if _is_subagent_scoped_event(event):
+            continue
         model = event.data.get("model")
         if isinstance(model, str) and model:
             return model
@@ -277,13 +305,18 @@ def observed_model(events: list[TranscriptEvent]) -> str | None:
 
 
 def observed_effort(events: list[TranscriptEvent]) -> str | None:
-    """The reasoning-effort tier the engine actually ran with, scanned from
-    canonical events — the codex rollout parser stamps it onto session-meta from
-    the engine's own ``turn_context``. ``None`` when the engine reported none
-    (e.g. Claude Code, which takes effort as an input ``--effort`` flag it does
-    not echo back in its stream; the run view then falls back to the configured
-    tier)."""
+    """The reasoning-effort tier the **parent** session actually ran with.
+
+    Scanned from canonical events — the codex rollout parser stamps it onto
+    session-meta from the engine's own ``turn_context``. Subagent-scoped events
+    are ignored (same reason as :func:`observed_model`). ``None`` when the
+    engine reported none (e.g. Claude Code, which takes effort as an input
+    ``--effort`` flag it does not echo back; the run view then falls back to
+    the configured tier).
+    """
     for event in events:
+        if _is_subagent_scoped_event(event):
+            continue
         effort = event.data.get("effort")
         if isinstance(effort, str) and effort:
             return effort

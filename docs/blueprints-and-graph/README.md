@@ -16,9 +16,15 @@ hgraph/
 └── edges/       # uses, formalizes, and related_to relationships
 ```
 
-The files are normal Markdown with YAML metadata and are versioned with the
-project. Synchronize derived nodes and edges after changing the blueprint or
-Lean declarations:
+The files are normal Markdown with YAML metadata. The **entire** `hgraph/` tree
+is regenerable (`horizon graph sync`) or optional agent scratch on disk; the
+agent ledger **excludes** it entirely so graph churn never dirties sessions.
+Users who want hgraph history put it in their own root `.git`.
+
+The live and static dashboards read the JSON cache at
+`.archon-horizon/blueprints/<project>.json` (and the in-memory graph after sync),
+not thousands of hgraph files from git history. Synchronize after changing the
+blueprint or Lean declarations:
 
 ```bash
 horizon graph --project MyProject sync

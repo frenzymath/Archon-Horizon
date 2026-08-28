@@ -1,6 +1,13 @@
 ---
 name: lean-check
 description: Build and check Lean in this workspace and read the errors — use Lean LSP MCP for fast proof-writing feedback, then run faithful kernel verification with `lake build` / `lake env lean`.
+recommendation: >-
+  When a bounded build of a large Lean declaration times out or produces no
+  artifact, consider an in-place stub/body-isolation probe on the working Lean
+  file: preserve the current proof in comments, activate a typed `by sorry`,
+  and progressively restore proof segments while separating signature,
+  body, and downstream checks. Restore clean sorry-free source before accepting
+  any result.
 ---
 
 ## Required proof loop
@@ -110,3 +117,23 @@ proof error:
   the specific module you are proving in instead.
 - If the LSP has crashed, restart it (or just proceed with `lake build`) rather
   than repeatedly reopening the same giant file and getting the same crash.
+
+## Heavy declaration isolation (advisory)
+
+When a narrow build times out without diagnostics or an `.olean`, it can be
+useful to treat that as an elaboration-localization problem rather than as a
+proof failure. One possible probe is an **in-place** edit of the working Lean
+file, after recording the current diff or rejected attempt so it can be
+restored. Where the declaration signature can remain intact, preserve the
+original proof as a clearly delimited comment and activate a typed `by sorry`
+in its place. A bounded build with that stub can distinguish an expensive proof
+body from a costly declaration type, imports, implicit arguments, or dependent
+instances. If consumers fail after the stub builds, the exposed interface may
+be insufficient.
+
+For a useful bisection, consider progressively uncommenting or de-sorrying one
+proof segment, field, map, or equality at a time in the same file, checking the
+smallest faithful target after each change. Temporary `sorry`/axiom edits are
+diagnostic evidence only; record them as rejected attempts and restore clean
+accepted source. A clean configured build and axiom audit are useful final
+evidence before accepting a result.

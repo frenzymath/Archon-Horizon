@@ -7,7 +7,7 @@
 *Workspace-first orchestration for long-horizon Lean 4 formalization agents*
 
 [![Live demo](https://img.shields.io/badge/live%20demo-open%20dashboard-brightgreen?logo=githubpages)](https://frenzymath.github.io/Archon-Horizon/)
-![Version](https://img.shields.io/badge/version-0.1.3-blue)
+![Version](https://img.shields.io/badge/version-0.1.4-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Lean](https://img.shields.io/badge/domain-Lean%204-1f6feb)

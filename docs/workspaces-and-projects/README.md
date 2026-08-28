@@ -62,11 +62,13 @@ Project registration and listing are implemented in [`commands/project.py`](../.
 
 ### Autogit (out-of-tree history)
 
-Horizon journals its own work **without ever creating a `.git` at the workspace or project root** — see [`vcs/git.py`](../../src/archon_horizon/vcs/git.py). Each repo is a bare git directory driven via explicit `--git-dir`/`--work-tree`: the workspace at `.archon-horizon/vcs/workspace.git`, each VCS-enabled project at `.archon-horizon/vcs/<project>.git`. Your own `<root>/.git`, if any, is untouched.
+Horizon journals its own work **without ever creating a `.git` at the workspace or project root** — see [`vcs/git.py`](../../src/archon_horizon/vcs/git.py). Each repo is a bare git directory driven via explicit `--git-dir`/`--work-tree`: the workspace at `.archon-horizon/vcs/workspace.git`, each VCS-enabled project at `.archon-horizon/vcs/<project>.git`. Your own `<root>/.git`, if any, is untouched and remains the **publish / GitHub** repository.
 
 - **Default branch is `main`** (`git init --bare --initial-branch=main`, with a `symbolic-ref` fallback for git < 2.28). It's set **only at creation** — if you manually switch a repo to another branch, autogit keeps committing onto *your* branch; nothing checks out, resets, or pushes.
-- **Excludes live in the git dir's `info/exclude`, not a `.gitignore`** (refreshed on every init, so existing workspaces self-heal). They keep Lean/build artifacts (`.lake/`, `*.olean`, `lake-packages/`), caches, and secrets out; project files are added *without* `-f`, so binaries never sneak in.
+- **Excludes live in the git dir's `info/exclude`, not a `.gitignore`** (refreshed on every init, so existing workspaces self-heal). They keep Lean/build artifacts (`.lake/`, `*.olean`, `lake-packages/`), caches, secrets, the **entire** `.archon-horizon/` control-plane tree, and **entire** `**/hgraph/` trees out. Project sources are added *without* `-f`, so binaries and regenerable graphs never sneak in. Users who want state or hgraph history put it in their own root `.git`.
 - **Commits carry rich metadata**: `Run/Round/Role/Session/Task` plus per-project SHAs, authored as the acting agent (`Archon Horizon (Ground|Horizon)`) but committed by the system identity. Provenance is stamped as git trailers by a `prepare-commit-msg` hook.
+- **Ledger vs publish**: agents use `$HORIZON_GIT` → the **source-only** ledger (Lean, blueprints, `config.yaml`). Horizon state and hgraph stay on disk for the live dashboard. Public snapshots go to the user `.git` when you run `horizon dashboard --static` (see [Dashboard & Search](../dashboard-and-search/README.md)). Horizon does **not** mirror every ledger commit into `.git`.
+- **Retro-clean**: older ledgers may still track state/hgraph. Run `horizon ledger status`, then `horizon ledger prune` (optionally `--gc` when no run is mid-commit) to drop those paths from the index without deleting working-tree files.
 
 #### Secret guard (redacts, never blocks)
 

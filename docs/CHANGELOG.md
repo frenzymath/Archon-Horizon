@@ -9,6 +9,56 @@ minor releases; `horizon init --update` migrates a workspace's managed files.
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-08-28
+
+### Added
+
+- **`horizon ledger status` / `horizon ledger prune [--gc]`** — inspect and
+  retro-clean agent ledgers that still track Horizon state or generated hgraph
+  trees (index-only remove; working tree untouched; optional `git gc` to reclaim
+  pack space).
+- **`lean-isolator` subagent descriptor** for isolating large Lean declarations
+  that time out or fail to produce an `.olean`.
+- Fixed English **date/time helpers** for the dashboard (`formatChipDateTime`, …).
+
+### Changed
+
+- **Agent ledger is source-only.** The out-of-tree workspace ledger
+  (`.archon-horizon/vcs/workspace.git`) records Lean, blueprints, and
+  `config.yaml` only. The entire Horizon control-plane tree (`.archon-horizon/`)
+  and all `**/hgraph/` paths are excluded; they stay on disk for the live
+  dashboard. Users version what they want in their own root `.git`. Session
+  integration commits no longer stage inbox/tasks/runs/roadmap state.
+- **Session integration** commits only `config.yaml` + scoped project sources.
+- **Agent dirty-check / commit reminders** ignore non-source ledger noise
+  (state tree and hgraph).
+- **Static dashboard export** prefers the user root `.git` when present; ledger
+  is not the publish path for Pages snapshots.
+- **CLI entry** routes through `archon_horizon.__main__:main` so
+  `agent-hook-fast` can bypass the full Typer import on every tool boundary.
+- **Run/session chips** show date and time (`Aug 28, 15:20`), not time alone.
+
+### Fixed
+
+- **Session model chip no longer inherits the first subagent's model.**
+  `observed_model` and the dashboard skip nested-subagent events, so a parent
+  that ran `gpt-5.6-sol` is not labeled with a child model (e.g. luna).
+- **`horizon init` model prompt is harness-family-aware.** Choosing Codex clears
+  a leftover Claude default (opus/sonnet/…) and shows Codex-only help; the reverse
+  for Claude Code. Pre-existing `CLAUDE.md` / `AGENTS.md` / `.env` are respected
+  and announced.
+- **Dashboard dates stay English** (`en-US`) so a French OS locale no longer
+  yields localized month names in the UI.
+- **Inbox order uses real latest activity** (item timestamps, comments, history).
+  Collapsed cards show an activity date chip.
+- **hgraph Lean extraction**: `/--` doc comments only; empty-body guard so
+  declarations are not written with empty node bodies.
+- **Secret guard** re-stages with `git add -f` after redaction so ignored paths
+  still get the scrubbed blob.
+- **Static export / dashboard**: bound history export, stamp export time, keep
+  expanded chapter graphs intra-chapter only (also carried from the v0.1.3
+  follow-ups on this branch).
+
 ## [0.1.3] — 2026-08-18
 
 ### Added
@@ -214,6 +264,7 @@ a **Ground agent** (blueprints, DAG, roadmap, reports, inboxes) and a
 - **Install / update.** `curl … | bash` installer (`install.sh`) and a
   `horizon update` self-update command.
 
-[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.2...v0.1.3
 [0.1.0]: https://github.com/frenzymath/Archon-Horizon/releases/tag/v0.1.0

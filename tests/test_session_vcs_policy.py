@@ -265,19 +265,21 @@ def test_existing_gitlink_is_converted_to_tracked_files(tmp_path: Path) -> None:
 
 
 def _commit_leak(tmp_path: Path, body: str, *, env: dict | None = None):
-    """Stage a file with ``body`` and commit it through the guarded ledger git.
+    """Stage a source file with ``body`` and commit it through the guarded ledger git.
     Returns (CompletedProcess, committed_content)."""
     _identity()
     (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
-    (tmp_path / ".archon-horizon").mkdir(exist_ok=True)
     ws_git_dir = tmp_path / ".archon-horizon" / "vcs" / "workspace.git"
     WorkspaceGit(tmp_path).init()
-    (tmp_path / ".archon-horizon" / "leak.txt").write_text(body, "utf-8")
+    # Use a normal source path: Horizon state is excluded from the ledger now.
+    leak = tmp_path / "projects" / "p" / "leak.lean"
+    leak.parent.mkdir(parents=True, exist_ok=True)
+    leak.write_text(body, "utf-8")
     base = ["git", "--git-dir", str(ws_git_dir), "--work-tree", str(tmp_path)]
-    subprocess.run(base + ["add", "-f", ".archon-horizon/leak.txt"], cwd=tmp_path, check=True)
+    subprocess.run(base + ["add", "--", "projects/p/leak.lean"], cwd=tmp_path, check=True)
     proc = subprocess.run(base + ["commit", "-m", "x"], cwd=tmp_path,
                           capture_output=True, text=True, env=env)
-    committed = subprocess.run(base + ["show", "HEAD:.archon-horizon/leak.txt"],
+    committed = subprocess.run(base + ["show", "HEAD:projects/p/leak.lean"],
                                cwd=tmp_path, capture_output=True, text=True).stdout
     return proc, committed
 
@@ -291,7 +293,7 @@ def test_secret_guard_redacts_and_never_blocks(tmp_path: Path) -> None:
     assert "redacted" in proc.stderr.lower()
     assert secret not in committed and "XXXX" in committed
     # the working-tree file is redacted too, so the secret does not linger
-    assert secret not in (tmp_path / ".archon-horizon" / "leak.txt").read_text("utf-8")
+    assert secret not in (tmp_path / "projects" / "p" / "leak.lean").read_text("utf-8")
 
 
 def test_secret_guard_override_preserves_content(tmp_path: Path) -> None:

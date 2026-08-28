@@ -14,6 +14,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 SKILLS_ROOT = Path(__file__).parent
 
 # Skills that Horizon used to ship and has since dropped. ``install_skills`` only
@@ -27,20 +29,22 @@ _RETIRED_SKILLS = ("horizon-commit", "leandag")
 class Skill:
     name: str
     description: str
+    # Optional, non-binding guidance for the Horizon agent.  This is metadata,
+    # not a runtime policy: the agent decides whether and when to apply it.
+    recommendation: str = ""
 
 
-def _parse_frontmatter(text: str) -> dict[str, str]:
+def _parse_frontmatter(text: str) -> dict[str, object]:
     if not text.startswith("---"):
         return {}
     end = text.find("\n---", 3)
     if end == -1:
         return {}
-    out: dict[str, str] = {}
-    for line in text[3:end].splitlines():
-        if ":" in line:
-            key, value = line.split(":", 1)
-            out[key.strip()] = value.strip()
-    return out
+    try:
+        raw = yaml.safe_load(text[3:end]) or {}
+    except yaml.YAMLError:
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def _skill_dirs() -> list[Path]:
@@ -53,7 +57,13 @@ def available_skills() -> list[Skill]:
     skills: list[Skill] = []
     for directory in _skill_dirs():
         fm = _parse_frontmatter((directory / "SKILL.md").read_text("utf-8"))
-        skills.append(Skill(name=fm.get("name", directory.name), description=fm.get("description", "")))
+        skills.append(
+            Skill(
+                name=str(fm.get("name") or directory.name),
+                description=str(fm.get("description") or ""),
+                recommendation=str(fm.get("recommendation") or ""),
+            )
+        )
     return skills
 
 

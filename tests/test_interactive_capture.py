@@ -338,7 +338,6 @@ def test_interactive_run_tags_and_integrates_agent_commits(
     view = service.session_commits_view("0001", "0001-horizon-interactive")
     by_subject = {row["subject"]: row for row in view["commits"]}
     assert by_subject["Prove the interactive demo"]["kind"] == "agent"
-    assert any(row["kind"] == "integration" for row in view["commits"])
     session_meta = service.stores.run_logs.get("0001").sessions()[0].read_meta()
     assert session_meta["commit_shas"] == [by_subject["Prove the interactive demo"]["sha"]]
     report = service.report(
@@ -347,7 +346,12 @@ def test_interactive_run_tags_and_integrates_agent_commits(
     assert report["markdown"].startswith("## Progress")
     integration = service._session_integrations("0001")["0001-horizon-interactive"]
     assert integration["projects"] == ["proj"]
-    assert integration["workspace_commit"]
+    # Source-only ledger: integration is a no-op when the agent already committed
+    # config + project sources; otherwise it leaves a distinct bookkeeping commit.
+    if integration.get("workspace_commit"):
+        assert any(row["kind"] == "integration" for row in view["commits"])
+    else:
+        assert not any(row["kind"] == "integration" for row in view["commits"])
 
 
 @pytest.mark.parametrize(

@@ -161,11 +161,17 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     # The two semantic commits are tagged as agent work…
     assert by_subject["Introduce a"]["kind"] == "agent"
     assert by_subject["Discharge a"]["kind"] == "agent"
-    # …and the deterministic integration commit is present too, distinctly tagged
-    # (so the UI can render agent progress prominently and bookkeeping subtly).
-    assert any(c["kind"] == "integration" for c in view["commits"])
+    # Source-only ledger: session integration commits config + project sources.
+    # When the agent already committed those paths, integration is a no-op (no
+    # empty bookkeeping commit). An integration row appears only when something
+    # source-side still differed at session end.
     assert view["commit_counts"]["agent"] == 2
-    assert view["commit_counts"]["integration"] == 1
+    assert view["commit_counts"].get("integration", 0) in (0, 1)
+    if i1.workspace_commit:
+        assert any(c["kind"] == "integration" for c in view["commits"])
+        assert view["commit_counts"]["integration"] == 1
+    else:
+        assert not any(c["kind"] == "integration" for c in view["commits"])
     assert view["outcome"]["durable_result"] == "agent_commit"
 
     # Endpoint parity + registered for static export.
@@ -177,9 +183,11 @@ def test_session_commits_view_reports_per_commit_change(tmp_path: Path, monkeypa
     page = service.serve_endpoint(
         f"/api/session/commits?run={run.id}&session={s1.name}&offset=1&limit=1"
     )
-    assert page["total"] == len(view["commits"])
+    total = len(view["commits"])
+    assert page["total"] == total
     assert page["offset"] == 1 and len(page["commits"]) == 1
-    assert page["has_more"] is True
+    # has_more when there is a later page (total > offset + returned).
+    assert page["has_more"] is (total > 2)
     assert (
         f"/api/session/commits?run={run.id}&session={s1.name}&offset=1&limit=1"
         in service.endpoints()

@@ -102,21 +102,49 @@ def _model_help(kind: str) -> list[str]:
 
     Rather than hard-coding model names (which go stale), point at where to find
     the currently-accepted ones for each CLI. Leaving the prompt blank defers to
-    the harness's own default.
+    the harness's own default. Help text is strictly kind-specific so selecting
+    Codex never surfaces Claude aliases (and vice-versa).
     """
     if kind == "claude-code":
         return [
-            "Accepts a Claude alias (opus/sonnet/haiku) or a full model ID.",
+            "Claude Code models only — aliases (opus / sonnet / haiku) or a full Claude model ID.",
             "List what your install accepts with `claude --help` or `/model` in a session; current IDs are in the Claude Code docs (docs.claude.com).",
-            "Other providers also work via Claude Code: Kimi/DeepSeek with their API key + ANTHROPIC_BASE_URL, or many more with an OpenRouter key — see each provider's docs for model names.",
+            "Other providers via Claude Code: Kimi/DeepSeek (API key + ANTHROPIC_BASE_URL) or OpenRouter — see each provider's docs for model names.",
             "Leave blank to use the Claude Code default.",
         ]
     if kind == "codex":
         return [
-            "See accepted models with `codex --help` (the -m/--model flag) or the OpenAI model docs.",
+            "Codex / OpenAI models only (e.g. gpt-5.4, gpt-5.6-sol, o3) — not Claude opus/sonnet/haiku.",
+            "List accepted ids with `codex --help` (the -m/--model flag) or the OpenAI model docs.",
             "Leave blank to use the Codex default.",
         ]
     return ["Leave blank to use the harness default."]
+
+
+def _model_fits_kind(model: str, kind: str) -> bool:
+    """Whether a saved model string is plausible for ``kind``.
+
+    Used when the user switches harness during init so a leftover Claude id is
+    not offered as the default for Codex (and the reverse).
+    """
+    m = (model or "").strip().lower()
+    if not m:
+        return True
+    if kind == "codex":
+        # Claude-family / Anthropic-style ids must not default onto Codex.
+        if m in {"opus", "sonnet", "haiku", "ultracode"}:
+            return False
+        if m.startswith("claude") or "opus" in m or "sonnet" in m or "haiku" in m:
+            return False
+        return True
+    if kind == "claude-code":
+        # OpenAI / Codex-style ids must not default onto Claude Code.
+        if m.startswith("gpt-") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+            return False
+        if "codex" in m and "claude" not in m:
+            return False
+        return True
+    return True
 
 def _binary_for_kind(kind: str) -> str | None:
     if kind == "claude-code": return "claude"
@@ -359,10 +387,22 @@ class InitCommand:
         Claude Code auto-loads ``CLAUDE.md`` and Codex auto-loads ``AGENTS.md``,
         so these three lines are the whole engine-native harness: any engine
         launched in the workspace orients itself from the `horizon` skill. Local
-        edits are preserved (same keep-vs-overwrite policy as skills).
+        edits are preserved (same keep-vs-overwrite policy as skills) — including
+        files that already existed **before** the first ``horizon init``.
         """
         for name in ("CLAUDE.md", "AGENTS.md"):
-            self._sync_managed_file(self.root / name, self._ORIENTATION_BODY, name)
+            dest = self.root / name
+            if dest.exists():
+                # Explicit so a pre-existing orientation file is never a silent surprise.
+                try:
+                    same = dest.read_text("utf-8") == self._ORIENTATION_BODY
+                except OSError:
+                    same = False
+                if same:
+                    log.step(f"{name} already present (matches Horizon template); left as-is.")
+                    continue
+                log.step(f"{name} already exists with local content.")
+            self._sync_managed_file(dest, self._ORIENTATION_BODY, name)
 
     def _interactive_workspace_setup(self) -> None:
         """Pedagogical, optional loops to populate projects, tasks, and hints."""
@@ -566,16 +606,46 @@ class InitCommand:
                                 log.warn(f"Warning: binary '{binary}' not found in PATH for harness '{kind}'. You may need to run `horizon setup` later.")
                         return kind
 
+                prev_kind = str(data["horizon_kind"])
                 data["horizon_kind"] = prompt_harness("Horizon agent harness", data["horizon_kind"])
+                # Switching harness must not keep a model id from the other family
+                # as the prompt default (e.g. opus still offered after picking codex).
+                if data["horizon_kind"] != prev_kind and not _model_fits_kind(
+                    str(data.get("horizon_model") or ""), str(data["horizon_kind"])
+                ):
+                    log.step(
+                        f"Cleared previous model {data.get('horizon_model')!r} "
+                        f"(not valid for harness {data['horizon_kind']})."
+                    )
+                    data["horizon_model"] = ""
+                elif data.get("horizon_model") and not _model_fits_kind(
+                    str(data["horizon_model"]), str(data["horizon_kind"])
+                ):
+                    log.step(
+                        f"Cleared previous model {data.get('horizon_model')!r} "
+                        f"(not valid for harness {data['horizon_kind']})."
+                    )
+                    data["horizon_model"] = ""
 
                 for line in _model_help(data["horizon_kind"]):
                     log.step(line)
+                model_default = str(data.get("horizon_model") or "")
                 data["horizon_model"] = Prompt.ask(
                     "Horizon agent model",
-                    default=data["horizon_model"]
+                    default=model_default,
                 )
-                if data["horizon_model"]:
-                    log.step(f"Note: Horizon does not verify if '{data['horizon_model']}' is a valid model. Typos will cause runtime API errors.")
+                if data["horizon_model"] and not _model_fits_kind(
+                    str(data["horizon_model"]), str(data["horizon_kind"])
+                ):
+                    log.warn(
+                        f"Model {data['horizon_model']!r} looks like a different harness family "
+                        f"than {data['horizon_kind']}; the engine may reject it at runtime."
+                    )
+                elif data["horizon_model"]:
+                    log.step(
+                        f"Note: Horizon does not verify if '{data['horizon_model']}' is a valid "
+                        "model id. Typos will cause runtime API errors."
+                    )
 
                 log.step("Mathlib rev: detected from your projects, or the latest master if none — keep projects in sync.")
                 data["mathlib_version"] = Prompt.ask("Mathlib version/rev", default=data["mathlib_version"])
@@ -655,7 +725,21 @@ class InitCommand:
         added_ignores = False
         # `.claude/agents` and `.codex/agents` are compiled from the tracked
         # subagent descriptors at run start — derived, so don't commit them.
-        for entry in (".env", ".archon-horizon/vcs/", ".archon-horizon/locks/", ".archon-horizon/cache/", ".claude/agents/", ".codex/agents/"):
+        for entry in (
+            ".env",
+            ".archon-horizon/vcs/",
+            ".archon-horizon/locks/",
+            ".archon-horizon/cache/",
+            ".archon-horizon/tmp/",
+            ".archon-horizon/tmp-*",
+            ".archon-horizon/recovery-*",
+            ".archon-horizon/search/",
+            ".claude/agents/",
+            ".codex/agents/",
+            "_site/",
+            "*.lock",
+            "*.tmp",
+        ):
             if entry not in ignores:
                 kept.append(entry)
                 ignores.add(entry)
@@ -668,6 +752,8 @@ class InitCommand:
         env_created = write_env_template(self.root)
         if env_created:
             log.success(f"A {env_path.name} file was created. Fill in any API keys needed before `horizon run`.")
+        elif env_path.exists():
+            log.step(f"{env_path.name} already exists; left unchanged (Horizon never overwrites it).")
         
         for sub in ("blueprints", "inbox/local/items", "inbox/local/comments", "inbox/github/items", "inbox/github/comments", "roadmap/items", "roadmap/comments", "runs", "subagents", "tasks", "tools", "vcs"):
             (self.root / ".archon-horizon" / sub).mkdir(parents=True, exist_ok=True)

@@ -47,6 +47,10 @@ from .sharded import (
 )
 
 _ID_RE = re.compile(r"I-(\d+)")
+# Top-level ``status:`` is a scalar on every item file Horizon writes. Peeling it
+# off with a line scan lets list filters skip archived/closed bodies (and their
+# comment/history trees) without a full YAML round-trip.
+_STATUS_LINE_RE = re.compile(r"(?m)^status:\s*(\S+)\s*$")
 
 # Reading an item file can race a concurrent lane's write. Writes are atomic
 # (temp + os.replace), so a reader normally sees only complete content; these
@@ -111,6 +115,51 @@ class FilesystemInboxProvider(InboxProvider):
             entry,
         )
 
+    def _item_paths(self) -> list[Path]:
+        if not self._items_dir.exists():
+            return []
+        return sorted(self._items_dir.glob(f"*.{self._codec.extension}"))
+
+    @staticmethod
+    def _status_from_text(text: str) -> str | None:
+        match = _STATUS_LINE_RE.search(text)
+        return match.group(1) if match else None
+
+    def _read_item_text(self, path: Path) -> tuple[str | None, Exception | str | None]:
+        """Return ``(text, error)`` for one item file, or ``(None, None)`` if gone."""
+        last: Exception | str | None = None
+        for _ in range(_LOAD_RETRIES):
+            try:
+                return path.read_text("utf-8"), None
+            except FileNotFoundError:
+                return None, None
+            except OSError as exc:
+                last = exc
+            time.sleep(_LOAD_RETRY_SLEEP)
+        return None, last
+
+    def _parse_item_text(self, path: Path, text: str) -> InboxItem | None:
+        last: Exception | str | None = None
+        for _ in range(_LOAD_RETRIES):
+            try:
+                data = self._codec.loads(text)
+            except Exception as exc:  # a half-written file may not even parse
+                last = exc
+            else:
+                if isinstance(data, dict):
+                    return serde.inbox_item_from_dict(data)
+                last = f"parsed to {type(data).__name__}, not a mapping"
+            # Re-read on parse failure: a concurrent writer may have finished.
+            fresh, read_err = self._read_item_text(path)
+            if fresh is None:
+                if read_err is None:
+                    return None
+                last = read_err
+                break
+            text = fresh
+            time.sleep(_LOAD_RETRY_SLEEP)
+        raise InboxLoadError(f"could not read inbox item {path.name}: {last}")
+
     def _read_item(self, path: Path) -> InboxItem | None:
         """Parse one item file, tolerating a concurrent writer.
 
@@ -123,44 +172,66 @@ class FilesystemInboxProvider(InboxProvider):
         stays unparseable — never the opaque ``AttributeError`` a ``None`` parse
         used to trigger, which took down unrelated inbox writes (I-0398, I-0621).
         """
-        last: Exception | str | None = None
-        for _ in range(_LOAD_RETRIES):
-            try:
-                text = path.read_text("utf-8")
-            except FileNotFoundError:
+        text, read_err = self._read_item_text(path)
+        if text is None:
+            if read_err is None:
                 return None  # deleted concurrently between glob and read
-            except OSError as exc:
-                last = exc
-            else:
-                try:
-                    data = self._codec.loads(text)
-                except Exception as exc:  # a half-written file may not even parse
-                    last = exc
-                else:
-                    if isinstance(data, dict):
-                        return serde.inbox_item_from_dict(data)
-                    last = f"parsed to {type(data).__name__}, not a mapping"
-            time.sleep(_LOAD_RETRY_SLEEP)
-        raise InboxLoadError(f"could not read inbox item {path.name}: {last}")
+            raise InboxLoadError(f"could not read inbox item {path.name}: {read_err}")
+        return self._parse_item_text(path, text)
 
-    def _load(self) -> dict[str, InboxItem]:
-        if not self._items_dir.exists():
-            return {}
+    def _hydrate(
+        self,
+        item: InboxItem,
+        *,
+        comments: bool = True,
+        history: bool = True,
+    ) -> InboxItem:
+        """Attach sharded comments/history. List filters often skip history."""
+        extra: dict[str, object] = {}
+        if comments:
+            comment_rows = read_comments(self._comment_dir(item.id))
+            if comment_rows:
+                extra["comments"] = comment_rows
+        if history:
+            history_rows = read_history(self._history_path(item.id))
+            if history_rows:
+                extra["history"] = history_rows
+        if not extra:
+            return item
+        return dataclasses.replace(item, metadata={**item.metadata, **extra})
+
+    def _load(
+        self,
+        *,
+        comments: bool = True,
+        history: bool = True,
+        status: InboxStatus | None = None,
+    ) -> dict[str, InboxItem]:
+        """Load item files, optionally skipping non-matching statuses early.
+
+        Mature workspaces keep thousands of archived items. A status-filtered
+        list only needs the open (or closed) minority, so peek the scalar
+        ``status:`` line before YAML-parsing the body and before walking each
+        item's comment/history shards.
+        """
         items: dict[str, InboxItem] = {}
-        for path in sorted(self._items_dir.glob(f"*.{self._codec.extension}")):
-            item = self._read_item(path)
+        wanted = status.value if status is not None else None
+        for path in self._item_paths():
+            text, read_err = self._read_item_text(path)
+            if text is None:
+                if read_err is None:
+                    continue
+                raise InboxLoadError(f"could not read inbox item {path.name}: {read_err}")
+            if wanted is not None:
+                peeked = self._status_from_text(text)
+                if peeked is not None and peeked != wanted:
+                    continue
+            item = self._parse_item_text(path, text)
             if item is None:
                 continue
-            extra: dict[str, object] = {}
-            comments = read_comments(self._comment_dir(item.id))
-            if comments:
-                extra["comments"] = comments
-            history = read_history(self._history_path(item.id))
-            if history:
-                extra["history"] = history
-            if extra:
-                item = dataclasses.replace(item, metadata={**item.metadata, **extra})
-            items[item.id] = item
+            if wanted is not None and item.status is not status:
+                continue
+            items[item.id] = self._hydrate(item, comments=comments, history=history)
         return items
 
     def _save_item(self, item: InboxItem) -> None:
@@ -182,8 +253,23 @@ class FilesystemInboxProvider(InboxProvider):
             tmp.unlink(missing_ok=True)
             raise
 
-    def _next_id(self, items: dict[str, InboxItem]) -> str:
-        highest = max((int(m.group(1)) for k in items if (m := _ID_RE.fullmatch(k))), default=0)
+    def _next_id(self, items: dict[str, InboxItem] | None = None) -> str:
+        """Allocate the next ``I-NNNN`` from filenames (or a preloaded map).
+
+        Create only needs the highest existing id. Scanning stems avoids parsing
+        every archived body just to pick ``I-2028``.
+        """
+        highest = 0
+        if items is not None:
+            for key in items:
+                match = _ID_RE.fullmatch(key)
+                if match:
+                    highest = max(highest, int(match.group(1)))
+        else:
+            for path in self._item_paths():
+                match = _ID_RE.fullmatch(path.stem)
+                if match:
+                    highest = max(highest, int(match.group(1)))
         return f"I-{highest + 1:04d}"
 
     @contextmanager
@@ -224,16 +310,49 @@ class FilesystemInboxProvider(InboxProvider):
         # so a status/label edit that raced a concurrent lane's `create` used to
         # clobber the freshly-created item. A single-item atomic write touches
         # nothing else — the only deletions happen in `delete_item` (I-0611 family).
-        item = self._load()[item_id]
+        item = self.get_item(item_id)
         self._save_item(dataclasses.replace(item, updated_at=utc_now(), **changes))
 
     # ── read ────────────────────────────────────────────────────────
 
     def list_items(self, filters: InboxFilter | None = None) -> list[InboxItem]:
-        return [item for item in self._load().values() if matches_filter(item, filters)]
+        # Status is the only filter we can apply before parsing: it is a top-level
+        # scalar on every file. Push it into the loader so archived bodies and
+        # their comment/history trees stay on disk for the common open-only paths
+        # (hooks, `inbox list --status open`, agent synchronizer).
+        status = filters.status if filters is not None else None
+        # History is only required by the dashboard activity feed (unfiltered
+        # list). Filtered CLI/hook lists need comments for snippets/query, not
+        # the append-only transition log.
+        include_history = status is None
+        loaded = self._load(
+            comments=True,
+            history=include_history,
+            status=status,
+        )
+        if filters is None:
+            return list(loaded.values())
+        # Status already applied; avoid re-checking it on every row.
+        rest = dataclasses.replace(filters, status=None) if status is not None else filters
+        if (
+            rest.provider is None
+            and not rest.labels
+            and not rest.kinds
+            and rest.project is None
+            and rest.audience is None
+            and not rest.query
+            and rest.owner_task is None
+            and rest.unread_for is None
+        ):
+            return list(loaded.values())
+        return [item for item in loaded.values() if matches_filter(item, rest)]
 
     def get_item(self, item_id: str) -> InboxItem:
-        return self._load()[item_id]
+        path = self._item_path(item_id)
+        item = self._read_item(path)
+        if item is None:
+            raise KeyError(item_id)
+        return self._hydrate(item, comments=True, history=True)
 
     # ── write ───────────────────────────────────────────────────────
 
@@ -241,9 +360,8 @@ class FilesystemInboxProvider(InboxProvider):
         # Serialize id allocation + write so concurrent adds don't collide on the
         # same I-NNNN (I-0388). The lock spans only the read-allocate-save.
         with self._create_lock():
-            items = self._load()
             created = InboxItem(
-                id=self._next_id(items),
+                id=self._next_id(),
                 provider=self.name,
                 kind=item.kind,
                 body=item.body,
@@ -256,26 +374,26 @@ class FilesystemInboxProvider(InboxProvider):
             )
             # Write only the new item under the lock (id already deduped by the
             # lock); a full `_save` here would prune a sibling lane's item created
-            # since our `_load`.
+            # since our scan.
             self._save_item(created)
         self._record(created.id, created.author, "created", after=created.status.value, note="opened")
         return created
 
     def update_labels(self, item_id: str, labels: list[str], actor: str | None = None) -> None:
-        before = ", ".join(self._load()[item_id].labels)
+        before = ", ".join(self.get_item(item_id).labels)
         self._replace(item_id, labels=tuple(labels))
         after = ", ".join(labels)
         if before != after:
             self._record(item_id, actor, "label", before=before, after=after)
 
     def update_status(self, item_id: str, status: InboxStatus, actor: str | None = None) -> None:
-        before = self._load()[item_id].status.value
+        before = self.get_item(item_id).status.value
         self._replace(item_id, status=status)
         if before != status.value:
             self._record(item_id, actor, "status", before=before, after=status.value)
 
     def update_kind(self, item_id: str, kind: object, actor: str | None = None) -> None:
-        before = self._load()[item_id].kind.value
+        before = self.get_item(item_id).kind.value
         self._replace(item_id, kind=InboxKind(kind))
         if before != str(kind):
             self._record(item_id, actor, "kind", before=before, after=str(kind))
@@ -291,8 +409,7 @@ class FilesystemInboxProvider(InboxProvider):
         author: str | None = None,
         metadata: dict | None = None,
     ) -> None:
-        items = self._load()
-        item = items[item_id]
+        item = self.get_item(item_id)
         now = utc_now().isoformat()
         comment_id = next_comment_id(self._comment_dir(item_id))
         write_comment(
@@ -339,8 +456,7 @@ class FilesystemInboxProvider(InboxProvider):
         ))
 
     def update_comment(self, item_id: str, index: int, body: str, author: str | None = None) -> None:
-        items = self._load()
-        item = items[item_id]
+        item = self.get_item(item_id)
         comments = list(item.metadata.get("comments", []))
         if index < 0 or index >= len(comments):
             raise IndexError(f"comment index {index} out of range for {item_id}")
@@ -357,7 +473,7 @@ class FilesystemInboxProvider(InboxProvider):
         reader = (reader or "").strip()
         if not reader:
             return
-        item = self._load()[item_id]
+        item = self.get_item(item_id)
         readers = list(item_readers(item))
         if read and reader not in readers:
             readers.append(reader)
@@ -372,7 +488,7 @@ class FilesystemInboxProvider(InboxProvider):
         """Move an item into a task's inbox (empty ``owner_task`` shares it with all)."""
         from archon_horizon.core.inbox import OWNER_KEY, item_owner
 
-        item = self._load()[item_id]
+        item = self.get_item(item_id)
         owner = (owner_task or "").strip()
         before = item_owner(item)
         if before == owner:
