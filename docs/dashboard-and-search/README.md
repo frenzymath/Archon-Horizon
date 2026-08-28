@@ -89,17 +89,43 @@ For public reporting or static documentation hosting, Horizon can export a self-
 ```bash
 # Build the SPA first so the export includes the interactive app (with run logs):
 npm --prefix src/archon_horizon/frontend install && npm --prefix src/archon_horizon/frontend run build
-horizon dashboard --static --out ./public_dashboard --dist src/archon_horizon/frontend/dist
+horizon dashboard --static --out ./dashboard --dist src/archon_horizon/frontend/dist
 ```
 
-The export writes one `data/api/<sha256(path)>.json` per endpoint. Static snapshots
-include the most recent 8 sessions and up to 2 transcript pages (120 events per
-page) by default; pass `--history-limit` and `--transcript-page-limit` to tune
-that budget. Older session commit/file-diff views stay lazy and are available in
-the live dashboard, so publishing does not reread or materialize the entire
-workspace history. In static mode the SPA redirects `/api/*` fetches to those
-files, resolved against the page's directory so it works whether the page is
-opened at `…/repo/` or `…/repo/index.html`.
+### What gets published (and what does not)
+
+The export **reads the live workspace** (roadmap, inbox, blueprint JSON cache,
+recent runs) and **writes a frozen snapshot** under `--out` (default
+`dashboard/`), as one `data/api/<sha256(path)>.json` per endpoint. That snapshot
+is what GitHub Pages serves. You do **not** need to put raw
+`.archon-horizon/runs/`, generated `hgraph/nodes/*.md`, or the agent ledger on
+GitHub for the public site to work.
+
+Two git identities stay separate on purpose:
+
+| Repo | Role |
+| :--- | :--- |
+| **Horizon ledger** (`.archon-horizon/vcs/workspace.git`) | Agent **source** journal: Lean, blueprints, `config.yaml`. Not Horizon state (`.archon-horizon/`) and not `**/hgraph/` — those stay on disk for the live dashboard. |
+| **User `.git`** (repo root) | What you push to GitHub. Static export prefers committing `dashboard/` + the Pages workflow **here** when a root `.git` exists. Optionally version state/hgraph here if you want human history. |
+
+Mirroring every agent commit into `.git` is unnecessary and would reintroduce
+ledger noise on the public remote. Prefer:
+
+1. Agents commit proofs to the ledger as today.
+2. When you want a public update: `horizon dashboard --static …` (optionally
+   with `--workflow`), push the user repo, Pages deploys the committed
+   `dashboard/` tree.
+3. Or rebuild the snapshot in CI from sources + a checked-out workspace state
+   (install Horizon, run export, upload Pages) if you want the site to refresh
+   without a local export step.
+
+Static snapshots include the most recent 8 sessions and up to 2 transcript pages
+(120 events per page) by default; pass `--history-limit` and
+`--transcript-page-limit` to tune that budget. Older session commit/file-diff
+views stay lazy and are available in the live dashboard, so publishing does not
+reread or materialize the entire workspace history. In static mode the SPA
+redirects `/api/*` fetches to those files, resolved against the page's directory
+so it works whether the page is opened at `…/repo/` or `…/repo/index.html`.
 
 > [!IMPORTANT]
 > The static logs viewer only renders when a **built SPA** is supplied via `--dist` (or shipped in the installed package — `install.sh` builds it for you). Without one, the export falls back to a read-only single-file page that omits the run logs.

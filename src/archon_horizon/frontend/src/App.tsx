@@ -12,6 +12,15 @@ import DagPage from './DagPage';
 import LeanPage from './LeanPage';
 import BoardPage from './BoardPage';
 import { RefLinkProvider, useRefResolver, useRefLinks, refChipClickHandler, inboxOwnerTask, inboxReadBy, RefChip } from './refs';
+import {
+  dayKey,
+  formatChipDateTime,
+  formatDate,
+  formatDateTime,
+  formatDayLabel,
+  formatTime,
+  latestTimestamp,
+} from './utils/datetime';
 
 const STATIC = isStaticDashboard();
 // Triage labels (must match core/labels.py). The UI gate vocabulary stays
@@ -205,7 +214,7 @@ function Overview({ state }: PageProps) {
         </div>
         <div className="hero-meta">
           <span>{STATIC ? 'Static export' : 'Live dashboard'}</span>
-          <span>{new Date().toLocaleString()}</span>
+          <span>{formatDateTime(new Date().toISOString())}</span>
         </div>
       </section>
 
@@ -482,20 +491,14 @@ function useFilterSelection(options: string[], initialSelected?: string[]) {
 
 function dayStamp(value: string | undefined) {
   if (!value) return { key: 'undated', label: 'Undated' };
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return { key: 'undated', label: 'Undated' };
-  const key = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0'),
-  ].join('-');
-  return {
-    key,
-    label: date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }),
-  };
+  const key = dayKey(value);
+  if (key === 'undated') return { key: 'undated', label: 'Undated' };
+  return { key, label: formatDayLabel(value) };
 }
 
 function groupByDay<T>(items: T[], getDate: (item: T) => string | undefined) {
+  // Caller should pass items already sorted (newest first). Groups appear in
+  // first-seen order so the newest day heads the list.
   const groups: { key: string; label: string; items: T[] }[] = [];
   const byKey = new Map<string, { key: string; label: string; items: T[] }>();
   for (const item of items) {
@@ -652,7 +655,7 @@ function TaskCard({ task, runAction, projects = [], roadmapIds = [], focused = f
           ) : <span className={`priority-chip priority-${priority}`}>{priority}</span>}
           {task.metadata?.author && <span className="author-tag">by {task.metadata.author}</span>}
           <ProvenanceChip provenance={task.metadata?.provenance} />
-          {(task.updated_at || task.metadata?.updated_at) && <span className="author-tag" style={{ marginLeft: 'auto' }}>updated {new Date(task.updated_at || task.metadata.updated_at).toLocaleDateString()}</span>}
+          {(task.updated_at || task.metadata?.updated_at) && <span className="author-tag" style={{ marginLeft: 'auto' }}>updated {formatChipDateTime(task.updated_at || task.metadata.updated_at)}</span>}
         </div>
         {!STATIC && runAction && <button className="icon-danger button-reset" onClick={deleteTask} title="Delete task" aria-label="Delete task"><TrashIcon /></button>}
       </summary>
@@ -1596,6 +1599,7 @@ function InboxCard({
   const agent = inboxAgent(item);
   const owner = inboxOwnerTask(item);
   const readers = inboxReadBy(item);
+  const activityAt = inboxActivityAt(item);
   const scopedProjects = scopeTargets(item, 'projects');
   const recipients = inboxAudienceTargets(item);
   const participants = inboxParticipants(item);
@@ -1729,6 +1733,15 @@ function InboxCard({
                   <span className="recipient-summary" title={participants.join(' · ')}>participants {participants.join(' · ')}</span>
                 )}
                 {author && <span className="author-tag">by {author}{agent && <span className="agent-tag"> · {agent}</span>}</span>}
+                {activityAt && (
+                  <time
+                    className="author-tag"
+                    dateTime={activityAt}
+                    title={formatDateTime(activityAt)}
+                  >
+                    {formatChipDateTime(activityAt)}
+                  </time>
+                )}
               </div>
             </div>
           </div>
@@ -1759,7 +1772,9 @@ function InboxCard({
               <div><strong>Labels</strong><span>{(item.labels ?? []).join(', ') || 'none'}</span></div>
               <div><strong>Read by</strong><span>{readers.join(', ') || 'nobody'}</span></div>
               <div><strong>Opened</strong><span>{formatDate(item.created_at)}</span></div>
-              {item.updated_at && item.updated_at !== item.created_at && <div><strong>Updated</strong><span>{formatDate(item.updated_at)}</span></div>}
+              {activityAt && activityAt !== item.created_at && (
+                <div><strong>Updated</strong><span>{formatDate(activityAt)}</span></div>
+              )}
               {item.metadata?.provenance && <div className="issue-meta-source"><strong>Source</strong><ProvenanceText provenance={item.metadata.provenance} /></div>}
               {sourceUrl && <div><strong>External</strong><span><a href={sourceUrl} target="_blank" rel="noreferrer">Open on GitHub</a></span></div>}
             </div>
@@ -3106,8 +3121,12 @@ function TranscriptViewer({
   const title = session?.meta?.name ?? session?.session ?? 'Log';
   // The engine stamps the real model onto session_meta/usage events; fall back to
   // it so the model shows even when the config never pinned one (and live, before
-  // the session meta is written at the end of the run).
-  const observedModel = displayEvents?.find((event: any) => event?.data?.model)?.data?.model;
+  // the session meta is written at the end of the run). Skip nested-subagent
+  // events — their model is often a different/cheaper id and must not label the
+  // parent session chip.
+  const observedModel = displayEvents?.find(
+    (event: any) => event?.data?.model && !isSubagentScopedEvent(event),
+  )?.data?.model;
   // Only what this run actually recorded: session meta, or the model the engine
   // stamped onto its own event stream. Never the live harnessConfig — config.yaml
   // drifts over time, so backfilling a past run from it would mislabel it. When
@@ -3340,6 +3359,22 @@ function shortTool(name: string): string {
     return i >= 0 ? rest.slice(i + 2) : rest;
   }
   return name;
+}
+
+/** True when a transcript event belongs to a nested subagent, not the parent. */
+function isSubagentScopedEvent(event: any): boolean {
+  if (!event) return false;
+  const kind = String(event.kind || '');
+  if (kind === 'subagent_start' || kind === 'subagent_end') return true;
+  const d = event.data || {};
+  return !!(
+    d.subagent_thread_id
+    || d.subagent_type
+    || d.subagent_id
+    || d.subagent_key
+    || d.parent_tool_use_id
+    || d.native_subagent_id
+  );
 }
 
 // A compact, scannable model label for a sidebar chip, e.g.
@@ -3987,6 +4022,14 @@ function RunGroup({ run, selected, onSelect, now }: { run: any; selected: string
         <strong>{displayRunName(run.id)}</strong>
         <StatusIcon value={run.status} />
         {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
+        {(() => {
+          const started = runStartAt(run);
+          return started ? (
+            <span className="meta-chip" title={formatDateTime(started)}>
+              {formatChipDateTime(started)}
+            </span>
+          ) : null;
+        })()}
         {runDuration !== null && <span className="meta-chip">{formatSeconds(runDuration)}</span>}
         <span className="meta-chip">{run.session_count ?? 0} sessions</span>
         <UsageChips usage={run.usage} />
@@ -4118,7 +4161,18 @@ function SessionNode({
             {model && <span className="meta-chip model-chip" title={session.model}>{model}</span>}
             {effort && <span className="meta-chip effort-chip" title="Reasoning-effort tier">{effort}</span>}
             {round && <span className="meta-chip">{round}</span>}
-            {session.started_at && <span className="meta-chip" title={`${formatTime(session.started_at)}-${formatTime(session.ended_at)}`}>{formatTime(session.started_at)}</span>}
+            {session.started_at && (
+              <span
+                className="meta-chip"
+                title={
+                  session.ended_at
+                    ? `${formatDateTime(session.started_at)} – ${formatDateTime(session.ended_at)}`
+                    : formatDateTime(session.started_at)
+                }
+              >
+                {formatChipDateTime(session.started_at)}
+              </span>
+            )}
             {session.started_at && <span className="meta-chip">{formatDuration(session.started_at, durEnd)}</span>}
             <UsageChips usage={session.usage} />
           </div>
@@ -4153,7 +4207,11 @@ function RunList({ runs }: { runs: any[] }) {
                 <span>rounds {rounds}</span>
                 <span>{run.session_count ?? 0} sessions</span>
                 <span>{formatUsageBrief(run.usage)}</span>
-                <time>{formatDate(run.created_at)}</time>
+                {run.created_at && (
+                  <time dateTime={run.created_at} title={formatDateTime(run.created_at)}>
+                    {formatChipDateTime(run.created_at)}
+                  </time>
+                )}
                 {firstRef && <Link to={`/logs?ref=${encodeURIComponent(firstRef)}`}>Open logs</Link>}
               </div>
             </summary>
@@ -4176,6 +4234,11 @@ function SessionTree({ sessions }: { sessions: any[] }) {
             <span>{session.meta?.role ?? session.meta?.name ?? 'session'}</span>
             <strong title={session.meta?.name ?? session.session}>{displaySessionName(session)}</strong>
             {typeof session.meta?.round === 'number' && <span>round {session.meta.round + 1}</span>}
+            {session.started_at && (
+              <time dateTime={session.started_at} title={formatDateTime(session.started_at)}>
+                {formatChipDateTime(session.started_at)}
+              </time>
+            )}
             <span>{formatUsageBrief(session.usage)}</span>
             {session.ref && <Link to={`/logs?ref=${encodeURIComponent(session.ref)}`}>Open</Link>}
           </div>
@@ -4284,11 +4347,7 @@ function roadmapActivityTitle(item: any): string {
 }
 
 function formatCompactDateTime(value: string | undefined): string {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? value
-    : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return formatChipDateTime(value);
 }
 
 function RoadmapItemCard({ item, runAction, projects = [], parentOptions = [] }: { item: any, runAction?: any, projects?: string[], parentOptions?: string[] }) {
@@ -4535,12 +4594,6 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, '').replace(/\x1b[()][AB0-2]/g, '');
 }
 
-function formatTime(value: string | undefined) {
-  if (!value) return '';
-  const d = new Date(value);
-  return Number.isNaN(d.valueOf()) ? '' : d.toLocaleTimeString([], { hour12: false });
-}
-
 function formatDuration(start?: string, end?: string): string {
   if (!start) return '';
   if (!end) return 'running';
@@ -4647,12 +4700,6 @@ function runDurationSeconds(run: any, now: number): number | null {
   return seen ? total : null;
 }
 
-function formatDateTime(value: string | undefined): string {
-  if (!value) return '';
-  const d = new Date(value);
-  return Number.isNaN(d.valueOf()) ? value : d.toLocaleString([], { hour12: false });
-}
-
 export function Status({ value, label }: { value: string; label?: string }) {
   return <span className={`status status-${value}`}>{label ?? value}</span>;
 }
@@ -4662,6 +4709,7 @@ function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
 }
 
 function compareInboxItems(a: any, b: any) {
+  // Newest activity first within the same priority band (protections / conversations first).
   const priority = (item: any) => item.kind === 'protection'
     ? 3
     : (item.kind === 'conversation' || item.metadata?.conversation ? 2 : 1);
@@ -4670,7 +4718,8 @@ function compareInboxItems(a: any, b: any) {
   const aTime = Date.parse(inboxActivityAt(a) || '') || 0;
   const bTime = Date.parse(inboxActivityAt(b) || '') || 0;
   if (aTime !== bTime) return bTime - aTime;
-  return String(a.id).localeCompare(String(b.id));
+  // Stable tie-break: higher numeric id first when timestamps match or are missing.
+  return String(b.id).localeCompare(String(a.id), undefined, { numeric: true });
 }
 
 function compareTasks(a: any, b: any) {
@@ -4699,7 +4748,27 @@ function taskActivityAt(task: any): string | undefined {
 }
 
 function inboxActivityAt(item: any): string | undefined {
-  return item.updated_at ?? item.created_at;
+  // Prefer the latest of item timestamps and any comment/history activity so a
+  // fresh reply reorders the card even if `updated_at` was not bumped on disk.
+  const commentTimes = inboxComments(item).flatMap((comment: any) => [
+    comment?.at,
+    comment?.created_at,
+    comment?.createdAt,
+    comment?.updated_at,
+    comment?.edited_at,
+  ]);
+  const historyTimes = (Array.isArray(item?.metadata?.history) ? item.metadata.history : []).map(
+    (entry: any) => entry?.at ?? entry?.created_at,
+  );
+  return latestTimestamp(
+    item?.updated_at,
+    item?.created_at,
+    item?.metadata?.updated_at,
+    item?.metadata?.created_at,
+    item?.metadata?.last_activity_at,
+    ...commentTimes,
+    ...historyTimes,
+  );
 }
 
 function runActivityAt(run: any): string | undefined {
@@ -4882,12 +4951,6 @@ function matchesInboxFilters(
     comments,
   ].join(' ').toLowerCase();
   return haystack.includes(query);
-}
-
-function formatDate(value: string | undefined) {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
 }
 
 function firstSessionRef(sessions: any[]): string {

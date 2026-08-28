@@ -634,24 +634,25 @@ def parse_lean(text: str) -> list[dict]:
                 else ".".join(ns + [name])
             decls.append((i, fqname, kind, is_private))
 
-    # for each decl, find the top of a /-- … -/ doc comment sitting above it
+    # for each decl, find the top of a /-- … -/ *doc* comment sitting above it.
+    # Plain `/- … -/` (and module `/-! … -/`) must not count: walking upward past
+    # them used to latch onto an earlier `/--` and set the *next* declaration's
+    # body range to end before this one starts, emptying node bodies on sync.
     tops: list[int] = []
     for i, _fq, _kind, _private in decls:
-        top, j = i, i - 1
-        while j >= 0 and lines[j].strip() == "":
-            j -= 1
-        if j >= 0 and lines[j].strip().endswith("-/"):
-            while j >= 0 and "/--" not in lines[j]:
-                j -= 1
-            if j >= 0:
-                top = j
-        tops.append(top)
+        tops.append(_doc_comment_top(lines, i))
 
     out: list[dict] = []
     for k, (i, fq, kind, is_private) in enumerate(decls):
         # a decl's code stops where the NEXT decl's doc comment begins, so an
         # adjacent decl's doc doesn't leak into this one's body.
-        end = tops[k + 1] if k + 1 < len(decls) else len(lines)
+        if k + 1 < len(decls):
+            end = tops[k + 1]
+            # Belt-and-suspenders: a poisoned top must never empty this body.
+            if end <= i:
+                end = decls[k + 1][0]
+        else:
+            end = len(lines)
         code = lines[i:end]
         while code and (code[-1].strip() == ""
                         or re.match(r"\s*(end|namespace)\b", code[-1])):
@@ -672,6 +673,32 @@ def parse_lean(text: str) -> list[dict]:
             "private": is_private,
         })
     return out
+
+
+def _doc_comment_top(lines: list[str], decl_line: int) -> int:
+    """Start line of a ``/-- … -/`` doc immediately above ``decl_line``, else ``decl_line``.
+
+    Only Lean *documentation* comments (``/--``) attach to the following
+    declaration. Plain ``/- … -/`` and module docs ``/-! … -/`` are ignored so
+    they cannot pull the body range of later decls backward across the file.
+    """
+    j = decl_line - 1
+    while j >= 0 and lines[j].strip() == "":
+        j -= 1
+    if j < 0 or not lines[j].strip().endswith("-/"):
+        return decl_line
+    # Walk up to the opener of *this* block only (stop at the first `/-`).
+    while j >= 0 and "/-" not in lines[j]:
+        j -= 1
+    if j < 0:
+        return decl_line
+    opener_at = lines[j].find("/-")
+    if opener_at < 0:
+        return decl_line
+    # `/--` is the only decl-doc opener. `/-!` is a module doc; plain `/-` is not.
+    if not lines[j][opener_at:].startswith("/--"):
+        return decl_line
+    return j
 
 
 def _iter_lean_files(paths) -> list[Path]:

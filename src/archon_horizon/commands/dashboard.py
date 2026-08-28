@@ -95,18 +95,24 @@ class DashboardCommand:
             self._report_workflow(out, workflow_path, workflow_status, committed=commit_sha)
 
     def _commit_export(self, out: Path, workflow_path: Path | None) -> str | None:
-        """Commit the exported dashboard (and Pages workflow) into the workspace
-        ledger, so it is actually tracked and can be pushed to publish Pages.
+        """Commit the exported dashboard (and Pages workflow) for GitHub publish.
 
-        The static export writes a built site under ``--out`` (default
-        ``dashboard/``) plus, with ``--workflow``, a file under
-        ``.github/workflows/``. Neither lives under the paths the per-session
-        autogit integration stages, so without this step they stay untracked —
-        the "static page is gitignored" symptom (they are not ignored, just never
-        added). Best-effort: needs git and paths inside the workspace repo; a
-        failure warns rather than aborting the export.
+        Prefer the user's root ``.git`` when present: that is the repository
+        pushed to GitHub / GitHub Pages. Fall back to the out-of-tree Horizon
+        ledger only when there is no user repo (ledger-only workspaces).
+
+        The static export already materializes roadmap/inbox/graph/run snapshots
+        under ``dashboard/data/`` — it does **not** need raw hgraph node files or
+        live ``.archon-horizon/runs`` in git history. Agents keep committing Lean
+        and durable Horizon state to the ledger; publish is a separate snapshot.
         """
-        from archon_horizon.vcs.git import GitError, WorkspaceGit, git_available
+        from archon_horizon.vcs.git import (
+            GitError,
+            WorkspaceGit,
+            commit_user_repo_paths,
+            git_available,
+            user_repo_git_dir,
+        )
 
         if not git_available():
             log.warn("git not available; exported dashboard left uncommitted.")
@@ -122,10 +128,25 @@ class DashboardCommand:
                 continue
         if not paths:
             return None
+        message = "workspace: publish static dashboard"
+        if user_repo_git_dir(self.root) is not None:
+            try:
+                sha = commit_user_repo_paths(self.root, message, paths)
+            except GitError as exc:
+                log.warn(f"could not commit exported dashboard to user .git: {exc}")
+                return None
+            if sha:
+                log.info(
+                    f"committed exported dashboard to the user repository ({sha[:10]}) "
+                    "for GitHub / Pages publish."
+                )
+            else:
+                log.info("static dashboard already up to date in the user repository.")
+            return sha
         try:
             git = WorkspaceGit(self.root)
             git.init()
-            sha = git.commit("workspace: publish static dashboard", paths=paths)
+            sha = git.commit(message, paths=paths)
         except GitError as exc:
             log.warn(f"could not commit exported dashboard: {exc}")
             return None

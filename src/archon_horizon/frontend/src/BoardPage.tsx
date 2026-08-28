@@ -3,6 +3,7 @@ import { Panel, Status, InlineMarkdown, RoadmapEditor } from './App';
 import { editRoadmap } from './api';
 import { itemOwner, itemMilestone, itemPinnedCommits, CommitChip, RefChip } from './refs';
 import { isStaticDashboard } from './staticMode';
+import { formatChipDateTime } from './utils/datetime';
 
 type PageProps = { state: any; reload: () => void };
 
@@ -34,10 +35,7 @@ function itemActivityAt(item: any): string {
 }
 
 function compactTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? value
-    : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return formatChipDateTime(value);
 }
 
 export default function BoardPage({ state, reload }: PageProps) {

@@ -49,6 +49,9 @@ from .schema import ConfigError, WorkspaceConfig
 
 CONFIG_FILENAME = "config.yaml"
 _WARNED_LIBRARY_MISMATCHES: set[tuple[str, str, str, tuple[str, ...], str]] = set()
+# Per-process cache for the hot CLI path (hooks, synchronizer). Keyed by the
+# resolved config path plus mtime/size so an edited config.yaml still reloads.
+_CONFIG_CACHE: dict[tuple[str, int, int], WorkspaceConfig] = {}
 
 
 def _warn_library_mismatches(cfg: WorkspaceConfig, root: Path) -> None:
@@ -92,10 +95,30 @@ def load_config(root: Path) -> WorkspaceConfig:
             f"No {CONFIG_FILENAME} found at {root.resolve()} — this is not an Archon Horizon "
             "workspace. Run `horizon init` here first (use `--root <dir>` to target another directory)."
         )
+    try:
+        stat = path.stat()
+        cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        cache_key = None
+    if cache_key is not None:
+        cached = _CONFIG_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     raw = yaml.safe_load(path.read_text("utf-8")) or {}
     cfg = WorkspaceConfig.from_raw(raw)
+    # Lake-manifest drift walks every ``**/lake-manifest.json`` under the
+    # workspace. That is useful once per process (or after config change), not
+    # on every hook/CLI invocation that only needs ``state_dir``.
     _warn_library_mismatches(cfg, root)
+    if cache_key is not None:
+        _CONFIG_CACHE.clear()
+        _CONFIG_CACHE[cache_key] = cfg
     return cfg
+
+
+def clear_config_cache() -> None:
+    """Drop the process-local config cache (tests / long-lived servers)."""
+    _CONFIG_CACHE.clear()
 
 
 def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:

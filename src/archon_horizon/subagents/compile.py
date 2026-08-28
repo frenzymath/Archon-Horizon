@@ -162,9 +162,13 @@ def _codex_skills_appendix(workspace_root: Path) -> str:
     if not skills:
         return ""
     skills_dir = (workspace_root / ".claude" / "skills").resolve()
-    lines = "\n".join(
-        f"- {s.name} — {s.description} (read `{skills_dir / s.name / 'SKILL.md'}`)" for s in skills
-    )
+    skill_lines: list[str] = []
+    for skill in skills:
+        line = f"- {skill.name} — {skill.description} (read `{skills_dir / skill.name / 'SKILL.md'}`)"
+        if skill.recommendation:
+            line += f"\n  Advisory recommendation (optional): {skill.recommendation}"
+        skill_lines.append(line)
+    lines = "\n".join(skill_lines)
     return (
         "# Skills\n"
         "Capability know-how lives in skill files. Before acting, read the relevant "

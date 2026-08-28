@@ -1,11 +1,14 @@
 """Session-level VCS integration policy.
 
-The workspace repository is the one integration ledger: one commit per completed
-*session*, recording shared Horizon state plus the session's scoped project
-worktrees as they stand at that boundary. Committing per session (rather than
-only at run end) means a run that crashes or is interrupted still leaves every
-finished session durably recorded. There is no separate per-project repository —
-a project's history is this repo filtered by pathspec.
+The workspace repository is the one **agent source ledger**: one commit per
+completed *session*, recording ``config.yaml`` plus the session's scoped project
+worktrees (Lean, blueprints, …) as they stand at that boundary. Committing per
+session (rather than only at run end) means a run that crashes or is interrupted
+still leaves every finished session's *math* durably recorded. Horizon state
+(``.archon-horizon/``) is not part of this journal — it lives on disk for the
+dashboard; humans publish snapshots via root ``.git`` or static export. There is
+no separate per-project repository — a project's history is this repo filtered
+by pathspec.
 
 Structured provenance rides each commit as git trailers (``Archon-Run``,
 ``Archon-Round``, ``Archon-Role``, ``Archon-Session``, ``Archon-Task``,
@@ -107,23 +110,14 @@ class SessionIntegration:
 def _workspace_commit_paths(workspace: Workspace, projects: tuple[str, ...] = ()) -> list[str]:
     """Paths staged by the workspace integration commit.
 
-    Stage shared Horizon state plus the scoped project worktrees. Do not stage
-    ``.archon-horizon/vcs`` (the git dir) or ``.archon-horizon/locks``
-    (ephemeral leases).
+    The agent ledger records **sources that matter for proofs**: ``config.yaml``
+    and the session's scoped project worktrees (Lean, blueprints, …). Horizon
+    control-plane state (``.archon-horizon/`` — inbox, tasks, runs, roadmap,
+    blueprint JSON cache) stays on disk for the live dashboard and is never
+    staged here. Generated ``hgraph/`` trees are excluded by ledger policy.
+    Users publish state via their own root ``.git`` or ``horizon dashboard --static``.
     """
-    candidates = [
-        workspace.root / "config.yaml",
-        workspace.state_path / "version",
-        workspace.state_path / "events.jsonl",
-        workspace.state_path / "inbox",
-        workspace.state_path / "tasks",
-        workspace.state_path / "runs",
-        workspace.state_path / "reports",
-        workspace.state_path / "artifacts",
-        workspace.state_path / "blueprints",
-        workspace.state_path / "memory.md",
-        workspace.state_path / "roadmap",
-    ]
+    candidates = [workspace.root / "config.yaml"]
     for name in projects:
         if name in workspace.projects:
             candidates.append(workspace.project_path(name))
@@ -163,7 +157,7 @@ def integrate_workspace_run(
     trailers: dict[str, str] | None = None,
     allow_empty: bool = False,
 ) -> CommitOutcome:
-    """Commit root workspace state (shared state + scoped project worktrees)."""
+    """Commit agent-relevant sources (config + scoped project worktrees)."""
     if not git_available():
         return CommitOutcome(attempted=False, error="git not available")
     try:
@@ -239,9 +233,9 @@ def integrate_workspace_session(
 ) -> SessionIntegration:
     """Integrate one completed session into the workspace ledger.
 
-    Commits the shared Horizon state plus the session's scoped project worktrees
+    Commits ``config.yaml`` plus the session's scoped project worktrees
     (``projects``) so a run that never reaches its end still leaves each finished
-    session durably recorded, with provenance in git trailers. Pass
+    session's sources durably recorded, with provenance in git trailers. Pass
     ``commit_workspace=False`` to skip the commit (e.g. a dry run); the returned
     outcome then carries no workspace sha.
     """

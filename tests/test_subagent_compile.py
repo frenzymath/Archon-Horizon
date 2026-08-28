@@ -15,6 +15,7 @@ from archon_horizon.subagents.compile import (
     install_subagents,
     render_claude_agent,
     render_codex_agent,
+    _codex_skills_appendix,
 )
 
 _FM = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
@@ -95,3 +96,12 @@ def test_install_targets_workspace_local_dirs_per_engine(tmp_path: Path) -> None
     assert (tmp_path / ".codex" / "agents" / "work-reviewer.toml").exists()
     assert (tmp_path / ".claude" / "agents" / "ground.md").exists()
     assert (tmp_path / ".codex" / "agents" / "ground.toml").exists()
+    assert (tmp_path / ".claude" / "agents" / "lean-isolator.md").exists()
+    assert (tmp_path / ".codex" / "agents" / "lean-isolator.toml").exists()
+
+
+def test_codex_skill_appendix_exposes_optional_recommendations(tmp_path: Path) -> None:
+    appendix = _codex_skills_appendix(tmp_path)
+    assert "Advisory recommendation (optional):" in appendix
+    assert "in-place" in appendix
+    assert "by sorry" in appendix

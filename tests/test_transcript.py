@@ -156,6 +156,38 @@ def test_codex_rollout_turn_context_surfaces_effort() -> None:
     assert observed_effort([TranscriptEvent(TranscriptKind.SESSION_META, data={"model": "x"})]) is None
 
 
+def test_observed_model_ignores_nested_subagent_events() -> None:
+    """Parent session chip must not inherit the first subagent's model (I: luna→gpt)."""
+    from archon_horizon.transcript.parsers import observed_model
+
+    events = [
+        TranscriptEvent(
+            TranscriptKind.SESSION_META,
+            data={
+                "model": "luna-something",
+                "subagent_type": "janitor",
+                "subagent_thread_id": "t-child",
+            },
+        ),
+        TranscriptEvent(
+            TranscriptKind.TEXT,
+            text="child work",
+            data={"model": "luna-something", "subagent_thread_id": "t-child"},
+        ),
+        TranscriptEvent(
+            TranscriptKind.SUBAGENT_START,
+            data={"model": "luna-something", "name": "janitor", "subagent_key": "t-child"},
+        ),
+        TranscriptEvent(
+            TranscriptKind.SESSION_META,
+            data={"model": "gpt-5.6-sol", "effort": "high"},
+        ),
+    ]
+    assert observed_model(events) == "gpt-5.6-sol"
+    # Subagent-only stream: no parent model announced.
+    assert observed_model(events[:3]) is None
+
+
 def test_native_session_id_extractors() -> None:
     # Claude stamps session_id on every event; codex announces it once on
     # thread.started. Both ignore unrelated lines and garbage.

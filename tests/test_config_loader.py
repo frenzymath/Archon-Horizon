@@ -280,6 +280,11 @@ def test_interactive_launches_include_attention_hooks(monkeypatch) -> None:
     assert "PostToolUse" in settings["hooks"]
     assert "PreToolUse" in settings["hooks"]
     assert "Stop" in settings["hooks"]
+    post = settings["hooks"]["PostToolUse"][0]
+    assert post["matcher"] != "*"
+    assert "Read" not in post["matcher"]
+    assert "Bash" in post["matcher"]
+    assert "agent-hook-fast" in post["hooks"][0]["command"]
 
     codex = build_interactive_launch(
         HarnessConfig(name="codex", kind="codex"), "PROMPT"
@@ -287,6 +292,7 @@ def test_interactive_launches_include_attention_hooks(monkeypatch) -> None:
     assert codex is not None
     assert "--dangerously-bypass-hook-trust" in codex.argv
     assert any(arg.startswith("hooks.PostToolUse=") for arg in codex.argv)
+    assert any("agent-hook-fast" in arg for arg in codex.argv)
 
 
 def test_interactive_launch_can_omit_attention_hooks(monkeypatch) -> None:

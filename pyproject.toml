@@ -42,7 +42,9 @@ Changelog = "https://github.com/frenzymath/Archon-Horizon/blob/main/docs/CHANGEL
 Issues = "https://github.com/frenzymath/Archon-Horizon/issues"
 
 [project.scripts]
-horizon = "archon_horizon.cli:main"
+# Thin entry: ``agent-hook-fast`` bypasses the full Typer CLI import so engine
+# lifecycle hooks stay cheap on every tool boundary.
+horizon = "archon_horizon.__main__:main"
 
 # include-package-data is intentionally OFF: it sweeps the whole package tree,
 # which pulled hundreds of ``frontend/node_modules`` files into the wheel. We

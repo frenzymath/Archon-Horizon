@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -15,8 +16,6 @@ pytestmark = pytest.mark.skipif(not git_available(), reason="git not installed")
 
 def _configure_identity(env_root: Path) -> None:
     # Commits need an author; set it locally inside each repo via env.
-    import os
-
     os.environ.setdefault("GIT_AUTHOR_NAME", "test")
     os.environ.setdefault("GIT_AUTHOR_EMAIL", "test@example.com")
     os.environ.setdefault("GIT_COMMITTER_NAME", "test")
@@ -112,28 +111,151 @@ def test_workspace_ledger_excludes_raw_transcripts_and_usage(tmp_path: Path) -> 
     assert git.commit("raw session artifacts", paths=[".archon-horizon/runs"]) is None
 
 
-def test_workspace_git_force_adds_horizon_ledger_paths(tmp_path: Path) -> None:
+def test_workspace_ledger_excludes_entire_hgraph_tree(tmp_path: Path) -> None:
+    # hgraph is regenerable / optional agent scratch — never agent source history.
+    # Users who want it version it in their own root `.git`.
     _configure_identity(tmp_path)
     git = WorkspaceGit(tmp_path)
     git.init()
-    (tmp_path / ".gitignore").write_text(".archon-horizon/\n", "utf-8")
-    state_file = tmp_path / ".archon-horizon" / "events.jsonl"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text("{}\n", "utf-8")
+    proj = tmp_path / "P"
+    nodes = proj / "hgraph" / "nodes"
+    edges = proj / "hgraph" / "edges"
+    nodes.mkdir(parents=True)
+    edges.mkdir(parents=True)
+    (proj / "hgraph" / "config.yaml").write_text("lean: []\n", "utf-8")
+    (nodes / "abcd1234ef00.md").write_text("---\ntitle: gen\n---\nbody\n", "utf-8")
+    (edges / "a__b.md").write_text("---\ntype: uses\n---\n", "utf-8")
+    comment_dir = nodes / "abcd1234ef00"
+    comment_dir.mkdir()
+    (comment_dir / "comment-1.md").write_text("authored note\n", "utf-8")
+    (proj / "Foo.lean").write_text("def foo := 1\n", "utf-8")
 
-    sha = git.commit("ledger", paths=[".archon-horizon/events.jsonl"])
-
+    sha = git.commit("hgraph + lean", paths=["P"])
     assert sha
-    # The workspace git is out-of-tree, so query it via its --git-dir/--work-tree.
+    files = set(git.files_in_commit(sha))
+    assert "P/Foo.lean" in files
+    assert not any("/hgraph/" in f or f.endswith("/hgraph") for f in files)
+
+
+def test_commit_user_repo_paths_uses_root_dot_git(tmp_path: Path) -> None:
+    from archon_horizon.vcs.git import commit_user_repo_paths, user_repo_git_dir
+
+    _configure_identity(tmp_path)
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    assert user_repo_git_dir(tmp_path) is not None
+    dash = tmp_path / "dashboard"
+    dash.mkdir()
+    (dash / "index.html").write_text("<html/>", "utf-8")
+    sha = commit_user_repo_paths(
+        tmp_path, "workspace: publish static dashboard", ["dashboard"]
+    )
+    assert sha
     tracked = subprocess.run(
-        ["git", "--git-dir", str(git.git_dir), "--work-tree", str(tmp_path),
-         "ls-files", ".archon-horizon/events.jsonl"],
+        ["git", "ls-files", "dashboard/index.html"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    assert ".archon-horizon/events.jsonl" in tracked
+    assert "dashboard/index.html" in tracked
+    # Second commit with no content change is a no-op.
+    assert (
+        commit_user_repo_paths(
+            tmp_path, "workspace: publish static dashboard", ["dashboard"]
+        )
+        is None
+    )
+
+
+def test_workspace_git_does_not_track_horizon_state(tmp_path: Path) -> None:
+    # Horizon control-plane state stays on disk for the live dashboard; the
+    # agent ledger only journals sources (config + Lean/blueprint trees).
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    state_file = tmp_path / ".archon-horizon" / "events.jsonl"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text("{}\n", "utf-8")
+    (tmp_path / ".archon-horizon" / "inbox" / "local" / "items").mkdir(parents=True)
+    (tmp_path / ".archon-horizon" / "inbox" / "local" / "items" / "I-1.yaml").write_text(
+        "kind: hint\n", "utf-8"
+    )
+
+    sha = git.commit(
+        "ledger",
+        paths=["config.yaml", ".archon-horizon/events.jsonl", ".archon-horizon/inbox"],
+    )
+    assert sha
+    files = set(git.files_in_commit(sha))
+    assert "config.yaml" in files
+    assert not any(f.startswith(".archon-horizon/") for f in files)
+
+
+def test_ledger_prune_drops_historical_state_and_hgraph(tmp_path: Path) -> None:
+    """Retro-clean: drop already-tracked state/hgraph without touching the work tree."""
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    (tmp_path / "config.yaml").write_text("workspace: {name: ws}\n", "utf-8")
+    lean = tmp_path / "P" / "Foo.lean"
+    lean.parent.mkdir(parents=True)
+    lean.write_text("def foo := 1\n", "utf-8")
+    state = tmp_path / ".archon-horizon" / "events.jsonl"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("{}\n", "utf-8")
+    hgraph = tmp_path / "P" / "hgraph" / "nodes"
+    hgraph.mkdir(parents=True)
+    (hgraph / "abcd.md").write_text("gen\n", "utf-8")
+
+    # Simulate an older ledger that force-tracked state + hgraph.
+    ws = ["git", "--git-dir", str(git.git_dir), "--work-tree", str(tmp_path)]
+    subprocess.run(ws + ["add", "-f", "--", "config.yaml", "P/Foo.lean",
+                         ".archon-horizon/events.jsonl", "P/hgraph"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ws + ["commit", "-q", "-m", "bloat"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        env={**os.environ, "ARCHON_HORIZON_ALLOW_DELETIONS": "1"},
+    )
+    before = set(
+        subprocess.run(ws + ["ls-files"], cwd=tmp_path, capture_output=True, text=True, check=True)
+        .stdout.splitlines()
+    )
+    assert ".archon-horizon/events.jsonl" in before
+    assert "P/hgraph/nodes/abcd.md" in before
+
+    dry = git.prune_non_ledger_paths(dry_run=True)
+    assert int(dry["paths"]) >= 2
+    assert dry["sha"] is None
+
+    summary = git.prune_non_ledger_paths()
+    assert int(summary["paths"]) >= 2
+    assert summary["sha"]
+    after = set(
+        subprocess.run(ws + ["ls-files"], cwd=tmp_path, capture_output=True, text=True, check=True)
+        .stdout.splitlines()
+    )
+    assert "config.yaml" in after
+    assert "P/Foo.lean" in after
+    assert not any(p.startswith(".archon-horizon/") for p in after)
+    assert not any("/hgraph/" in p for p in after)
+    # Working tree untouched.
+    assert state.exists() and hgraph.joinpath("abcd.md").exists()
 
 
 def test_project_files_tracked_through_workspace_ledger(tmp_path: Path) -> None:
@@ -327,3 +449,141 @@ def test_orchestrator_commit_still_records_deletions(tmp_path: Path) -> None:
     assert sha
     listing = _plain_git(git, "ls-tree", "--name-only", "HEAD")
     assert "gone.txt" not in listing.stdout
+
+
+def test_workspace_excludes_lock_tmp_and_process_markers(tmp_path: Path) -> None:
+    """I-1913: volatile lock/tmp/process markers and full Horizon state stay out."""
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    state = tmp_path / ".archon-horizon"
+    inbox = state / "inbox" / "local" / "items"
+    inbox.mkdir(parents=True)
+    (inbox / "I-0001.yaml").write_text("kind: hint\nstatus: open\nbody: |\n  t\n\n  d\n", "utf-8")
+    (inbox / ".create.lock").write_text("1\n", "utf-8")
+    (state / "inbox" / "local" / "items" / "I-0001.yaml.tmp").write_text("tmp\n", "utf-8")
+    run = state / "runs" / "0001"
+    run.mkdir(parents=True)
+    (run / "process.json").write_text('{"pid":1}\n', "utf-8")
+    (run / "run.yaml").write_text("id: '0001'\n", "utf-8")
+    (tmp_path / "config.yaml").write_text("x\n", "utf-8")
+    (tmp_path / "_site" / "ops").mkdir(parents=True)
+    (tmp_path / "_site" / "ops" / "index.html").write_text("<html/>\n", "utf-8")
+    phase = tmp_path / "MainProjects" / ".phase0-pre-abc.XXXX"
+    phase.mkdir(parents=True)
+    (phase / "blob.bin").write_text("x" * 100, "utf-8")
+
+    # Integration commits only stage config + project roots. State trees and
+    # fully-ignored build/site dumps must not appear in the resulting commit.
+    sha = git.commit(
+        "state",
+        paths=[
+            "config.yaml",
+            ".archon-horizon/inbox",
+            ".archon-horizon/runs",
+        ],
+    )
+    assert sha
+    files = set(git.files_in_commit(sha))
+    assert "config.yaml" in files
+    assert not any(f.startswith(".archon-horizon/") for f in files)
+
+    # Project-scoped add must also honour info/exclude for site/phase dumps.
+    proj = tmp_path / "projects" / "p"
+    proj.mkdir(parents=True)
+    (proj / "Foo.lean").write_text("def foo := 1\n", "utf-8")
+    (proj / ".lake" / "build").mkdir(parents=True)
+    (proj / ".lake" / "build" / "x.olean").write_text("o", "utf-8")
+    sha2 = git.commit("project", paths=["projects/p"])
+    assert sha2
+    files2 = set(git.files_in_commit(sha2))
+    assert "projects/p/Foo.lean" in files2
+    assert not any(".lake" in f for f in files2)
+    assert not any(f.startswith("_site/") for f in files2)
+    assert not any(".phase0-pre-abc" in f for f in files2)
+
+    # A whole-tree add still leaves _site and phase snapshots untracked.
+    assert git.commit("noise", paths=["_site", "MainProjects"]) is None
+
+
+def test_commit_path_allowlist_rejects_outsider(tmp_path: Path) -> None:
+    """I-0409: staged paths outside the explicit add set must be rejected."""
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    (tmp_path / "config.yaml").write_text("x\n", "utf-8")
+    assert git.commit("initial")
+
+    # Seed a private index from HEAD, add only mine.txt, then sneak other.txt
+    # into the index the way a concurrent broad-add would.
+    idx = tmp_path / "allow-index"
+    env = {"GIT_INDEX_FILE": str(idx)}
+    assert _plain_git(git, "read-tree", "HEAD", env=env).returncode == 0
+    (tmp_path / "mine.txt").write_text("mine\n", "utf-8")
+    (tmp_path / "other.txt").write_text("other\n", "utf-8")
+    assert _plain_git(git, "add", "--", "mine.txt", "other.txt", env=env).returncode == 0
+
+    allow = tmp_path / "allow-paths"
+    allow.write_text("mine.txt\n", "utf-8")
+    blocked = _plain_git(
+        git, "commit", "-m", "should block outsider",
+        env={
+            **env,
+            "ARCHON_COMMIT_BASE": git.current_sha() or "",
+            "ARCHON_COMMIT_PATHS_FILE": str(allow),
+        },
+    )
+    assert blocked.returncode != 0
+    assert "outside the explicit add set" in blocked.stderr
+    assert "other.txt" in blocked.stderr
+
+    # With both paths allowed, the commit proceeds.
+    allow.write_text("mine.txt\nother.txt\n", "utf-8")
+    ok = _plain_git(
+        git, "commit", "-m", "both allowed",
+        env={
+            **env,
+            "ARCHON_COMMIT_BASE": git.current_sha() or "",
+            "ARCHON_COMMIT_PATHS_FILE": str(allow),
+        },
+    )
+    assert ok.returncode == 0, ok.stderr
+
+
+def test_status_porcelain_is_single_flight_and_cached(tmp_path: Path) -> None:
+    from archon_horizon.vcs import git as git_mod
+    from archon_horizon.vcs.git import status_porcelain
+
+    _configure_identity(tmp_path)
+    git = WorkspaceGit(tmp_path)
+    git.init()
+    (tmp_path / "config.yaml").write_text("x\n", "utf-8")
+    assert git.commit("initial")
+    (tmp_path / "config.yaml").write_text("y\n", "utf-8")
+
+    calls = {"n": 0}
+    real_run = git_mod._run
+
+    def counting_run(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args") or []
+        if cmd and "status" in cmd:
+            calls["n"] += 1
+        return real_run(*args, **kwargs)
+
+    # Reset cache between tests.
+    git_mod.invalidate_status_cache()
+    import archon_horizon.vcs.git as g
+    g._STATUS_CACHE.clear()
+
+    # Patch at module level.
+    original = git_mod._run
+    git_mod._run = counting_run  # type: ignore[assignment]
+    try:
+        a = status_porcelain(git.git_dir, git.root, untracked="no", ttl_s=30.0)
+        b = status_porcelain(git.git_dir, git.root, untracked="no", ttl_s=30.0)
+        assert a == b
+        assert "config.yaml" in a
+        assert calls["n"] == 1  # second call served from cache
+    finally:
+        git_mod._run = original  # type: ignore[assignment]
+        git_mod.invalidate_status_cache()

@@ -51,16 +51,22 @@ CLAUDE_P_INSTALL_HINT = (
 )
 
 # Horizon owns this constant hook definition and injects it only into sessions it
-# launches. The hidden command returns the hook protocol's model-visible
-# ``additionalContext`` shape; ``--json`` also suppresses normal CLI chrome.
+# launches. The fast entry bypasses the full Typer CLI so each tool boundary
+# stays cheap; ``--json`` remains for engines that still call ``horizon agent-hook``.
 _HORIZON_ATTENTION_HOOK_COMMAND = (
-    'ARCHON_HORIZON_NO_SYNC=1 "${HORIZON_BIN:-horizon}" agent-hook --json'
+    'ARCHON_HORIZON_NO_SYNC=1 "${HORIZON_BIN:-horizon}" agent-hook-fast'
 )
+# PreToolUse only gates Bash commits (unread conversation pause). PostToolUse is
+# narrowed away from pure-read tools so Read/Grep/Glob do not pay a process spawn.
 _HORIZON_ATTENTION_HOOK_EVENTS = (
     ("SessionStart", "startup|resume|clear|compact"),
     ("SubagentStart", None),
     ("PreToolUse", "Bash"),
-    ("PostToolUse", "*"),
+    (
+        "PostToolUse",
+        "Bash|Edit|Write|MultiEdit|NotebookEdit|ApplyPatch|ApplyPatchEdit|"
+        "Shell|Exec|exec_command",
+    ),
     ("Stop", None),
 )
 

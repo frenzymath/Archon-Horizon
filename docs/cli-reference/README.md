@@ -162,6 +162,11 @@ On `set`, `--roadmap-ref`/`--inbox-ref` (each repeatable) link the task to roadm
 
 **Skills** ([`commands/skills.py`](../../src/archon_horizon/commands/skills.py)): `list` · `install`.
 
+**Ledger** ([`commands/ledger.py`](../../src/archon_horizon/commands/ledger.py)) — the out-of-tree agent source journal (`.archon-horizon/vcs/workspace.git`). It records Lean, blueprints, and `config.yaml` only; Horizon state and `**/hgraph/` stay on disk.
+
+- `horizon ledger status [--json]` — count tracked paths that current policy treats as non-source (state / hgraph).
+- `horizon ledger prune [--dry-run] [--gc] [--json]` — drop those paths from the ledger index in one commit (working tree untouched). `--gc` runs `git gc --prune=now` afterward to reclaim pack space from old blobs. Use on existing workspaces that still track pre-policy state/hgraph noise.
+
 ---
 
 ## 6. Blueprints & search

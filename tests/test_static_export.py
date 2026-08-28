@@ -154,10 +154,43 @@ def test_pages_workflow_refuses_out_dir_outside_repo(tmp_path: Path) -> None:
     assert not (ws / ".github").exists()
 
 
-def test_static_export_is_committed_to_workspace_git(tmp_path: Path) -> None:
-    # The exported dashboard (and Pages workflow) must be committed into the
-    # workspace ledger, else it stays untracked ("the static page is gitignored"
-    # symptom) and can't be pushed to publish Pages.
+def test_static_export_is_committed_for_publish(tmp_path: Path) -> None:
+    # Prefer the user root `.git` (what gets pushed to GitHub / Pages). Fall back
+    # to the Horizon ledger only when there is no user repo.
+    import subprocess
+
+    import pytest
+
+    from archon_horizon.vcs.git import WorkspaceGit, git_available, user_repo_git_dir
+
+    if not git_available():
+        pytest.skip("git not installed")
+
+    ws = _workspace(tmp_path)
+    main(["--root", str(ws), "dashboard", "--static", "--out", "dashboard", "--workflow"])
+
+    if user_repo_git_dir(ws) is not None:
+        tracked = subprocess.run(
+            ["git", "ls-files", "dashboard", ".github"],
+            cwd=ws,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    else:
+        git = WorkspaceGit(ws)
+        assert git.is_repo()
+        tracked = subprocess.run(
+            ["git", "--git-dir", str(git.git_dir), "--work-tree", str(ws),
+             "ls-files", "dashboard", ".github"],
+            capture_output=True, text=True,
+        ).stdout
+    assert "dashboard/index.html" in tracked
+    assert f".github/workflows/{PAGES_WORKFLOW_FILENAME}" in tracked
+
+
+def test_static_export_falls_back_to_ledger_without_user_git(tmp_path: Path) -> None:
+    import shutil
     import subprocess
 
     import pytest
@@ -168,6 +201,9 @@ def test_static_export_is_committed_to_workspace_git(tmp_path: Path) -> None:
         pytest.skip("git not installed")
 
     ws = _workspace(tmp_path)
+    # Simulate a ledger-only workspace (no publish remote yet).
+    if (ws / ".git").exists():
+        shutil.rmtree(ws / ".git")
     main(["--root", str(ws), "dashboard", "--static", "--out", "dashboard", "--workflow"])
 
     git = WorkspaceGit(ws)

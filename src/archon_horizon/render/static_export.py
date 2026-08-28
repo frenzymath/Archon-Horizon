@@ -30,10 +30,13 @@ from archon_horizon.server.service import WorkspaceService
 
 
 
-# The exported dashboard is committed to the workspace repo; this Action just
-# uploads that already-built directory and deploys it to GitHub Pages. It does
-# NOT rebuild in CI, so it needs no Python/Node toolchain and never depends on
-# the (gitignored) SPA build being present in a fresh checkout.
+# The exported dashboard is committed to the *user* repository (root `.git`)
+# when present, else the Horizon ledger; this Action just uploads that
+# already-built directory and deploys it to GitHub Pages. It does NOT rebuild
+# in CI by default, so it needs no Python/Node toolchain and never depends on
+# the (gitignored) SPA build being present in a fresh checkout. To rebuild from
+# sources in CI instead, install Horizon in the workflow and run
+# `horizon dashboard --static` before upload.
 PAGES_WORKFLOW_FILENAME = "horizon-dashboard-pages.yml"
 
 # A published snapshot is a report, not an archive of every transcript ever

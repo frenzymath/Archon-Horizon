@@ -83,6 +83,33 @@ def test_block_comment_hides_commented_out_code() -> None:
     assert names == {"keeper": "def"}
 
 
+def test_plain_block_comment_does_not_empty_following_bodies() -> None:
+    # Regression: a plain `/- … -/` (or module `/-! … -/`) above a later decl
+    # used to walk upward past it to an earlier `/--`, setting the *previous*
+    # decl's body end before its start and writing empty hgraph node bodies.
+    src = (
+        "/-- Doc for first. -/\n"
+        "theorem first : True := by\n"
+        "  trivial\n"
+        "\n"
+        "/-! Module note that is not a decl doc. -/\n"
+        "\n"
+        "/- Plain comment above second. -/\n"
+        "def second : Nat := 0\n"
+        "\n"
+        "/-- Doc for third. -/\n"
+        "theorem third : True := trivial\n"
+    )
+    by_name = {d["fqname"]: d for d in parse_lean(src)}
+    assert set(by_name) == {"first", "second", "third"}
+    assert "trivial" in by_name["first"]["body"]
+    assert "def second" in by_name["second"]["body"]
+    assert by_name["second"]["doc"] == ""  # plain /- is not a docstring
+    assert "theorem third" in by_name["third"]["body"]
+    assert by_name["third"]["doc"] == "Doc for third."
+    assert by_name["first"]["doc"] == "Doc for first."
+
+
 def test_nested_block_comments_are_balanced() -> None:
     src = (
         "/- outer /- inner class Nope -/ still commented def AlsoNope -/\n"

@@ -28,10 +28,23 @@ def list_skills(ctx: typer.Context, as_json: bool = _JSON) -> None:
     """List the skills bundled with this Horizon."""
     skills = available_skills()
     if as_json:
-        emit_json({"skills": [{"name": s.name, "description": s.description} for s in skills]})
+        emit_json(
+            {
+                "skills": [
+                    {
+                        "name": s.name,
+                        "description": s.description,
+                        **({"recommendation": s.recommendation} if s.recommendation else {}),
+                    }
+                    for s in skills
+                ]
+            }
+        )
         return
     for skill in skills:
         log.info(f"{skill.name} — {skill.description}")
+        if skill.recommendation:
+            log.info(f"  advisory recommendation: {skill.recommendation}")
 
 
 @app.command("install")

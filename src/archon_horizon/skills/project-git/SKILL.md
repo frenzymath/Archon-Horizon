@@ -10,10 +10,16 @@ Read this before running `git diff`/`git log` on a project.
 - **One out-of-tree workspace ledger.** Archon commits to a single repo whose git
   dir is `.archon-horizon/vcs/workspace.git` with the workspace **root** as its
   work tree (driven via `--git-dir`/`--work-tree`). `<root>/.git` is deliberately
-  untouched — it is reserved for a user repo. The ledger records one commit per
-  completed session: `config.yaml`, the session's scoped project files, and
-  `.archon-horizon/` shared state; never the binary git dirs under
-  `.archon-horizon/vcs/`, locks, or other volatile internals.
+  untouched — it is reserved for a **user / GitHub publish** repo. The ledger is
+  the **agent source journal**: Lean, blueprints, and `config.yaml` — not the
+  live Horizon control plane (`.archon-horizon/` inbox/tasks/runs/roadmap) and
+  not `**/hgraph/` (regenerable via `horizon graph sync`). Those stay on disk for
+  the live dashboard; put anything you want versioned for humans in your own
+  root `.git`. Public dashboard snapshots are a separate
+  `horizon dashboard --static` step into the user repo.
+- **Retro-clean an existing ledger** that still tracks state/hgraph:
+  `horizon ledger status` then `horizon ledger prune` (add `--gc` when idle to
+  reclaim pack space). Working-tree files are untouched.
 - **There are no per-project repositories.** A project directory has no nested
   `.git/`, and there is no `.archon-horizon/vcs/<project>.git`. A project's
   "history" is simply the workspace ledger filtered to that project's path.

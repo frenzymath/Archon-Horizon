@@ -120,7 +120,9 @@ def test_new_reply_is_injected_next_boundary_then_repeats_every_twenty_calls(
 
     monkeypatch.setattr(agent_hook_module, "_attention_items", counted_attention_items)
 
-    for _ in range(19):
+    # Periodic conversation reminders are intentionally sparse (default every 40
+    # tool calls) so the hot path stays quiet between inbox changes.
+    for _ in range(agent_hook_module._DEFAULT_REMINDER_EVERY - 1):
         assert hook_response(root, _payload("PostToolUse")) is None
     reminder = hook_response(root, _payload("PostToolUse"))
     assert reminder is not None
@@ -216,7 +218,7 @@ def test_mutations_get_compact_commit_checkpoint_and_stop_guard(
     assert hook_response(root, _payload(
         "PostToolUse", tool_name="Edit", tool_input={"file_path": "Foo.lean"},
     )) is None
-    for _ in range(19):
+    for _ in range(agent_hook_module._COMMIT_REMINDER_EVERY - 1):
         assert hook_response(root, _payload(
             "PostToolUse", tool_name="Bash", tool_input={"command": "lake env lean Foo.lean"},
         )) is None
@@ -353,9 +355,16 @@ def test_unread_conversation_pauses_commit_but_not_other_commands(
         author="human",
         metadata={"conversation": True},
     ))
+    # PreToolUse is commit-gate only; inbox injection happens on PostToolUse so
+    # non-commit Bash does not pay for a second model-context payload.
     assert hook_response(root, _payload(
         "PreToolUse", tool_name="Bash", tool_input={"command": "lake build"},
-    )) is not None  # new context is injected, but the command is not denied
+    )) is None
+    injected = hook_response(root, _payload(
+        "PostToolUse", tool_name="Bash", tool_input={"command": "lake build"},
+    ))
+    assert injected is not None
+    assert "Commit checkpoint" in _additional(injected)
 
     blocked = hook_response(root, _payload(
         "PreToolUse",
@@ -393,6 +402,31 @@ def test_hidden_cli_emits_only_hook_json(tmp_path: Path, monkeypatch, capsys) ->
 
     response = json.loads(capsys.readouterr().out)
     assert "CLI delivery" in _additional(response)
+
+
+def test_fast_hook_entry_emits_json_without_full_cli(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    root, inbox = _workspace(tmp_path, monkeypatch)
+    inbox.create_item(InboxDraft(
+        kind=InboxKind.CONVERSATION,
+        body="Fast path\n\nStay cheap on every tool boundary.",
+        audience="task:T-1",
+        author="human",
+        metadata={"conversation": True},
+    ))
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps(_payload("SessionStart")))
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["horizon", "agent-hook-fast", "--root", str(root)]
+    )
+
+    from archon_horizon.__main__ import main as entry_main
+
+    assert entry_main(["agent-hook-fast", "--root", str(root)]) == 0
+    response = json.loads(capsys.readouterr().out)
+    assert "Fast path" in _additional(response)
 
 
 def test_horizon_state_mutations_and_failed_commits_remain_dirty(

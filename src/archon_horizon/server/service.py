@@ -160,7 +160,17 @@ def _sum_usage(usages: Any) -> dict[str, Any]:
 # Bump whenever _compute_session_state changes derived fields. Version 2 fixes
 # historical Claude usage by deltaing cumulative cost snapshots instead of
 # preserving the previously cached sum of every transcript event's usage.
-_SESSION_CACHE_VERSION = 3
+# Version 4 normalizes session cache keys to workspace-relative paths (so the
+# same session is never stored twice under abs+rel keys) and drops long-dead
+# "running" entries that survived a crash without meta finalization.
+_SESSION_CACHE_VERSION = 4
+
+# Terminal statuses that may be pruned from the on-disk session cache once the
+# underlying session directory is gone (or after a long quiet period).
+_TERMINAL_SESSION_STATUSES = frozenset({
+    "completed", "failed", "interrupted", "orphaned", "throttled",
+    "timed_out", "cancelled",
+})
 
 
 class WorkspaceService:
@@ -222,16 +232,60 @@ class WorkspaceService:
     def _session_cache_path(self) -> Path:
         return self.workspace.state_path / "cache" / "session-states.json"
 
+    def _session_cache_key(self, session_path: Path | str) -> str:
+        """Workspace-relative cache key so abs and rel paths never double-store."""
+        path = Path(session_path)
+        try:
+            return path.resolve().relative_to(self.root.resolve()).as_posix()
+        except (OSError, ValueError):
+            text = path.as_posix()
+            root_text = self.root.as_posix().rstrip("/") + "/"
+            if text.startswith(root_text):
+                return text[len(root_text):]
+            marker = "/.archon-horizon/"
+            idx = text.find(marker)
+            if idx >= 0:
+                return text[idx + 1:]  # drop leading slash → ".archon-horizon/..."
+            return text
+
     def _load_session_cache(self) -> None:
         try:
             raw = json.loads(self._session_cache_path().read_text("utf-8"))
         except (OSError, ValueError):
             return
-        if raw.get("version") != _SESSION_CACHE_VERSION:
+        if raw.get("version") not in {_SESSION_CACHE_VERSION, 3}:
             return
         sessions = raw.get("sessions")
-        if isinstance(sessions, dict):
-            self._session_cache = sessions
+        if not isinstance(sessions, dict):
+            return
+        # Normalize keys + drop entries whose session directory is gone and
+        # whose status is terminal. Also collapse abs/rel duplicates.
+        cleaned: dict[str, dict[str, Any]] = {}
+        dirty = raw.get("version") != _SESSION_CACHE_VERSION
+        for key, entry in sessions.items():
+            if not isinstance(entry, dict):
+                dirty = True
+                continue
+            norm = self._session_cache_key(key)
+            if norm != key:
+                dirty = True
+            node = entry.get("node") if isinstance(entry.get("node"), dict) else {}
+            status = str(node.get("status") or "")
+            on_disk = (self.root / norm).exists() if not Path(norm).is_absolute() else Path(norm).exists()
+            if not on_disk and status in _TERMINAL_SESSION_STATUSES:
+                dirty = True
+                continue
+            # Prefer the entry with a terminal status when collapsing duplicates.
+            existing = cleaned.get(norm)
+            if existing is not None:
+                dirty = True
+                existing_status = str((existing.get("node") or {}).get("status") or "")
+                if existing_status in _TERMINAL_SESSION_STATUSES and status == "running":
+                    continue
+            cleaned[norm] = entry
+        self._session_cache = cleaned
+        if dirty:
+            self._session_cache_dirty = True
 
     def _save_session_cache(self, *, min_interval_s: float = 30.0) -> None:
         """Persist the session cache (atomically), rate-limited and only when
@@ -873,7 +927,7 @@ class WorkspaceService:
         """
         if session_refs is not None and not self._session_tree_matches(session, session_refs):
             return None
-        key = str(session.path)
+        key = self._session_cache_key(session.path)
         sig = self._session_sig(session)
         with self._session_cache_lock:
             cached = self._session_cache.get(key)

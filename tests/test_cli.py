@@ -332,3 +332,14 @@ def test_inbox_add_rejects_conflicting_tags(tmp_path: Path) -> None:
     ws.mkdir()
     (ws / "config.yaml").write_text(_MIN_CONFIG, "utf-8")
     assert _run(ws, "inbox", "add", "--body", "x", "--persistent", "--temporary") != 0
+
+def test_model_fits_kind_keeps_families_separate() -> None:
+    from archon_horizon.commands.init import _model_fits_kind
+
+    assert _model_fits_kind("opus", "claude-code")
+    assert _model_fits_kind("claude-sonnet-4-5", "claude-code")
+    assert not _model_fits_kind("opus", "codex")
+    assert not _model_fits_kind("claude-opus-4-8", "codex")
+    assert _model_fits_kind("gpt-5.6-sol", "codex")
+    assert not _model_fits_kind("gpt-5.6-sol", "claude-code")
+    assert _model_fits_kind("", "codex")
