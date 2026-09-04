@@ -47,6 +47,10 @@ mathematics — file an issue or hand back to Horizon / `restart-module` for tha
   with no `roadmap_refs` while proof work is underway, is hygiene debt: file an
   issue (or, when the missing outline is obvious from STATUS/reports, draft the
   coarse items via `horizon roadmap add` and link them).
+- **Blueprint presence** — a formalization project with no `blueprint/` (or
+  only a stub chapter) while Lean work is underway is also hygiene debt. File
+  an issue for Horizon / the `blueprint` helper to author the route; do not
+  invent theorem statements or proofs yourself.
 - **Heartbeat hotspots (signal only)** — run
   `"$HORIZON_BIN" benchmark -p <project> --json` when Lean layout work is in
   scope. Extremely hot files are candidates to **flag** for Horizon /

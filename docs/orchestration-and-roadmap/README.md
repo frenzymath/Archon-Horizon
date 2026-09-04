@@ -132,7 +132,7 @@ The same board also surfaces in the web dashboard as a milestone-grouped [`/boar
 | `horizon roadmap remove <id> [--cascade]` | Delete an item; children un-nest by default, or delete with `--cascade`. |
 | `horizon roadmap comment <id> --body …` | Add a concise progress comment on a milestone. |
 
-Agents are expected to **build and reshape** this outline as strategy, not only flip status on pre-seeded rows: an empty roadmap on a multi-session formalization task is unfinished orientation.
+Agents are expected to **build and reshape** this outline as strategy, not only flip status on pre-seeded rows: an empty roadmap on a multi-session formalization task is unfinished orientation. The same applies to the **blueprint**: a missing or stub chapter is unfinished orientation — write a complete mathematical route and keep `.tex` aligned with Lean as the route changes (see [`blueprint-conventions`](../../src/archon_horizon/skills/blueprint-conventions/SKILL.md)).
 
 ### Linking Tasks to Roadmap & Inbox
 

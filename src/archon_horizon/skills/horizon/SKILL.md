@@ -94,10 +94,20 @@ project rather than at that root. The absolute path to this skill is
   a participant and owns closure: after consuming the answer, add a concise
   conclusion if needed and archive the thread. Reply to human-started threads but
   leave their closure to the human unless asked otherwise (skill: `horizon-inbox`).
+- **Blueprint** — the mathematical route, not an optional illustration. **You
+  own it.** A missing `blueprint/` (or a title/skeleton with no statements,
+  incomplete proofs, or no `\uses` cone for this task) is unfinished
+  orientation, same as an empty roadmap: write a complete source-facing
+  chapter *before* (or in the same breath as) the first substantive Lean.
+  Keep it the live route as you work — split lemmas, drop abandoned paths,
+  note adaptations — so Lean implements `.tex` rather than inventing a
+  second path. Skill: `blueprint-conventions`. Delegate a scoped slice to
+  the writable **`blueprint`** helper when the chapter is large.
 - **Blueprint graph** — declaration dependencies and what's proved. `"$HORIZON_BIN" graph -p <project> …` (skill: `hgraph`).
   Each node is also an **hgraph** file with attached comments/reviews —
   `"$HORIZON_BIN" graph -p <project> frontier` ranks what to prove next, and node-scoped failure memory
-  goes on the node itself (skill: `hgraph`).
+  goes on the node itself (skill: `hgraph`). The frontier is only a plan once
+  the blueprint exists; do not treat an empty graph as permission to skip `.tex`.
 - **Memory** — durable facts/dead-ends live in the inbox: read with
   `"$HORIZON_BIN" inbox list --kind memory --json`, write with
   `"$HORIZON_BIN" inbox add --kind memory --to horizon --body …`.
@@ -176,15 +186,19 @@ uncommitted, may be lost when the session ends. Commit early and often (below).
 
 ## Pick the highest-value work
 
-Read the roadmap and the live Lean state, then commit to the most valuable next
-piece. **If the roadmap is empty or silent on your task's objective, build it
-first** (or in the same breath as the first commit): a coarse nested outline of
-the source-facing frontier, the next few producers, and what is blocked/out of
-scope. Strategy lives on the roadmap so the next session does not re-derive it
-from transcripts. Reshape the tree whenever the route pivots — add a missing
+Read the roadmap, the blueprint, and the live Lean state, then commit to the
+most valuable next piece. **If the roadmap is empty or silent on your task's
+objective, build it first** (or in the same breath as the first commit): a
+coarse nested outline of the source-facing frontier, the next few producers,
+and what is blocked/out of scope. **If the project has no blueprint, or only a
+minimal stub that cannot guide this objective, write a complete mathematical
+route first** (statements, complete proofs, `\uses`, cites) covering at least
+that same cone — Lean follows the blueprint, not the reverse. Strategy lives on
+the roadmap *and* the blueprint so the next session does not re-derive it from
+transcripts. Reshape both whenever the route pivots — add a missing
 prerequisite, move a sub-goal under a new parent, reject a dead branch, pin the
-commit that closed a node. Status-only updates on a frozen outline are not
-enough when the plan itself changed.
+commit that closed a node. Status-only updates on a frozen outline, or Lean that
+has drifted ahead of `.tex`, are not enough when the plan itself changed.
 
 A node being large, multi-session, or blocked on missing mathlib infrastructure
 is **not** a reason to skip it — start it, build the missing lemma/definition
@@ -297,11 +311,14 @@ specific file, or every call site of a name you already have.
 - Use the **Lean LSP MCP** for tight proof feedback, then verify with the narrowest
   faithful `lake` / `lake env lean` check. Skill: `lean-check`.
 - Use the DAG to choose and scope work, not just to report it. Skill: `hgraph`.
-- When editing blueprint material, follow the house format. Skill: `blueprint-conventions`.
+- Maintain the blueprint as you formalize, not only when a `.tex` file is
+  already open. Skill: `blueprint-conventions`.
   The blueprint is timeless mathematics, never a formalization journal, and it is
   the **first source of truth** before Lean: complete proofs, the chosen route
   only, bibliography + `\dcref`/`\source` with how the text adapts or differs
-  from references. Refactor the blueprint when strategy changes; Lean follows.
+  from references. Author it when missing or too thin; refactor it when strategy
+  changes; after each coherent Lean change that affects the math path, update the
+  corresponding nodes so `.tex` still describes what Lean implements.
   Put Lean implementation notes, failed tactics, and declaration-specific
   progress on the corresponding hgraph node with `graph add comment`; do not
   insert "Formalization note" paragraphs into blueprint `.tex` files.
@@ -408,6 +425,8 @@ staging explicit files over `add -A`. Beyond commits:
 - Update the **roadmap** as a living plan: status, summary, nesting, depends-on,
   add/remove/rename items when the strategy changed — not only when a pre-existing
   row needs a status flip, and never a re-narration of the diff.
+- Keep the **blueprint** in the same commit cone as the Lean it describes:
+  new lemmas get nodes, abandoned paths leave `.tex`, `\uses`/`\lean` stay honest.
 - Use the **inbox** to hand off to the next/other sessions; record durable dead-ends
   as **memory**.
 
@@ -484,7 +503,8 @@ workspace or strategy benefits from an external view. Available helpers (see the
   real, task-scoped, and converging rather than looping?
 - **honesty-reviewer** — anti-evasion review of certificates, completion claims,
   hidden assumptions, vacuity, and repeated unchanged frontiers.
-- **blueprint** — Lean ↔ blueprint statement/`\uses` correctness for a scoped slice.
+- **blueprint** — author or repair a scoped `.tex` slice so it is the live
+  route (complete proofs, `\uses`); flag Lean mismatches you do not own.
 - **reference-retriever**, **debug**, **page-transcriber** — as needed.
 
 Keep proving; delegate the upkeep.

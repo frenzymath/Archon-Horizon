@@ -19,6 +19,9 @@ Horizon default mechanically.
 
 Inspect whether:
 
+- a blueprint exists for the scoped project/chapter and is complete enough to
+  be the route (not a title-only stub, not sketched proofs with no `\uses`
+  cone); absence or thinness is a finding for the lead / `blueprint` helper;
 - every source-derived block has a real `\source{...}` or project-supported
   `\dcref{...}` anchor that was read;
 - local `\label` ids are stable and preferably semantic, and environment titles

@@ -19,10 +19,19 @@ Write timeless mathematics — a standalone document, not a project journal.
 
 ## Blueprint is the first source of truth
 
+- **Missing or stub is unfinished orientation.** If the project has no
+  `blueprint/` directory, or only a title/skeleton with no statements, sketched
+  proofs, or no `\uses` cone for the work in hand, **write a complete
+  mathematical route first** — statements, rigorous proofs, `\uses`, and
+  bibliography/`\dcref`/`\source` covering at least the source-facing objective
+  and its next producers. Do not treat an empty graph or a thin chapter as
+  permission to invent the route only in Lean.
 - **Author and fix the blueprint before (or as) you formalize.** Lean implements
   the blueprint route; it must not invent a competing route while the `.tex`
   still describes another. When strategy changes, **refactor the blueprint
   first** (statements, proofs, `\uses`, chapter splits), then align Lean.
+  After each coherent Lean change that affects the math path, update the
+  corresponding nodes in the same session so the written route stays live.
 - **Proofs are complete, not sketches.** A node's `proof` is a rigorous argument
   a mathematician could check. Missing steps, "similar to …", or "by the usual
   argument" without the argument are defects — *split* hard steps into

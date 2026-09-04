@@ -28,10 +28,12 @@ do not equate many edits with progress.
   status flips while the math route changed are strategy defects: the lead agent
   should `roadmap add` / `set --parent` / `remove` / `rename` so the board is the
   plan, not a stale label list.
-- Check that the **blueprint** still describes the chosen route (complete proofs,
-  no abandoned alternate paths, literature adaptation noted). When strategy
-  pivots, the blueprint must be refactored so it remains the first source before
-  Lean ([[blueprint-conventions]]).
+- Check that the **blueprint** exists and still describes the chosen route
+  (complete proofs, no abandoned alternate paths, literature adaptation noted).
+  Absence, a title-only skeleton, or Lean that has moved past `.tex` is a
+  strategy defect: the lead should author or refactor the chapter so it remains
+  the first source before Lean ([[blueprint-conventions]]). When strategy
+  pivots, the blueprint must be refactored in the same breath as the Lean.
 
 ## Calibrate the verdict
 

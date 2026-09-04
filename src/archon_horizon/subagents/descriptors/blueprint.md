@@ -25,6 +25,9 @@ certification belongs to `source-fidelity-reviewer` and
 ## What you do for your slice
 
 - **Blueprint first.** The slice you own is the route Lean must follow. If
+  the slice **does not exist or is too thin** to guide a faithful
+  formalization (no statements, sketched proofs, missing `\uses` cone),
+  **author a complete chapter** rather than only flagging the gap. If
   strategy or Lean drift, **refactor the blueprint** (complete proofs, single
   chosen route, `\uses`) before or with the formalization — do not leave a
   paper route in `.tex` while Lean implements another. Prefer a clean chapter

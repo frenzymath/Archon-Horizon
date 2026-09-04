@@ -106,6 +106,10 @@ def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
     assert "proof should contain ordinary mathematical prose" in blueprint_conventions
     assert "conventions below are Horizon's defaults and advice" in blueprint_conventions
     assert "proof-side `\\uses{...}` or `\\proves{...}`" in blueprint_conventions
+    assert "Missing or stub is unfinished orientation" in blueprint_conventions
+    assert "mathematical route first" in blueprint_conventions
+    assert "write a complete source-facing" in skill
+    assert "no blueprint, or only a" in skill
     blueprint_integrity = (_SKILLS_DIR / "blueprint-integrity" / "SKILL.md").read_text("utf-8")
     assert "local `\\label` ids are stable and preferably semantic" in blueprint_integrity
     assert "Check macro placement" in blueprint_integrity

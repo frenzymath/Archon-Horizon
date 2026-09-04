@@ -9,6 +9,11 @@ minor releases; `horizon init --update` migrates a workspace's managed files.
 
 ## [Unreleased]
 
+- Skills now treat a **missing or stub blueprint** like an empty roadmap:
+  unfinished orientation. Horizon should author a complete source-facing
+  chapter (statements, proofs, `\uses`, cites) before or with the first
+  Lean, and keep `.tex` the live route as strategy changes.
+
 ## [0.1.5] — 2026-09-04
 
 Formalization-quality skills and reviewers, a heartbeat benchmark, complete
