@@ -24,6 +24,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .checks import is_countable
+
 _ENTRY_NAMES = ("web.tex", "print.tex", "content.tex")
 _PROVED = ("lean_ok", "mathlib_ok")
 
@@ -117,11 +119,17 @@ def build_project_graph(
         outcome = hgraph_sync(graph, blueprint=str(entry), lean_paths=lean_paths, root=project_root)
         warnings = list(outcome.get("warnings") or ())
     analysis = Analysis(graph)
-    tex_nodes = list(graph.nodes(type="tex"))
+    # Keep prose and proof environments in hgraph for source navigation and
+    # metadata, but do not publish them as formalisation/DAG nodes.  The
+    # countable vocabulary is shared with blueprint coverage checks; otherwise
+    # a labelled remark or example appears as an unproved TODO in the dashboard.
+    tex_nodes = [
+        n for n in graph.nodes(type="tex")
+        if n.meta.get("label") and is_countable({"type": n.meta.get("content_type")})
+    ]
 
-    # Only labelled statements are blueprint nodes; unlabelled tex nodes
-    # (source quotes, standalone proof bodies) are hgraph-internal.
-    tex_nodes = [n for n in tex_nodes if n.meta.get("label")]
+    # Unlabelled tex nodes (source quotes, standalone proof bodies) and
+    # labelled non-obligation prose remain hgraph-internal.
     label_of = {n.id: str(n.meta.get("label")) for n in tex_nodes}
     lean_by_id = {n.id: n for n in graph.nodes(type="lean")}
 

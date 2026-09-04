@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from pathlib import Path
 
 from archon_horizon.core.tasks import HorizonResult, TaskStatus
 from archon_horizon.harnesses.base import Harness, HarnessCapability, HarnessRequest, HarnessResult
@@ -87,6 +88,18 @@ def _agent_env(role: str, context: HorizonContext) -> dict[str, str]:
         projects = getattr(task, "projects", None) or ((task.project,) if getattr(task, "project", None) else ())
         if projects:
             env["ARCHON_HORIZON_PROJECTS"] = ",".join(projects)
+    # Route Python, Lean tooling, downloads, and other temp-aware subprocesses
+    # away from a quota-constrained shared /tmp.  The directory is per run and
+    # session; it is disposable and reclaimed after this invocation below.
+    from archon_horizon.core.scratch import scratch_environment
+
+    _, scratch_env = scratch_environment(
+        context.workspace,
+        run_id=run_id,
+        session=context.log_dir.name if context.log_dir is not None else None,
+        role=role,
+    )
+    env.update(scratch_env)
     # Ledger access for plain-git commits (see the project-git skill). We expose
     # the ledger paths + a thin `hgit` passthrough rather than exporting
     # GIT_DIR/GIT_WORK_TREE, which would redirect `lake` and the project's own git.
@@ -187,22 +200,30 @@ class HarnessHorizonAgent(HorizonAgent):
         # re-run fresh with the full prompt (the engine-agnostic fallback).
         resume = context.resume_session_id if _supports_resume(self._harness) else None
         full_prompt = self._compose(context)
+        env = _agent_env("horizon", context)
+        scratch_dir = env.get("ARCHON_HORIZON_TMP")
         request = HarnessRequest(
             prompt=(HORIZON_CONTINUE + full_prompt) if resume else full_prompt,
             cwd=context.workspace.project_path(context.task.project),
             artifact_dir=context.log_dir,
             resume_session_id=resume,
             cancel=context.cancel,
-            metadata={"env": _agent_env("horizon", context)},
+            metadata={"env": env},
         )
-        result = self._harness.run(request)
-        if resume and _resume_failed_to_start(result):
-            # The native session was gone; retry once fresh with the full prompt
-            # (the same fallback the engine-unsupported path takes) rather than
-            # letting the aborted resume halt the run.
-            result = self._harness.run(dataclasses.replace(
-                request, prompt=self._compose(context), resume_session_id=None,
-            ))
+        try:
+            result = self._harness.run(request)
+            if resume and _resume_failed_to_start(result):
+                # The native session was gone; retry once fresh with the full prompt
+                # (the same fallback the engine-unsupported path takes) rather than
+                # letting the aborted resume halt the run.
+                result = self._harness.run(dataclasses.replace(
+                    request, prompt=self._compose(context), resume_session_id=None,
+                ))
+        finally:
+            if scratch_dir:
+                from archon_horizon.core.scratch import remove_session_tmp
+
+                remove_session_tmp(Path(scratch_dir))
         result = dataclasses.replace(result, metadata=_merge_run_metadata(self._harness, result))
         return HorizonResult(
             task_id=context.task.id,

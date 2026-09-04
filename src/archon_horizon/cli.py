@@ -20,6 +20,7 @@ from archon_horizon.commands import blueprint as blueprint_cmd
 from archon_horizon.commands import check as check_cmd
 from archon_horizon.commands import agent_hook as agent_hook_cmd
 from archon_horizon.commands import attempt as attempt_cmd
+from archon_horizon.commands import benchmark as benchmark_cmd
 from archon_horizon.commands import dashboard as dashboard_cmd
 from archon_horizon.commands import discuss as discuss_cmd
 from archon_horizon.commands import freeze as freeze_cmd
@@ -38,6 +39,7 @@ from archon_horizon.commands import subagent as subagent_cmd
 from archon_horizon.commands import setup as setup_cmd
 from archon_horizon.commands import skills as skills_cmd
 from archon_horizon.commands import sync as sync_cmd
+from archon_horizon.commands import tmp as tmp_cmd
 from archon_horizon.commands import update as update_cmd
 from archon_horizon.commands import usage as usage_cmd
 from archon_horizon.config.schema import ConfigError
@@ -160,8 +162,10 @@ app.command(
 )(graph_cmd.graph)
 app.command("search")(search_cmd.search)
 app.command("sync")(sync_cmd.sync)
+app.add_typer(tmp_cmd.app, name="tmp")
 app.command("usage")(usage_cmd.usage)
 app.command("check")(check_cmd.check)
+app.add_typer(benchmark_cmd.app, name="benchmark")
 app.command("permissions")(permissions_cmd.permissions)
 app.command("ps")(ps_cmd.ps)
 app.command("dashboard")(dashboard_cmd.dashboard)

@@ -103,3 +103,7 @@ that as "no citation available," and write no math attributed to it.
 
 Related skills: `blueprint-conventions` for where `\source{...}` sits among the
 other blueprint annotations, and `hgraph` for how a node's `sources` feed the DAG.
+For material outside the local library, use `source-discovery` to choose among
+GitHub history, Mathlib source and PRs, Tau Ceti review artifacts, and Zulip
+context. External discussion is context until the underlying source or checked
+declaration confirms the claim.

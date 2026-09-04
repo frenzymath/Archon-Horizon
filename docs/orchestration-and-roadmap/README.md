@@ -65,7 +65,9 @@ Run lifecycle and resumption state are tracked in [`core/sessions.py`](../../src
 
 ## 2. Collaboration Rounds
 
-When a run is initiated, Horizon executes a structured loop of proof sessions and fresh-context checkpoints (implemented in [`orchestration/orchestrator.py`](../../src/archon_horizon/orchestration/orchestrator.py)):
+When a run is initiated, Horizon executes a structured loop of proof sessions;
+the lead agent may add a fresh-context helper when the scope benefits from one
+(implemented in [`orchestration/orchestrator.py`](../../src/archon_horizon/orchestration/orchestrator.py)):
 
 ```
 [Target Task / Focus]
@@ -76,7 +78,7 @@ When a run is initiated, Horizon executes a structured loop of proof sessions an
 │                                                        │
 │  1. Horizon reads task, graph, roadmap, and inbox      │
 │  2. Horizon writes Lean and validates the target       │
-│  3. Ground reviews strategy and workspace state        │
+│  3. Horizon may choose a scoped review/helper          │
 │  4. Horizon reconciles findings and records progress   │
 └────────────────────────────────────────────────────────┘
          │
@@ -91,7 +93,7 @@ When a run is initiated, Horizon executes a structured loop of proof sessions an
 Horizon keeps a sharp distinction between the human's tasks and the agent-maintained roadmap:
 
 - **Tasks (`horizon task`)**: the human's lever for launching sessions — objectives with project scope, write-set, and target files. Open to agents and humans alike: both may `add`, `set` (including status and roadmap/inbox refs), `comment`, and `remove`. The machine (scheduler/orchestrator) only ever writes `queued`/`running`; every terminal status (`done`/`blocked`/`failed`) is the agent's own word, and an agent declares `done` only when the work is *fully* complete. Modeled in [`core/tasks.py`](../../src/archon_horizon/core/tasks.py), commands in [`commands/task.py`](../../src/archon_horizon/commands/task.py).
-- **Roadmap (`horizon roadmap`)**: the project's **mathematical status** — the main theorems and infrastructure formalized and still to build. Horizon maintains it against the real Lean/blueprint state, while Ground checkpoints audit it from fresh context. It is a map that guides the work, **not** a work queue. Marking an item active does not launch anything and the orchestrator never turns roadmap items into tasks on its own. A human launches a milestone with `horizon run <roadmap-id>`, which **infers** a task from the item's scope on demand. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
+- **Roadmap (`horizon roadmap`)**: the project's **mathematical status** — the main theorems and infrastructure formalized and still to build. Horizon maintains it against the real Lean/blueprint state, and Ground may audit it from fresh context when the lead agent chooses that perspective. It is a map that guides the work, **not** a work queue. Marking an item active does not launch anything and the orchestrator never turns roadmap items into tasks on its own. A human launches a milestone with `horizon run <roadmap-id>`, which **infers** a task from the item's scope on demand. Modeled in [`core/roadmap.py`](../../src/archon_horizon/core/roadmap.py), commands in [`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py).
 
 ### The Roadmap as a Project Board
 
@@ -123,9 +125,14 @@ The same board also surfaces in the web dashboard as a milestone-grouped [`/boar
 | Command | Description |
 | :--- | :--- |
 | `horizon roadmap list` | List roadmap items as an indented outline; filter with `--milestone <label>` / `--owner <t>`. |
-| `horizon roadmap show <id>` | Inspect a specific roadmap item and its associated details. |
-| `horizon roadmap add --id <id> --title <t>` | Add an item; `--project` defaults from the session's `ARCHON_HORIZON_PROJECTS` when omitted. |
-| `horizon roadmap set <id> --owner <t> --milestone <label>` | Set board metadata; `--pin-commit`/`--unpin-commit` manage deliverable SHAs. |
+| `horizon roadmap show <id>` | Inspect a specific roadmap item (fields, hierarchy, board metadata, subtree progress). |
+| `horizon roadmap add --id <id> --title <t>` | Add an item; `--project` defaults from the session's `ARCHON_HORIZON_PROJECTS` when omitted. Optional `--parent`, `--depends-on`, `--owner`, `--milestone`. |
+| `horizon roadmap set <id> …` | Update any field: status/title/summary/kind/priority, nest with `--parent`/`--depth`, board metadata, `--project`, `--depends-on`, `--inbox-ref`/`--task-ref`, `--pin-commit`/`--unpin-commit`. Empty string clears optional fields. |
+| `horizon roadmap rename <old> <new>` | Rename an item id and rewrite parent/depends-on links that pointed at it. |
+| `horizon roadmap remove <id> [--cascade]` | Delete an item; children un-nest by default, or delete with `--cascade`. |
+| `horizon roadmap comment <id> --body …` | Add a concise progress comment on a milestone. |
+
+Agents are expected to **build and reshape** this outline as strategy, not only flip status on pre-seeded rows: an empty roadmap on a multi-session formalization task is unfinished orientation.
 
 ### Linking Tasks to Roadmap & Inbox
 

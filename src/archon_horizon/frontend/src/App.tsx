@@ -10,6 +10,7 @@ import { useProgressiveCount } from './hooks/useProgressiveCount';
 import BlueprintPage from './BlueprintPage';
 import DagPage from './DagPage';
 import LeanPage from './LeanPage';
+import BenchmarkPage from './BenchmarkPage';
 import BoardPage from './BoardPage';
 import { RefLinkProvider, useRefResolver, useRefLinks, refChipClickHandler, inboxOwnerTask, inboxReadBy, RefChip } from './refs';
 import {
@@ -169,6 +170,7 @@ function AppShell({ state, reload, isError }: { state: HorizonState; reload: () 
           <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
           <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>
           <NavLink to="/lean" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Lean</NavLink>
+          <NavLink to="/benchmark" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Benchmark</NavLink>
         </nav>
       </header>
       <main className="main-content">
@@ -185,6 +187,7 @@ function AppShell({ state, reload, isError }: { state: HorizonState; reload: () 
           <Route path="/logs" element={<Transcripts state={state} />} />
           <Route path="/transcripts" element={<Navigate to="/logs" replace />} />
           <Route path="/lean" element={<LeanPage state={state} />} />
+          <Route path="/benchmark" element={<BenchmarkPage state={state} />} />
           <Route path="/code" element={<Navigate to="/lean" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -3962,7 +3965,8 @@ function TaskLinkChip({ taskId }: { taskId: string }) {
       title={`Open task ${taskId}`}
       onClick={(event) => event.stopPropagation()}
     >
-      task {taskId}
+      <span className="task-chip-label">task</span>
+      <span className="task-chip-id">{taskId}</span>
     </Link>
   );
 }
@@ -4018,21 +4022,27 @@ function RunGroup({ run, selected, onSelect, now }: { run: any; selected: string
         }}
         aria-expanded={open}
       >
-        <span className="ev-caret">{open ? '▾' : '▸'}</span>
-        <strong>{displayRunName(run.id)}</strong>
-        <StatusIcon value={run.status} />
-        {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
-        {(() => {
-          const started = runStartAt(run);
-          return started ? (
-            <span className="meta-chip" title={formatDateTime(started)}>
-              {formatChipDateTime(started)}
-            </span>
-          ) : null;
-        })()}
-        {runDuration !== null && <span className="meta-chip">{formatSeconds(runDuration)}</span>}
-        <span className="meta-chip">{run.session_count ?? 0} sessions</span>
-        <UsageChips usage={run.usage} />
+        <div className="run-header-identity">
+          <span className="ev-caret">{open ? '▾' : '▸'}</span>
+          <strong>{displayRunName(run.id)}</strong>
+          <StatusIcon value={run.status} />
+        </div>
+        {/* Task + time + usage share one wrapping chip row so a long task id
+            cannot sit outside the cluster and shove the other tags around. */}
+        <div className="run-header-meta">
+          {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
+          {(() => {
+            const started = runStartAt(run);
+            return started ? (
+              <span className="meta-chip" title={formatDateTime(started)}>
+                {formatChipDateTime(started)}
+              </span>
+            ) : null;
+          })()}
+          {runDuration !== null && <span className="meta-chip">{formatSeconds(runDuration)}</span>}
+          <span className="meta-chip">{run.session_count ?? 0} sessions</span>
+          <UsageChips usage={run.usage} />
+        </div>
       </div>
       {open && (
         <div className="run-sessions-tree">
@@ -4148,36 +4158,54 @@ function SessionNode({
   const effort = session.effort ?? session.meta?.effort;
   const durEnd = boundedSessionEnd(session, now, nextSessionStart, sessionKey(session) === activeTickSession);
   const taskIds = session.meta?.task_id ? [String(session.meta.task_id)] : fallbackTaskIds;
+  const selectSession = () => {
+    if (session.ref) onSelect(session.ref);
+  };
   return (
     <div className="session-node">
-      <div className={`session-line role-${role || 'none'} ${selected === session.ref ? 'active' : ''}`}>
-        <button className="session-main button-reset" onClick={() => session.ref && onSelect(session.ref)} style={{ cursor: session.ref ? 'pointer' : 'default' }}>
+      <div
+        className={`session-line role-${role || 'none'} ${selected === session.ref ? 'active' : ''}`}
+        role={session.ref ? 'button' : undefined}
+        tabIndex={session.ref ? 0 : undefined}
+        onClick={session.ref ? selectSession : undefined}
+        onKeyDown={session.ref ? ((event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            selectSession();
+          }
+        }) : undefined}
+        style={{ cursor: session.ref ? 'pointer' : 'default' }}
+      >
+        <div className="session-main">
           <div className="session-row1">
             <RoleBadge role={role} />
             <StatusIcon value={session.status} />
             <strong title={session.meta?.name ?? session.session}>{displayName}</strong>
           </div>
-          <div className="session-row2">
-            {model && <span className="meta-chip model-chip" title={session.model}>{model}</span>}
-            {effort && <span className="meta-chip effort-chip" title="Reasoning-effort tier">{effort}</span>}
-            {round && <span className="meta-chip">{round}</span>}
-            {session.started_at && (
-              <span
-                className="meta-chip"
-                title={
-                  session.ended_at
-                    ? `${formatDateTime(session.started_at)} – ${formatDateTime(session.ended_at)}`
-                    : formatDateTime(session.started_at)
-                }
-              >
-                {formatChipDateTime(session.started_at)}
-              </span>
-            )}
-            {session.started_at && <span className="meta-chip">{formatDuration(session.started_at, durEnd)}</span>}
-            <UsageChips usage={session.usage} />
-          </div>
-        </button>
-        {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
+        </div>
+        {/* Task + model/time/usage share one wrapping chip row. A long task id
+            ellipsizes instead of sitting as a trailing sibling that collides
+            with the other tags. Task links stopPropagation so they stay clickable. */}
+        <div className="session-row2">
+          {taskIds.map((taskId) => <TaskLinkChip key={taskId} taskId={taskId} />)}
+          {model && <span className="meta-chip model-chip" title={session.model}>{model}</span>}
+          {effort && <span className="meta-chip effort-chip" title="Reasoning-effort tier">{effort}</span>}
+          {round && <span className="meta-chip">{round}</span>}
+          {session.started_at && (
+            <span
+              className="meta-chip"
+              title={
+                session.ended_at
+                  ? `${formatDateTime(session.started_at)} – ${formatDateTime(session.ended_at)}`
+                  : formatDateTime(session.started_at)
+              }
+            >
+              {formatChipDateTime(session.started_at)}
+            </span>
+          )}
+          {session.started_at && <span className="meta-chip">{formatDuration(session.started_at, durEnd)}</span>}
+          <UsageChips usage={session.usage} />
+        </div>
       </div>
       {hasChildren && (
         <div className="session-children">

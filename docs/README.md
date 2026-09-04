@@ -28,6 +28,11 @@ In-depth guides for [**Archon Horizon**](../README.md) — workspace-first orche
 | 💻 [CLI Reference](./cli-reference/README.md) | Complete command and flag reference, plus `--json` machine-readable output. | all |
 | 📝 [Changelog](./CHANGELOG.md) | Version release notes and migration instructions. | — |
 
+The corpus-derived [formalization review guidance](./design/formalization-review.md)
+explains the optional focused skills and read-only reviewer roles for source
+fidelity, semantic robustness, proof evidence, graph traceability, API
+composition, provenance, strategy, and run health.
+
 ---
 
 ## Command map
@@ -50,6 +55,8 @@ Every command supports `--json` for machine-readable output on `stdout`.
 | `horizon graph` | Synchronize, query, and annotate a project's semantic graph. |
 | `horizon search <query>` | Offline search for lemmas/definitions in Mathlib and local projects. |
 | `horizon dashboard` | Run the live web server or export static HTML (`--static`). |
+| `horizon benchmark` | Rank Lean files by summed `set_option` heartbeat budgets. |
+| `horizon tmp` | Inspect or clean workspace-local session scratch. |
 | `horizon skills` | Manage workspace-local skill files. |
 | `horizon permissions` | Show the workspace's delegation permissions — whether an agent may launch tasks/runs for other teams (default: deny). |
 

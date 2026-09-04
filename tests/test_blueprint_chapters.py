@@ -105,6 +105,37 @@ def test_macros_input_not_a_phantom_introduction(tmp_path: Path) -> None:
     assert "Introduction" not in titles
 
 
+def test_bib_shipped_and_chapter_labels_kept(tmp_path: Path) -> None:
+    """``.bib`` entries reach the API, and leading ``\\label{chap:…}`` survives
+    chapter splitting so the dashboard can resolve ``\\cref{chap:…}``."""
+    ws = _ws(tmp_path)
+    bp = tmp_path / "P" / "blueprint" / "src"
+    (bp / "refs.bib").write_text(
+        '@book{LeeSM,\n'
+        '  author = {John M. Lee},\n'
+        '  title = {Introduction to Smooth Manifolds},\n'
+        '  year = {2013},\n'
+        '  publisher = {Springer},\n'
+        '}\n',
+        "utf-8",
+    )
+    # Leading label after \chapter (leanblueprint convention).
+    content = (bp / "content.tex").read_text("utf-8")
+    (bp / "content.tex").write_text(
+        content.replace(
+            r"\chapter{Problem setting}" "\n",
+            r"\chapter{Problem setting}" "\n"
+            r"\label{chap:problem}" "\n",
+        ),
+        "utf-8",
+    )
+    data = project_chapters(ws, "P")
+    assert data["hasBlueprint"] is True
+    assert any(e["key"] == "LeeSM" for e in data["bib"])
+    main = next(c for c in data["chapters"] if c["title"] == "Problem setting")
+    assert r"\label{chap:problem}" in main["tex"]
+
+
 def test_missing_entry_reports_error(tmp_path: Path) -> None:
     proj = tmp_path / "Q"
     bp = proj / "blueprint" / "src"

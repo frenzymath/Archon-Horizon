@@ -4,7 +4,10 @@
  * Unlike the per-block `BlueprintRendered` (used by the DAG sidebar), this is a
  * document-level renderer: it runs a numbering pass over every chapter to assign
  * Chapter / Section / Theorem numbers and to build a label → number map, so that
- * `\ref` / `\cref` resolve to clickable, numbered cross-references. It also:
+ * `\ref` / `\cref` resolve to clickable, numbered cross-references (comma-
+ * separated multi-label args included). It also:
+ *   • renders `\cite` / `\citet` / `\citep` / `\citeauthor` / `\citeyear` against
+ *     the project's `.bib` (and a bibliography block at the end of the doc);
  *   • renders amsthm-style environments with the optional `[name]` italic in the
  *     header, `\lean` as expandable code chips, `\uses` as dependency tag links;
  *   • renders `\section` / `\subsection` headings and itemize/enumerate lists;
@@ -38,6 +41,76 @@ const MATH_ENVS = new Set([
   'array', 'matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'cases', 'split', 'multline', 'multline*',
 ]);
 
+// ── bibliography ─────────────────────────────────────────────────────────────
+/** One parsed BibTeX entry, as shipped by `/api/blueprint/chapters`. */
+export interface BibEntry {
+  key: string;
+  type?: string;
+  title?: string | null;
+  author?: string | null;
+  year?: string | null;
+  journal?: string | null;
+  booktitle?: string | null;
+  publisher?: string | null;
+  volume?: string | null;
+  number?: string | null;
+  pages?: string | null;
+  url?: string | null;
+}
+
+export type BibMap = Map<string, BibEntry>;
+
+export function bibMapFrom(entries: BibEntry[] | null | undefined): BibMap {
+  const map: BibMap = new Map();
+  for (const e of entries ?? []) {
+    if (e?.key) map.set(e.key, e);
+  }
+  return map;
+}
+
+/** Split a LaTeX comma-list (`a, b,c`) into trimmed non-empty keys. */
+function splitTexList(raw: string): string[] {
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/** "Last, First and Foo, Bar" → short author chip ("Last et al." when ≥3). */
+function shortAuthors(author: string | null | undefined): string {
+  if (!author) return '';
+  const parts = author.split(/\s+and\s+/i).map((p) => p.trim()).filter(Boolean);
+  const lastOf = (p: string) => {
+    const comma = p.indexOf(',');
+    if (comma !== -1) return p.slice(0, comma).trim();
+    const bits = p.split(/\s+/);
+    return bits[bits.length - 1] || p;
+  };
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return lastOf(parts[0]);
+  if (parts.length === 2) return `${lastOf(parts[0])} and ${lastOf(parts[1])}`;
+  return `${lastOf(parts[0])} et al.`;
+}
+
+function citeLabel(entry: BibEntry | undefined, key: string, style: 'cite' | 'citet' | 'citep' | 'citeauthor' | 'citeyear'): string {
+  if (!entry) return key;
+  const authors = shortAuthors(entry.author);
+  const year = entry.year?.trim() || '';
+  switch (style) {
+    case 'citet':
+      return authors && year ? `${authors} (${year})` : authors || year || key;
+    case 'citep':
+      return authors && year ? `${authors}, ${year}` : authors || year || key;
+    case 'citeauthor':
+      return authors || key;
+    case 'citeyear':
+      return year || key;
+    case 'cite':
+    default:
+      // Numeric-looking keys stay bare; otherwise author-year in brackets.
+      if (/^\d+$/.test(key) && !authors) return key;
+      if (authors && year) return `${authors}, ${year}`;
+      return authors || year || key;
+  }
+}
+
 // ── inline / block node types ────────────────────────────────────────────────
 type Inline =
   | { t: 'text'; v: string }
@@ -45,7 +118,8 @@ type Inline =
   | { t: 'strong'; c: Inline[] }
   | { t: 'em'; c: Inline[] }
   | { t: 'code'; v: string }
-  | { t: 'ref'; label: string; cref: boolean }
+  | { t: 'ref'; labels: string[]; cref: boolean }
+  | { t: 'cite'; keys: string[]; style: 'cite' | 'citet' | 'citep' | 'citeauthor' | 'citeyear'; prenote?: string; postnote?: string }
   | { t: 'comment'; v: string };
 
 interface EnvMeta {
@@ -214,13 +288,57 @@ function parseInline(src: string): Inline[] {
     // blueprint metadata commands — surfaced elsewhere as badges/uses chips, so
     // strip them here rather than leaking their text (e.g. a stray "ok" from
     // \leanok, or the raw label list from \uses{}).
-    const metaArg = /^\\(lean|uses|discussion)\s*\{[^{}]*\}/.exec(src.slice(i));
+    const metaArg = /^\\(lean|uses|discussion|dcref|source|group|level|proves)\s*\{[^{}]*\}/.exec(src.slice(i));
     if (metaArg) { i += metaArg[0].length; continue; }
     const metaBare = /^\\(leanok|mathlibok|notready)\b/.exec(src.slice(i));
     if (metaBare) { i += metaBare[0].length; continue; }
-    // references
+    // references — multi-label `\cref{a, b}` is common in blueprints
     const ref = /^\\(ref|cref|Cref|eqref)\s*\{([^{}]*)\}/.exec(src.slice(i));
-    if (ref) { out.push({ t: 'ref', label: ref[2].trim(), cref: /cref/i.test(ref[1]) }); i += ref[0].length; continue; }
+    if (ref) {
+      const labels = splitTexList(ref[2]);
+      if (labels.length) out.push({ t: 'ref', labels, cref: /cref/i.test(ref[1]) });
+      i += ref[0].length;
+      continue;
+    }
+    // citations: \cite[post]{k}, \cite[pre][post]{k}, \citet/\citep/\citeauthor/\citeyear
+    // Also absorb a leading optional * (\cite*) and drop unknown cite-* variants softly.
+    const cite = /^\\(cite|citet|citep|citeauthor|citeyear)\*?\s*/.exec(src.slice(i));
+    if (cite) {
+      let j = i + cite[0].length;
+      let prenote = '';
+      let postnote = '';
+      // up to two optional [...] notes before the mandatory {keys}
+      const opt1 = /^\[([^\]]*)\]\s*/.exec(src.slice(j));
+      if (opt1) {
+        j += opt1[0].length;
+        const opt2 = /^\[([^\]]*)\]\s*/.exec(src.slice(j));
+        if (opt2) {
+          prenote = opt1[1].trim();
+          postnote = opt2[1].trim();
+          j += opt2[0].length;
+        } else {
+          postnote = opt1[1].trim();
+        }
+      }
+      const keysM = /^\{([^{}]*)\}/.exec(src.slice(j));
+      if (keysM) {
+        const keys = splitTexList(keysM[1]);
+        if (keys.length) {
+          out.push({
+            t: 'cite',
+            keys,
+            style: cite[1] as 'cite' | 'citet' | 'citep' | 'citeauthor' | 'citeyear',
+            prenote: prenote || undefined,
+            postnote: postnote || undefined,
+          });
+        }
+        i = j + keysM[0].length;
+        continue;
+      }
+      // Malformed \cite with no {…}: skip the command name only.
+      i = j;
+      continue;
+    }
     // text markup
     const mk = /^\\(textbf|emph|textit|texttt|text)\s*\{/.exec(src.slice(i));
     if (mk) {
@@ -292,11 +410,19 @@ function splitParas(text: string): string[] {
   return text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
 }
 
+function isEmptyInlines(nodes: Inline[]): boolean {
+  return nodes.every((n) => n.t === 'text' && !n.v.trim());
+}
+
 function parseBlocks(src: string): Block[] {
   const out: Block[] = [];
   let buf = '';
   const flushBuf = () => {
-    for (const p of splitParas(buf)) out.push({ t: 'para', c: parseInline(p) });
+    for (const p of splitParas(buf)) {
+      const c = parseInline(p);
+      // Drop paragraphs that only held stripped commands (\label, \leanok, …).
+      if (!isEmptyInlines(c)) out.push({ t: 'para', c });
+    }
     buf = '';
   };
   let i = 0;
@@ -463,21 +589,76 @@ function parseTable(body: string, columnSpec: string): Block {
 
 function parseEnv(name: string, raw: string): Block {
   const meta: EnvMeta = { lean: [], uses: [], leanok: false, mathlibok: false, notready: false };
-  // Strip the metadata commands first — they can appear in any order in the
-  // env head (e.g. `\begin{definition}\leanok\n[Name]\n\label{}\lean{}`).
+  // Proof-side commands are meaningful to hgraph's dependency association,
+  // but they are not declaration metadata in the document UI. In particular,
+  // never let a proof equation's \label become the enclosing theorem label.
+  if (name === 'proof') {
+    let body = raw;
+    const lead = body.replace(/^\s+/, '');
+    if (lead[0] === '[') {
+      const close = matchBracket(lead, 0);
+      if (close !== -1) { meta.human = lead.slice(1, close).trim(); body = lead.slice(close + 1); }
+    }
+    return { t: 'env', name, meta, body: parseBlocks(body) };
+  }
+
+  // Metadata belongs to the environment header. The previous implementation
+  // searched the entire body, so an unlabelled statement could inherit a
+  // `\label`, `\lean`, or `\leanok` from its proof. Consume only a prefix made
+  // of whitespace, optional comments, an optional human title, and known
+  // annotation commands; ordinary statement text ends the header.
   let body = raw;
-  body = body.replace(/\\label\s*\{([^{}]*)\}/, (_, v) => { meta.label = v.trim(); return ''; });
-  body = body.replace(/\\lean\s*\{([^{}]*)\}/g, (_, v) => { for (const t of String(v).split(',').map((s: string) => s.trim()).filter(Boolean)) meta.lean.push(t); return ''; });
-  body = body.replace(/\\uses\s*\{([^{}]*)\}/g, (_, v) => { for (const t of String(v).split(',').map((s: string) => s.trim()).filter(Boolean)) meta.uses.push(t); return ''; });
-  body = body.replace(/\\leanok\b/g, () => { meta.leanok = true; return ''; });
-  body = body.replace(/\\mathlibok\b/g, () => { meta.mathlibok = true; return ''; });
-  body = body.replace(/\\notready\b/g, () => { meta.notready = true; return ''; });
-  // Now the optional [human name] is the first non-space token (kept raw so its
-  // math renders).
-  const lead = body.replace(/^\s+/, '');
-  if (lead[0] === '[') {
-    const close = matchBracket(lead, 0);
-    if (close !== -1) { meta.human = lead.slice(1, close).trim(); body = lead.slice(close + 1); }
+  const removed: Array<[number, number]> = [];
+  let i = 0;
+  let titleSeen = false;
+  const skipWhitespace = () => { while (i < raw.length && /\s/.test(raw[i])) i++; };
+  while (i < raw.length) {
+    skipWhitespace();
+    if (raw.startsWith('\\archoncomment{', i)) {
+      const close = matchBrace(raw, i + '\\archoncomment'.length);
+      if (close !== -1) { i = close + 1; continue; }
+    }
+    if (raw[i] === '[' && !titleSeen) {
+      const close = matchBracket(raw, i);
+      if (close !== -1) {
+        meta.human = raw.slice(i + 1, close).trim();
+        removed.push([i, close + 1]);
+        titleSeen = true;
+        i = close + 1;
+        continue;
+      }
+    }
+    const command = /^\\(label|lean|uses|discussion|dcref|source|group|level)\b/.exec(raw.slice(i));
+    if (command) {
+      let end = i + command[0].length;
+      while (end < raw.length && /\s/.test(raw[end])) end++;
+      if (raw[end] !== '{') break;
+      const close = matchBrace(raw, end);
+      if (close === -1) break;
+      const value = raw.slice(end + 1, close).trim();
+      switch (command[1]) {
+        case 'label': if (!meta.label) meta.label = value; break;
+        case 'lean': meta.lean.push(...value.split(',').map((s) => s.trim()).filter(Boolean)); break;
+        case 'uses': meta.uses.push(...value.split(',').map((s) => s.trim()).filter(Boolean)); break;
+      }
+      removed.push([i, close + 1]);
+      i = close + 1;
+      continue;
+    }
+    const bare = /^\\(leanok|mathlibok|notready|sketch)\b/.exec(raw.slice(i));
+    if (bare) {
+      if (bare[1] === 'leanok') meta.leanok = true;
+      else if (bare[1] === 'mathlibok') meta.mathlibok = true;
+      else if (bare[1] === 'notready') meta.notready = true;
+      removed.push([i, i + bare[0].length]);
+      i += bare[0].length;
+      continue;
+    }
+    break;
+  }
+  for (let r = removed.length - 1; r >= 0; r--) {
+    const [start, end] = removed[r];
+    body = body.slice(0, start) + body.slice(end);
   }
   return { t: 'env', name, meta, body: parseBlocks(body) };
 }
@@ -566,6 +747,7 @@ function highlightLean(raw: string): string {
 interface Ctx {
   macros: Record<string, string>;
   labels: LabelMap;
+  bib: BibMap;
   lean: Map<string, string>;
   /** Open the target's chapter (lazy view) and scroll to its anchor. */
   onNavigate?: (slug: string, anchor: string) => void;
@@ -614,6 +796,31 @@ function refClick(ctx: Ctx, tgt: RefTarget) {
 function Inlines({ nodes, ctx, k }: { nodes: Inline[]; ctx: Ctx; k: string }) {
   return <>{nodes.map((n, idx) => <InlineNode key={`${k}-${idx}`} n={n} ctx={ctx} k={`${k}-${idx}`} />)}</>;
 }
+function RefLink({ label, cref, ctx }: { label: string; cref: boolean; ctx: Ctx }) {
+  const tgt = ctx.labels.get(label);
+  if (!tgt) return <span className={styles.refBroken} title={`unresolved: ${label}`}>??</span>;
+  const text = cref ? `${tgt.kind} ${tgt.num}` : tgt.num;
+  return <a className={styles.ref} href={`#${tgt.anchor}`} onClick={refClick(ctx, tgt)} title={label}>{text}</a>;
+}
+
+function CiteLink({ keyName, style, ctx }: {
+  keyName: string;
+  style: 'cite' | 'citet' | 'citep' | 'citeauthor' | 'citeyear';
+  ctx: Ctx;
+}) {
+  const entry = ctx.bib.get(keyName);
+  const text = citeLabel(entry, keyName, style);
+  if (!entry) {
+    return <span className={styles.citeBroken} title={`unresolved citation: ${keyName}`}>[{keyName}]</span>;
+  }
+  const tip = [entry.title, entry.author, entry.year].filter(Boolean).join(' — ');
+  return (
+    <a className={styles.cite} href={`#bib-${encodeURIComponent(keyName)}`} title={tip || keyName}>
+      {text}
+    </a>
+  );
+}
+
 function InlineNode({ n, ctx, k }: { n: Inline; ctx: Ctx; k: string }) {
   if (n.t === 'text') return <>{normText(n.v)}</>;
   if (n.t === 'math') return <span className={n.display ? styles.dmath : styles.imath} dangerouslySetInnerHTML={{ __html: renderMath(n.v, n.display, ctx.macros) }} />;
@@ -621,11 +828,46 @@ function InlineNode({ n, ctx, k }: { n: Inline; ctx: Ctx; k: string }) {
   if (n.t === 'em') return <em><Inlines nodes={n.c} ctx={ctx} k={k} /></em>;
   if (n.t === 'code') return <code className={styles.tt}>{n.v}</code>;
   if (n.t === 'comment') return <CommentChip value={n.v} ctx={ctx} />;
-  // ref
-  const tgt = ctx.labels.get(n.label);
-  if (!tgt) return <span className={styles.refBroken} title={`unresolved: ${n.label}`}>?</span>;
-  const text = n.cref ? `${tgt.kind} ${tgt.num}` : tgt.num;
-  return <a className={styles.ref} href={`#${tgt.anchor}`} onClick={refClick(ctx, tgt)}>{text}</a>;
+  if (n.t === 'ref') {
+    return (
+      <>
+        {n.labels.map((label, i) => (
+          <span key={`${k}-r-${i}`}>
+            {i > 0 && <>, </>}
+            <RefLink label={label} cref={n.cref} ctx={ctx} />
+          </span>
+        ))}
+      </>
+    );
+  }
+  if (n.t === 'cite') {
+    const bracketed = n.style === 'cite' || n.style === 'citep';
+    const body = n.keys.map((keyName, i) => (
+      <span key={`${k}-c-${i}`}>
+        {i > 0 && <>; </>}
+        <CiteLink keyName={keyName} style={n.style} ctx={ctx} />
+      </span>
+    ));
+    const note = (s?: string) => (s ? <>{normText(s)}</> : null);
+    if (bracketed) {
+      return (
+        <span className={styles.citeGroup}>
+          [{n.prenote ? <>{note(n.prenote)} </> : null}
+          {body}
+          {n.postnote ? <>, {note(n.postnote)}</> : null}]
+        </span>
+      );
+    }
+    // \citet / \citeauthor / \citeyear: prose form; postnote still parenthetical.
+    return (
+      <span className={styles.citeGroup}>
+        {n.prenote ? <>{note(n.prenote)} </> : null}
+        {body}
+        {n.postnote ? <> ({note(n.postnote)})</> : null}
+      </span>
+    );
+  }
+  return null;
 }
 
 function LeanChip({ name, ctx }: { name: string; ctx: Ctx }) {
@@ -742,10 +984,15 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
   }
   // env
   const isProof = b.name === 'proof';
-  // Prose environments (remark, notation, …) are not formalisation obligations:
-  // they carry no DAG node worth focusing, so a "graph" chip on them just lands
-  // on the DAG page with nothing selected. Suppress the graph/diff chips for them.
-  const isProse = ['remark', 'notation', 'convention', 'example', 'note'].includes(b.name);
+  // Non-obligation environments (documentation, conjectures, exercises, and
+  // proofs) are not formalisation targets:
+  // carry no DAG node worth focusing, so status and graph affordances would be
+  // misleading. Keep rendering their prose and proof-side `\uses` as usual.
+  const isProse = [
+    'remark', 'notation', 'convention', 'example', 'conjecture', 'claim', 'fact',
+    'exercise', 'note', 'proposition_',
+  ].includes(b.name);
+  const isNonFormalization = isProof || isProse;
   const labelText = ENV_LABELS[b.name] ?? (b.name[0]?.toUpperCase() + b.name.slice(1));
   const klass = `${styles.env} ${styles[`env_${b.name}`] ?? ''} ${isProof ? styles.envProof : ''}`;
   return (
@@ -755,21 +1002,21 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
           {labelText}{b.num ? ` ${b.num}` : ''}.
         </span>
         {b.meta.human && <span className={styles.envHuman}><Inlines nodes={parseInline(b.meta.human)} ctx={ctx} k={`${k}-h`} /></span>}
-        {b.meta.leanok && <span className={styles.badgeOk} title="\leanok">✓ leanok</span>}
-        {b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
-        {b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
-        {b.meta.label && ctx.onOpenInGraph && !isProse && (
+        {!isNonFormalization && b.meta.leanok && <span className={styles.badgeOk} title="\leanok">✓ leanok</span>}
+        {!isNonFormalization && b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
+        {!isNonFormalization && b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
+        {b.meta.label && ctx.onOpenInGraph && !isNonFormalization && (
           <button className={styles.graphChip} title="Show this node on the DAG page"
             onClick={() => ctx.onOpenInGraph!(b.meta.label!)}>⬡ graph</button>
         )}
-        {b.meta.label && !isProse && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
+        {b.meta.label && !isNonFormalization && ctx.onOpenInDiffs && ctx.diffSlugFor?.(b.meta.label) && (
           <button className={styles.graphChip} title="Open this declaration's Lean file on the Diffs page"
             onClick={() => ctx.onOpenInDiffs!(ctx.diffSlugFor!(b.meta.label!)!)}>± diff</button>
         )}
-        {b.meta.label && (
+        {b.meta.label && !isNonFormalization && (
           <IterChip kind="Lean file" mod={ctx.leanModFor?.(b.meta.label)} onOpenLogs={ctx.onOpenLogs} />
         )}
-        {b.meta.lean.map((nm, i) => <LeanChip key={i} name={nm} ctx={ctx} />)}
+        {!isNonFormalization && b.meta.lean.map((nm, i) => <LeanChip key={i} name={nm} ctx={ctx} />)}
       </div>
       <div className={styles.envBody}>
         {b.body.map((bb, j) => <BlockNode key={j} b={bb} ctx={ctx} k={`${k}-${j}`} />)}
@@ -782,11 +1029,12 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
 export function ChapterView({
-  chapter, macros, labels, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs, chapterMod,
+  chapter, macros, labels, bib, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs, chapterMod,
 }: {
   chapter: NumberedChapter;
   macros: Record<string, string>;
   labels: LabelMap;
+  bib?: BibMap;
   leanSource: Map<string, string>;
   onNavigate?: (slug: string, anchor: string) => void;
   onOpenInGraph?: (label: string) => void;
@@ -799,8 +1047,20 @@ export function ChapterView({
   chapterMod?: BlueprintFileMod;
 }) {
   const ctx: Ctx = useMemo(
-    () => ({ macros, labels, lean: leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs }),
-    [macros, labels, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
+    () => ({
+      macros,
+      labels,
+      bib: bib ?? new Map(),
+      lean: leanSource,
+      onNavigate,
+      onOpenInGraph,
+      onOpenInLean,
+      diffSlugFor,
+      onOpenInDiffs,
+      leanModFor,
+      onOpenLogs,
+    }),
+    [macros, labels, bib, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
   );
   // Progressive rendering: paint the top of the chapter immediately and stream
   // the remaining (KaTeX-heavy) blocks in over the next frames, so opening a big
@@ -825,8 +1085,45 @@ export function ChapterView({
 /** Render an inline-LaTeX title (math-aware) to React — for the TOC / headings. */
 export function TitleInline({ nodes, tex, macros }: { nodes?: Inline[]; tex?: string; macros: Record<string, string> }) {
   const parsed = useMemo(() => nodes ?? parseInline(tex ?? ''), [nodes, tex]);
-  const ctx: Ctx = { macros, labels: new Map(), lean: new Map() };
+  const ctx: Ctx = { macros, labels: new Map(), bib: new Map(), lean: new Map() };
   return <Inlines nodes={parsed} ctx={ctx} k="t" />;
+}
+
+/** Render a project's bibliography (parsed `.bib`) under the open chapters. */
+export function BibliographyView({ bib }: { bib: BibEntry[] }) {
+  if (!bib.length) return null;
+  const sorted = [...bib].sort((a, b) => a.key.localeCompare(b.key));
+  return (
+    <section className={`${styles.root} ${styles.bibSection}`} id="bibliography">
+      <h2 className={styles.chapterTitle}>Bibliography</h2>
+      <ol className={styles.bibList}>
+        {sorted.map((e) => {
+          const venue = e.journal || e.booktitle || e.publisher || '';
+          const detail = [
+            venue,
+            e.volume ? (e.number ? `${e.volume}(${e.number})` : e.volume) : (e.number || ''),
+            e.pages ? `pp. ${e.pages}` : '',
+            e.year || '',
+          ].filter(Boolean).join(', ');
+          return (
+            <li key={e.key} id={`bib-${encodeURIComponent(e.key)}`} className={styles.bibItem}>
+              <span className={styles.bibKey}>[{e.key}]</span>
+              <span className={styles.bibBody}>
+                {e.author && <span className={styles.bibAuthor}>{e.author}. </span>}
+                {e.title && (
+                  e.url
+                    ? <a className={styles.bibTitle} href={e.url} target="_blank" rel="noreferrer">{e.title}</a>
+                    : <span className={styles.bibTitle}>{e.title}</span>
+                )}
+                {e.title && detail ? '. ' : null}
+                {detail && <span className={styles.bibDetail}>{detail}.</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
 }
 
 /** Render a loose LaTeX fragment (a statement or proof body from the DAG)
@@ -844,16 +1141,23 @@ function stripStmtHead(tex: string): string {
   return close === -1 ? tex : lead.slice(close + 1);
 }
 
-export function TexFragment({ tex, macros, labels, onNavigate }: {
+export function TexFragment({ tex, macros, labels, bib, onNavigate }: {
   tex: string | null | undefined;
   macros: Record<string, string>;
   labels?: LabelMap;
+  bib?: BibMap;
   onNavigate?: (slug: string, anchor: string) => void;
 }) {
   const blocks = useMemo(() => parseBlocks(encodeComments(stripStmtHead(tex ?? ''), true)), [tex]);
   const ctx: Ctx = useMemo(
-    () => ({ macros, labels: labels ?? new Map(), lean: new Map(), onNavigate }),
-    [macros, labels, onNavigate],
+    () => ({
+      macros,
+      labels: labels ?? new Map(),
+      bib: bib ?? new Map(),
+      lean: new Map(),
+      onNavigate,
+    }),
+    [macros, labels, bib, onNavigate],
   );
   if (!tex || !tex.trim()) return <span className={styles.fragEmpty}>—</span>;
   return (

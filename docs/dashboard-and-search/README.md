@@ -46,6 +46,9 @@ The server is implemented in [`server/app.py`](../../src/archon_horizon/server/a
 - **Interactive chapter graph**: Explore a deterministic Graphviz layout with chapters collapsed by default, one-chapter expansion, filtering, and node selection.
 - **Roadmap & Task Tracker**: Monitor ongoing execution runs, inspect step-by-step run logs, and view milestone progress.
 - **Board view**: A GitHub-Projects-style kanban that groups the roadmap by milestone (see [Board View](#board-view-board)).
+- **Benchmark view**: Rank Lean files by summed `set_option` heartbeat budgets
+  (`/benchmark`, `GET /api/benchmark`, CLI `horizon benchmark`) so costly modules
+  stand out for redesign or `restart-module`.
 - **Inbox Management**: Directly review, triage, and comment on workspace inbox hints and issues.
 - **Clickable reference chips**: Ids and commit SHAs mentioned anywhere in rendered text become links that jump straight to the entity (see [Clickable Local-Reference Chips](#clickable-local-reference-chips)).
 

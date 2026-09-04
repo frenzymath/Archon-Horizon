@@ -755,7 +755,7 @@ class InitCommand:
         elif env_path.exists():
             log.step(f"{env_path.name} already exists; left unchanged (Horizon never overwrites it).")
         
-        for sub in ("blueprints", "inbox/local/items", "inbox/local/comments", "inbox/github/items", "inbox/github/comments", "roadmap/items", "roadmap/comments", "runs", "subagents", "tasks", "tools", "vcs"):
+        for sub in ("blueprints", "inbox/local/items", "inbox/local/comments", "inbox/github/items", "inbox/github/comments", "roadmap/items", "roadmap/comments", "runs", "subagents", "tasks", "tools", "tmp", "vcs"):
             (self.root / ".archon-horizon" / sub).mkdir(parents=True, exist_ok=True)
 
         # Stamp the running Horizon version into the workspace so later commands

@@ -121,16 +121,35 @@ class DescriptorSubagent(Subagent):
         """)
 
     def run(self, context: SubagentContext) -> SubagentResult:
-        result = self.harness.run(HarnessRequest(
-            prompt=self.prompt(
-                context,
-                directive=context.directive or "Inspect the workspace and report findings.",
-                slug=context.slug,
-                write_domain=context.write_domain,
-            ),
-            cwd=context.workspace.root,
-            artifact_dir=context.log_dir,
-        ))
+        from archon_horizon.core.scratch import (
+            remove_session_tmp,
+            run_id_from_session_path,
+            scratch_environment,
+        )
+
+        # Standalone descriptor dispatches do not pass through the Horizon lead's
+        # environment, so give them the same per-session scratch routing.
+        run_id = run_id_from_session_path(context.log_dir)
+        scratch_dir, scratch_env = scratch_environment(
+            context.workspace,
+            run_id=run_id,
+            session=context.log_dir.name if context.log_dir is not None else self.name,
+            role=self.name,
+        )
+        try:
+            result = self.harness.run(HarnessRequest(
+                prompt=self.prompt(
+                    context,
+                    directive=context.directive or "Inspect the workspace and report findings.",
+                    slug=context.slug,
+                    write_domain=context.write_domain,
+                ),
+                cwd=context.workspace.root,
+                artifact_dir=context.log_dir,
+                metadata={"env": scratch_env},
+            ))
+        finally:
+            remove_session_tmp(scratch_dir)
         report = result.text
         report_path = context.log_dir / "report.md" if context.log_dir is not None else None
         if report_path is not None and report_path.exists():

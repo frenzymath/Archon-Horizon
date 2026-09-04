@@ -119,6 +119,40 @@
 .ref:hover { text-decoration: underline; }
 .refBroken { color: #e36209; font-weight: 600; }
 
+/* Citations ---------------------------------------------------------- */
+.cite {
+  color: var(--blue);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.cite:hover { text-decoration: underline; }
+.citeBroken { color: #e36209; font-weight: 600; }
+.citeGroup { white-space: normal; }
+
+/* Bibliography ------------------------------------------------------- */
+.bibSection { margin-top: 28px; padding-top: 8px; border-top: 1px solid var(--border, #d0d7de); }
+.bibList { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.bibItem {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: start;
+  font-size: 13.5px;
+  line-height: 1.45;
+  scroll-margin-top: 72px;
+}
+.bibKey {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.bibBody { min-width: 0; color: var(--text-secondary); }
+.bibAuthor { color: var(--text-primary); }
+.bibTitle { color: var(--text-primary); font-style: italic; text-decoration: none; }
+a.bibTitle:hover { text-decoration: underline; }
+.bibDetail { color: var(--text-secondary); }
+
 /* Lists ------------------------------------------------------------- */
 .list { margin: 6px 0 6px 18px; padding: 0; }
 .list li { margin: 3px 0; }

@@ -21,7 +21,37 @@ from pathlib import Path
 from archon_horizon.core.workspace import Workspace
 from archon_horizon.log import log
 
+from .checks import is_countable
 from .hgraph_graph import build_project_graph as build_hgraph_graph
+
+
+def _countable_dag(dag: dict) -> dict:
+    """Drop prose/proof nodes from a published DAG, including old caches.
+
+    The hgraph adapter applies this filter while rebuilding a project.  A
+    dashboard can nevertheless read a JSON snapshot produced by an older
+    Horizon process, so apply the same boundary at the cache seam too.  Edges
+    to hidden nodes are removed along with the nodes; otherwise a stale remark
+    could still affect graph status or dependency counts in the client.
+    """
+    if not isinstance(dag, dict):
+        return dag
+    raw_nodes = dag.get("nodes")
+    if not isinstance(raw_nodes, list):
+        return dag
+    nodes = [node for node in raw_nodes if isinstance(node, dict) and is_countable(node)]
+    ids = {str(node.get("id")) for node in nodes if node.get("id") is not None}
+    out = dict(dag)
+    out["nodes"] = nodes
+    raw_edges = dag.get("edges")
+    if isinstance(raw_edges, list):
+        out["edges"] = [
+            edge for edge in raw_edges
+            if isinstance(edge, dict)
+            and str(edge.get("source", "")) in ids
+            and str(edge.get("target", "")) in ids
+        ]
+    return out
 
 
 def _find_blueprint_dir(
@@ -109,7 +139,7 @@ def published_dags(workspace: Workspace) -> dict[str, dict]:
         cached = cache_dir / f"{name}.json"
         if cached.exists():
             try:
-                out[name] = json.loads(cached.read_text("utf-8"))
+                out[name] = _countable_dag(json.loads(cached.read_text("utf-8")))
                 continue
             except (OSError, ValueError):
                 pass
@@ -129,7 +159,7 @@ def published_dag(workspace: Workspace, name: str) -> dict | None:
     cached = workspace.state_path / "blueprints" / f"{name}.json"
     if cached.exists():
         try:
-            return json.loads(cached.read_text("utf-8"))
+            return _countable_dag(json.loads(cached.read_text("utf-8")))
         except (OSError, ValueError):
             pass
     try:

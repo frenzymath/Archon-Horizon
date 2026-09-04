@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
-import { buildBlueprintModel, ChapterView, TitleInline } from './components/BlueprintDoc';
+import { BibliographyView, bibMapFrom, buildBlueprintModel, ChapterView, TitleInline } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
 import styles from './BlueprintPage.module.css';
 
@@ -19,9 +19,12 @@ type BlueprintDeclIndexItem = {
   graphId?: string;
 };
 
-// Remark-like environments aren't formalizable declarations, so they carry no
-// status badge, Lean link, or DAG node in the index.
-const NO_STATUS_KINDS = new Set(['remark', 'notation', 'convention', 'example', 'note']);
+// Documentation/proof environments are renderable, but are not formalisation
+// obligations. They must not create a status square or a TODO row in the index.
+const NO_STATUS_KINDS = new Set([
+  'remark', 'notation', 'convention', 'example', 'conjecture', 'claim', 'fact',
+  'exercise', 'note', 'proof', 'proposition_',
+]);
 
 const STATUS_LABEL: Record<BlueprintDeclStatus, string> = {
   leanok: '✓ leanok',
@@ -51,25 +54,36 @@ function gatherDecls(
   const out: BlueprintDeclIndexItem[] = [];
   const visit = (block: any) => {
     if (!block) return;
+    // A proof/prose block is document content, not a declaration container.
+    // Do not walk into it: labels and metadata in proof-side equations (or in
+    // an embedded example) must never become status/TODO rows for the parent
+    // interface.
+    if (block.t === 'env') {
+      const envName = String(block.name ?? 'env').replace(/[^A-Za-z0-9_-]/g, '_');
+      if (NO_STATUS_KINDS.has(envName)) return;
+    }
     if (block.t === 'env' && block.meta?.label) {
       const label = String(block.meta.label);
-      const target = labels.get(label);
-      const dag = dagById.get(label);
-      const isMathlib = Boolean(block.meta.mathlibok) || mathlib(dag);
-      const isLeanOk = Boolean(block.meta.leanok) || proved(dag);
-      const isSorry = !isMathlib && !isLeanOk && sorried(dag);
-      out.push({
-        label,
-        kind: target?.kind ?? block.name ?? 'Declaration',
-        envName: String(block.name ?? 'env').replace(/[^A-Za-z0-9_-]/g, '_'),
-        num: target?.num ?? '',
-        slug: target?.slug ?? '',
-        anchor: target?.anchor ?? block.anchor ?? '',
-        title: String(block.meta.human ?? ''),
-        leanNames: (block.meta.lean ?? []).map(String),
-        status: isMathlib ? 'mathlibok' : isLeanOk ? 'leanok' : isSorry ? 'sorry' : 'none',
-        graphId: dag?.id ? String(dag.id) : label,
-      });
+      const envName = String(block.name ?? 'env').replace(/[^A-Za-z0-9_-]/g, '_');
+      if (!NO_STATUS_KINDS.has(envName)) {
+        const target = labels.get(label);
+        const dag = dagById.get(label);
+        const isMathlib = Boolean(block.meta.mathlibok) || mathlib(dag);
+        const isLeanOk = Boolean(block.meta.leanok) || proved(dag);
+        const isSorry = !isMathlib && !isLeanOk && sorried(dag);
+        out.push({
+          label,
+          kind: target?.kind ?? block.name ?? 'Declaration',
+          envName,
+          num: target?.num ?? '',
+          slug: target?.slug ?? '',
+          anchor: target?.anchor ?? block.anchor ?? '',
+          title: String(block.meta.human ?? ''),
+          leanNames: (block.meta.lean ?? []).map(String),
+          status: isMathlib ? 'mathlibok' : isLeanOk ? 'leanok' : isSorry ? 'sorry' : 'none',
+          graphId: dag?.id ? String(dag.id) : label,
+        });
+      }
     }
     if (Array.isArray(block.body)) block.body.forEach(visit);
     if (Array.isArray(block.items)) block.items.flat().forEach(visit);
@@ -174,6 +188,8 @@ export default function BlueprintPage({ state }: { state: any }) {
 
   const macros = data?.macros ?? {};
   const chapters = useMemo(() => data?.chapters ?? [], [data]);
+  const bibEntries = useMemo(() => data?.bib ?? [], [data]);
+  const bib = useMemo(() => bibMapFrom(bibEntries), [bibEntries]);
   const { doc, labels } = useMemo(() => buildBlueprintModel(chapters, true), [chapters]);
   const dagNodes: any[] = useMemo(
     () => fullDag?.nodes ?? state.blueprints?.[project]?.nodes ?? [],
@@ -364,6 +380,7 @@ export default function BlueprintPage({ state }: { state: any }) {
                 chapter={ch}
                 macros={macros}
                 labels={labels}
+                bib={bib}
                 leanSource={leanSource}
                 onNavigate={openTo}
                 onOpenInGraph={openGraph}
@@ -371,6 +388,10 @@ export default function BlueprintPage({ state }: { state: any }) {
               />
             </div>
           ))}
+
+          {data?.hasBlueprint && bibEntries.length > 0 && openChapters.length > 0 && (
+            <BibliographyView bib={bibEntries} />
+          )}
         </main>
 
         <aside className={styles.declPanel}>
@@ -391,7 +412,6 @@ export default function BlueprintPage({ state }: { state: any }) {
             ) : (
               declIndex.map((item) => {
                 const leanName = item.leanNames[0];
-                const isRemark = NO_STATUS_KINDS.has(item.envName);
                 return (
                   <div key={item.label} className={`${styles.declRow} ${styles[`declKind_${item.envName}`] ?? ''}`}>
                     <button className={styles.declJump} onClick={() => openDecl(item)} title={`Open ${item.label}`}>
@@ -402,8 +422,8 @@ export default function BlueprintPage({ state }: { state: any }) {
                       <span className={styles.declLabel}>{item.label}</span>
                     </button>
                     <span className={styles.declActions}>
-                      {!isRemark && <span className={`${styles.declStatus} ${styles[`status_${item.status}`]}`}>{STATUS_LABEL[item.status]}</span>}
-                      {!isRemark && leanName && (() => {
+                      <span className={`${styles.declStatus} ${styles[`status_${item.status}`]}`}>{STATUS_LABEL[item.status]}</span>
+                      {leanName && (() => {
                         const resolvable = leanTargets.has(leanName) || leanTargets.has(leanName.split('.').pop() ?? leanName);
                         return (
                           <button
@@ -415,7 +435,7 @@ export default function BlueprintPage({ state }: { state: any }) {
                           >lean</button>
                         );
                       })()}
-                      {!isRemark && item.graphId && <button onClick={() => openGraph(item.graphId!)} title="Show matching DAG node">graph</button>}
+                      {item.graphId && <button onClick={() => openGraph(item.graphId!)} title="Show matching DAG node">graph</button>}
                     </span>
                   </div>
                 );

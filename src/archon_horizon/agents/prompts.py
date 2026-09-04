@@ -40,11 +40,12 @@ def _task_block(context: HorizonContext) -> str:
 
 
 def _stale_skill_guard(context: HorizonContext) -> str:
-    """Supply current minimum gates when an old editable skill is installed.
+    """Supply current minimum guidance when an old editable skill is installed.
 
     Horizon deliberately does not overwrite workspace skill edits at run start.
     This small package-owned fallback prevents an old copy from silently losing
-    critical LSP, delegation, and collection-hygiene behavior.
+    critical LSP and collection-hygiene behavior while leaving ordinary helper
+    dispatch to the agent's judgement.
     """
     try:
         from archon_horizon.skills.registry import stale_skills
@@ -54,14 +55,17 @@ def _stale_skill_guard(context: HorizonContext) -> str:
         return ""
     if not names:
         return ""
+    # Keep the fallback prompt bounded when a workspace has many newly bundled
+    # skills; `horizon skills list` gives the complete inventory.
+    shown = names[:3]
+    if len(names) > len(shown):
+        shown.append(f"+{len(names) - len(shown)} more")
     return (
         "\n\nThe installed workspace skills are stale ("
-        + ", ".join(names)
-        + "). Do not overwrite deliberate local edits automatically, but do not ignore "
-        "the drift. Until it is reconciled: use the `lean-check` LSP loop before "
-        "and after Lean edits; spawn and wait for a bounded native subagent on "
-        "multi-file/multi-proof work; and dispatch `janitor` (`ground` fallback) "
-        "for inbox/roadmap/task health warnings and before terminal completion."
+        + ", ".join(shown)
+        + "). Reconcile it without overwriting deliberate edits. Until then, use "
+        "`lean-check` before and after Lean edits, consider a bounded helper for "
+        "multi-file work, and use `janitor` (`ground` fallback) for health warnings."
     )
 
 
@@ -87,6 +91,9 @@ def horizon_task_prompt(context: HorizonContext) -> str:
         "# Task\n"
         f"{_task_block(context)}\n\n"
         "This is a headless, one-shot session: advance the REAL objective, commit each\n"
-        "verified unit and any final edits, keep operational comments to the delta,\n"
-        "then write the skill's brief final report."
+        "verified unit and any final edits, keep operational comments to the delta.\n"
+        "Before the final report, for any new certificate/context wrapper,\n"
+        "`\\leanok`/completion claim, or repeated frontier, run `honesty-reviewer`;\n"
+        "if unavailable, state why it was skipped.\n"
+        "Then write the skill's brief final report."
     )

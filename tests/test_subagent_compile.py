@@ -17,6 +17,7 @@ from archon_horizon.subagents.compile import (
     render_codex_agent,
     _codex_skills_appendix,
 )
+from archon_horizon.subagents.registry import load_descriptors
 
 _FM = re.compile(r"^---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
@@ -98,6 +99,85 @@ def test_install_targets_workspace_local_dirs_per_engine(tmp_path: Path) -> None
     assert (tmp_path / ".codex" / "agents" / "ground.toml").exists()
     assert (tmp_path / ".claude" / "agents" / "lean-isolator.md").exists()
     assert (tmp_path / ".codex" / "agents" / "lean-isolator.toml").exists()
+    for name in {
+        "source-fidelity-reviewer",
+        "honesty-reviewer",
+        "mathematical-correctness-reviewer",
+        "blueprint-integrity-reviewer",
+        "proof-load-bearing-reviewer",
+        "consumer-dependency-reviewer",
+        "api-composition-reviewer",
+        "lean-quality-reviewer",
+        "definition-quality-reviewer",
+        "verification-integrity-reviewer",
+        "graph-traceability-reviewer",
+        "provenance-integration-reviewer",
+        "strategy-reviewer",
+        "run-health-reviewer",
+        "external-boundary-reviewer",
+        "transcription-fidelity-reviewer",
+        "release-reproducibility-reviewer",
+        "review-adjudicator",
+    }:
+        assert (tmp_path / ".claude" / "agents" / f"{name}.md").exists()
+        assert (tmp_path / ".codex" / "agents" / f"{name}.toml").exists()
+
+
+def test_bundled_review_descriptors_are_scoped_read_only_roles() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "archon_horizon" / "subagents" / "descriptors"
+    descriptors = load_descriptors(root)
+    expected = {
+        "source-fidelity-reviewer",
+        "honesty-reviewer",
+        "mathematical-correctness-reviewer",
+        "blueprint-integrity-reviewer",
+        "proof-load-bearing-reviewer",
+        "consumer-dependency-reviewer",
+        "api-composition-reviewer",
+        "lean-quality-reviewer",
+        "definition-quality-reviewer",
+        "verification-integrity-reviewer",
+        "graph-traceability-reviewer",
+        "provenance-integration-reviewer",
+        "strategy-reviewer",
+        "run-health-reviewer",
+        "external-boundary-reviewer",
+        "transcription-fidelity-reviewer",
+        "release-reproducibility-reviewer",
+        "review-adjudicator",
+    }
+    assert expected <= descriptors.keys()
+    for name in expected:
+        descriptor = descriptors[name]
+        assert descriptor.read_only
+        assert descriptor.default_enabled
+        assert "review-method" in descriptor.prompt_body
+        assert "Status" in descriptor.prompt_body
+        for section in ("Use when", "Inputs", "In scope", "Checks", "Out of scope", "Report", "Escalation"):
+            assert f"## {section}" in descriptor.prompt_body
+
+
+def test_work_reviewer_keeps_a_progress_only_lane() -> None:
+    root = Path(__file__).resolve().parents[1] / "src" / "archon_horizon" / "subagents" / "descriptors"
+    body = load_descriptors(root)["work-reviewer"].prompt_body
+    assert "progress-integrity reviewer" in body
+    assert "Objective-to-artifact accounting" in body
+    assert "Convergence versus churn" in body
+    assert "Do **not** independently judge" in body
+    for specialist in (
+        "honesty-reviewer",
+        "mathematical-correctness-reviewer",
+        "source-fidelity-reviewer",
+        "verification-integrity-reviewer",
+        "api-composition-reviewer",
+    ):
+        assert specialist in body
+    # These are semantic-review probes and must not quietly return to the
+    # progress role when the descriptor is edited in the future.
+    assert "Unfold the relevant definitions" not in body
+    assert "Try a concrete counterexample" not in body
+    assert "same first unmet source-facing producer" in body
+    assert "conditional certificate" in body
 
 
 def test_codex_skill_appendix_exposes_optional_recommendations(tmp_path: Path) -> None:
@@ -105,3 +185,5 @@ def test_codex_skill_appendix_exposes_optional_recommendations(tmp_path: Path) -
     assert "Advisory recommendation (optional):" in appendix
     assert "in-place" in appendix
     assert "by sorry" in appendix
+    assert "formalization-review" in appendix
+    assert "not a completion gate" in appendix

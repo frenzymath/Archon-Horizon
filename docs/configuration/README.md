@@ -60,8 +60,8 @@ Global defaults for the workspace and the collaboration loop (see [`WorkspaceCon
 | Key | Default | Purpose |
 | :--- | :--- | :--- |
 | `name` | — (required) | Human-readable workspace name. |
-| `state_dir` | `.archon-horizon` | Directory holding managed state (roadmap, inboxes, reports, search cache). |
-| `rounds` | `1` | Maximum Horizon sessions per run. Long runs schedule the read-only `ground` helper at convergence checkpoints. |
+| `state_dir` | `.archon-horizon` | Directory holding managed state (roadmap, inboxes, reports, search cache, and disposable workspace-local scratch under `tmp/`). |
+| `rounds` | `1` | Maximum Horizon sessions per run. Long runs may choose the read-only `ground` helper at convergence checkpoints. |
 | `horizon_agent.harness` | — | Named harness (from `harnesses:`) that runs the Horizon agent. |
 | `scheduler.max_parallel_sessions` | `1` | How many Horizon sessions run concurrently. |
 | `scheduler.unknown_write_set_policy` | `lock-project` | What to do when a task's write set is unknown (see [`orchestration/scheduler.py`](../../src/archon_horizon/orchestration/scheduler.py)). |

@@ -37,7 +37,8 @@ type Node =
   | { type: 'strong'; children: Node[] }
   | { type: 'em'; children: Node[] }
   | { type: 'code'; value: string }
-  | { type: 'ref'; value: string }
+  | { type: 'ref'; values: string[]; cref: boolean }
+  | { type: 'cite'; keys: string[] }
   | { type: 'comment'; value: string }
   | { type: 'env'; name: string; meta: Meta; children: Node[] };
 
@@ -140,27 +141,39 @@ function findEndOfEnv(src: string, startIdx: number, name: string): number {
 /** Extract + strip leanblueprint metadata commands (\lean, \label, …) from a body. */
 function extractMeta(body: string): { body: string; meta: Meta } {
   const meta: Meta = { uses: [], leanok: false, notready: false };
+  // A nested proof/equation is renderable content, not metadata belonging to
+  // the enclosing statement. Mask those spans while collecting fields so a
+  // proof-side label or `\leanok` cannot create a false interface status.
+  const metadata = body
+    .replace(/\\begin\{proof\}[\s\S]*?\\end\{proof\}/g, '')
+    .replace(/\\begin\{(?:equation|align|alignat|flalign|gather|multline|eqnarray|displaymath)\*?\}[\s\S]*?\\end\{(?:equation|align|alignat|flalign|gather|multline|eqnarray|displaymath)\*?\}/g, '');
 
-  body = body.replace(/\\lean\s*\{([^{}]*)\}/g, (_, v) => {
+  metadata.replace(/\\lean\s*\{([^{}]*)\}/g, (_, v) => {
     meta.lean = v.trim();
     return '';
   });
-  body = body.replace(/\\label\s*\{([^{}]*)\}/g, (_, v) => {
+  metadata.replace(/\\label\s*\{([^{}]*)\}/g, (_, v) => {
     meta.label = v.trim();
     return '';
   });
-  body = body.replace(/\\uses\s*\{([^{}]*)\}/g, (_, v) => {
+  metadata.replace(/\\uses\s*\{([^{}]*)\}/g, (_, v) => {
     for (const tok of v.split(',').map((s: string) => s.trim()).filter(Boolean)) meta.uses.push(tok);
     return '';
   });
-  body = body.replace(/\\leanok\b/g, () => {
+  metadata.replace(/\\leanok\b/g, () => {
     meta.leanok = true;
     return '';
   });
-  body = body.replace(/\\notready\b/g, () => {
+  metadata.replace(/\\notready\b/g, () => {
     meta.notready = true;
     return '';
   });
+
+  // Strip structural commands from the rendered fragment as well. This keeps
+  // source/provenance and proof-dependency annotations out of reader prose.
+  body = body
+    .replace(/\\(?:lean|uses|label|dcref|source|discussion|group|level)\s*\{[^{}]*\}/g, '')
+    .replace(/\\(?:leanok|mathlibok|notready|sketch)\b/g, '');
 
   return { body, meta };
 }
@@ -258,11 +271,36 @@ function parseInline(src: string): Node[] {
       }
     }
 
-    // References: \ref{X}, \cref{X}, \Cref{X}, \eqref{X}
+    // References: \ref{X}, \cref{a, b}, \Cref{X}, \eqref{X}
     const refMatch = /^\\(ref|cref|Cref|eqref)\s*\{([^{}]*)\}/.exec(src.slice(i));
     if (refMatch) {
-      out.push({ type: 'ref', value: refMatch[2].trim() });
+      const values = refMatch[2].split(',').map((s) => s.trim()).filter(Boolean);
+      if (values.length) {
+        out.push({ type: 'ref', values, cref: /cref/i.test(refMatch[1]) });
+      }
       i += refMatch[0].length;
+      continue;
+    }
+
+    // Citations: \cite{key}, \citet/\citep/… — show keys as chips (DAG sidebar
+    // has no bib map; the full Blueprint page resolves author-year labels).
+    const citeMatch = /^\\(cite|citet|citep|citeauthor|citeyear)\*?\s*/.exec(src.slice(i));
+    if (citeMatch) {
+      let j = i + citeMatch[0].length;
+      // Skip up to two optional [...] notes.
+      for (let n = 0; n < 2; n++) {
+        const opt = /^\[([^\]]*)\]\s*/.exec(src.slice(j));
+        if (!opt) break;
+        j += opt[0].length;
+      }
+      const keysM = /^\{([^{}]*)\}/.exec(src.slice(j));
+      if (keysM) {
+        const keys = keysM[1].split(',').map((s) => s.trim()).filter(Boolean);
+        if (keys.length) out.push({ type: 'cite', keys });
+        i = j + keysM[0].length;
+        continue;
+      }
+      i = j;
       continue;
     }
 
@@ -369,7 +407,28 @@ function renderNode(n: Node, key: string, macros?: Record<string, string>): JSX.
     return <code key={key} className={styles.texttt}>{n.value}</code>;
   }
   if (n.type === 'ref') {
-    return <span key={key} className={styles.ref}>{n.value}</span>;
+    return (
+      <span key={key}>
+        {n.values.map((v, i) => (
+          <span key={`${key}-${i}`}>
+            {i > 0 && ', '}
+            <span className={styles.ref} title={v}>{v}</span>
+          </span>
+        ))}
+      </span>
+    );
+  }
+  if (n.type === 'cite') {
+    return (
+      <span key={key}>
+        [{n.keys.map((k, i) => (
+          <span key={`${key}-c-${i}`}>
+            {i > 0 && '; '}
+            <span className={styles.ref} title={k}>{k}</span>
+          </span>
+        ))}]
+      </span>
+    );
   }
   if (n.type === 'comment') {
     return <CommentChip key={key} value={n.value} macros={macros} />;
@@ -377,14 +436,16 @@ function renderNode(n: Node, key: string, macros?: Record<string, string>): JSX.
   // n.type === 'env'
   const label = ENV_LABELS[n.name] ?? n.name[0].toUpperCase() + n.name.slice(1);
   const paras = paragraphise(n.children);
+  const nonFormalization = ['proof', 'remark', 'notation', 'convention', 'example',
+    'conjecture', 'claim', 'fact', 'exercise', 'note', 'proposition_'].includes(n.name);
   return (
     <div key={key} className={`${styles.env} ${styles[`env-${n.name}`] ?? ''}`}>
       <div className={styles.envHead}>
         <span className={styles.envLabel}>{label}.</span>
-        {n.meta.leanok && <span className={styles.badgeOk} title="Formalisation complete (\leanok)">✓ leanok</span>}
-        {n.meta.notready && <span className={styles.badgeNotReady} title="\notready">not ready</span>}
-        {n.meta.lean && <span className={styles.badgeLean} title="Lean declaration">{n.meta.lean}</span>}
-        {n.meta.uses.length > 0 && (
+        {!nonFormalization && n.meta.leanok && <span className={styles.badgeOk} title="Formalisation complete (\leanok)">✓ leanok</span>}
+        {!nonFormalization && n.meta.notready && <span className={styles.badgeNotReady} title="\notready">not ready</span>}
+        {!nonFormalization && n.meta.lean && <span className={styles.badgeLean} title="Lean declaration">{n.meta.lean}</span>}
+        {!nonFormalization && n.meta.uses.length > 0 && (
           <span className={styles.uses}>
             uses: {n.meta.uses.map((u, i) => (
               <span key={i} className={styles.ref}>{u}</span>

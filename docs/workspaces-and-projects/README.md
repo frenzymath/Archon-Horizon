@@ -29,6 +29,7 @@ my-horizon-workspace/
     ├── roadmap/                  # Milestones and task breakdowns
     ├── inboxes/                  # Local filesystem inbox items
     ├── reports/                  # Structured agent execution reports
+    ├── tmp/                      # Disposable per-session scratch (excluded from the ledger)
     └── search/                   # Cached offline declaration search indices
 ```
 
@@ -48,6 +49,13 @@ During initialization, Horizon will prompt you to set default engine parameters 
 
 > [!NOTE]
 > You can run `horizon init` non-interactively or invoke `horizon init --update` inside an existing workspace to refresh managed files (such as subagents, skills, and MCP configurations) after upgrading the CLI.
+
+Agent subprocesses receive `TMPDIR`, `TMP`, and `TEMP` pointing to an isolated
+directory below `.archon-horizon/tmp/<run>/<session>`, exposed as
+`ARCHON_HORIZON_TMP`. It is disposable and normally removed after the session;
+keep evidence in the run artifacts instead. Use `horizon tmp clean` to preview
+stale leftovers and add `--apply` only after checking that live run directories
+are protected.
 
 ---
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from archon_horizon.blueprint.checks import blueprint_coverage, blueprint_lint_issues, dag_consistency_issues
-from archon_horizon.blueprint.workspace import project_dag, workspace_dags
+from archon_horizon.blueprint.workspace import project_dag, published_dag, workspace_dags
 from archon_horizon.core.workspace import Project, Workspace
 
 # `a` claims \leanok and is backed by real Lean; `c` is not formalised at all.
@@ -54,6 +54,22 @@ def test_workspace_dags_built_from_sources(tmp_path: Path) -> None:
     # Nodes are keyed by their LaTeX label, not hgraph's internal hash.
     assert {n["id"] for n in dags["ag-main"]["nodes"]} == {"a", "b", "c"}
     assert (dags["ag-main"].get("meta") or {}).get("engine") == "hgraph"
+
+
+def test_published_cache_filters_legacy_prose_nodes(tmp_path: Path) -> None:
+    """A dashboard cache from before the prose boundary must be harmless."""
+    ws = _workspace(tmp_path)
+    cache = ws.state_path / "blueprints"
+    cache.mkdir(parents=True)
+    (cache / "ag-main.json").write_text(
+        '{"nodes": ['
+        '{"id": "rem:x", "type": "remark"},'
+        '{"id": "thm:x", "type": "theorem"}], '
+        '"edges": [{"source": "rem:x", "target": "thm:x"}]}'
+    )
+    dag = published_dag(ws, "ag-main")
+    assert [node["id"] for node in dag["nodes"]] == ["thm:x"]
+    assert dag["edges"] == []
 
 
 def test_workspace_dags_scoped_to_projects(tmp_path: Path) -> None:

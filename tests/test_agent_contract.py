@@ -57,6 +57,7 @@ def test_horizon_prompt_is_directive_plus_skill(tmp_path: Path) -> None:
     assert "# Subagents" not in prompt
     assert "installed workspace skills are stale" in prompt
     assert "lean-check" in prompt and "janitor" in prompt
+    assert "honesty-reviewer" in prompt
     assert len(prompt) < 2000
 
 
@@ -69,12 +70,15 @@ def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
     assert "foreground" in skill                                   # one-shot discipline
     subagents = (_SKILLS_DIR / "subagents" / "SKILL.md").read_text("utf-8")
     assert "model" in subagents and "lighter capable" in subagents  # dispatcher-owned model economy
-    assert "ground" in skill and "before marking" in skill          # fresh-context convergence gate
+    assert "ground" in skill and "before marking" in skill          # optional fresh-context signal
+    assert "honesty-reviewer" in skill and "first unmet producer" in skill
+    assert "Claim class" in skill and "Frontier before/after" in skill
     assert "boundary-maintenance" in skill and "archive or complete" in skill
     assert "Formalization note" in skill and "graph add comment" in skill
     assert "dispatch **`janitor`" in skill and "Collection-health warnings are a dispatch trigger" in skill
     assert "lean_diagnostic_messages" in skill and "after each subsequent edit" in skill
-    assert "more than one file" in subagents and "dispatch at least one" in subagents
+    assert "more than one file" in subagents and "consider dispatching at least one" in subagents
+    assert "advisory signals" in subagents and "runtime requirements" in subagents
 
     lean_check = (_SKILLS_DIR / "lean-check" / "SKILL.md").read_text("utf-8")
     assert "Before the first proof edit" in lean_check
@@ -83,6 +87,30 @@ def test_horizon_skill_carries_the_load_bearing_conventions() -> None:
     assert "module build after every proof" in lean_check
     assert ".codex/agents/*.toml" in subagents
     assert "empty roster" in subagents
+
+    formalization_review = (_SKILLS_DIR / "formalization-review" / "SKILL.md").read_text("utf-8")
+    assert "not a completion gate" in formalization_review
+    assert "Source contract" in formalization_review
+    assert "Representations and bridges" in formalization_review
+    assert "Claim evidence" in formalization_review
+    assert "#print axioms" in formalization_review
+    assert "Across the lifecycle" in formalization_review
+    assert "Fix / Context / Preserve" in formalization_review
+    assert "source-discovery" in formalization_review
+    mathlib = (_SKILLS_DIR / "mathlib-conventions" / "SKILL.md").read_text("utf-8")
+    assert "consult [[formalization-review]]" in mathlib
+    blueprint_conventions = (_SKILLS_DIR / "blueprint-conventions" / "SKILL.md").read_text("utf-8")
+    assert "[[formalization-review]]" in blueprint_conventions
+    assert "\\dcref" in blueprint_conventions
+    assert "semantic and reader-facing" in blueprint_conventions
+    assert "proof should contain ordinary mathematical prose" in blueprint_conventions
+    assert "conventions below are Horizon's defaults and advice" in blueprint_conventions
+    assert "proof-side `\\uses{...}` or `\\proves{...}`" in blueprint_conventions
+    blueprint_integrity = (_SKILLS_DIR / "blueprint-integrity" / "SKILL.md").read_text("utf-8")
+    assert "local `\\label` ids are stable and preferably semantic" in blueprint_integrity
+    assert "Check macro placement" in blueprint_integrity
+    assert "conventions are advisory" in blueprint_integrity
+    assert "project-supported" in blueprint_integrity
 
 
 class _RecordingHarness:
@@ -249,6 +277,10 @@ def test_agent_env_carries_full_session_identity(tmp_path: Path) -> None:
     assert env["ARCHON_HORIZON_SKILL"] == str(
         (tmp_path / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
     )
+    assert env["ARCHON_HORIZON_TMP"] == env["TMPDIR"] == env["TMP"] == env["TEMP"]
+    assert env["ARCHON_HORIZON_TMP_ROOT"] == str((tmp_path / ".archon-horizon" / "tmp").resolve())
+    # Session scratch is disposable and is reclaimed after the harness returns.
+    assert not Path(env["ARCHON_HORIZON_TMP"]).exists()
 
 
 def test_horizon_prompt_uses_absolute_skill_path(tmp_path: Path) -> None:

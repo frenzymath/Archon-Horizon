@@ -123,6 +123,11 @@ DISPLAY_ENVS = ("equation", "align", "alignat", "flalign", "gather",
 _MATH_SPAN_RE = re.compile(
     r"\\begin\{(" + "|".join(DISPLAY_ENVS) + r")(\*?)\}.*?\\end\{\1\2\}", re.DOTALL)
 
+# Proof bodies are document content. Their labels and annotation macros must
+# not be mistaken for metadata of the enclosing statement when a statement
+# itself has no header label.
+_PROOF_SPAN_RE = re.compile(r"\\begin\{proof\}.*?\\end\{proof\}", re.DOTALL)
+
 
 def _outside_math(text: str, fn) -> str:
     """Apply ``fn`` to every part of ``text`` that sits outside display math."""
@@ -192,7 +197,11 @@ def parse_blueprint(text: str) -> tuple[list[dict], list[dict]]:
         text, re.DOTALL,
     ):
         env, title, inner = m.group(1), m.group(2), m.group(3)
-        if not _macro_args("label", inner):
+        # Only a statement's own metadata can make it addressable. A proof may
+        # contain equation labels, but those must never promote an otherwise
+        # unlabelled environment into a blueprint node.
+        metadata = _PROOF_SPAN_RE.sub("", inner)
+        if not _macro_args("label", _MATH_SPAN_RE.sub("", metadata)):
             continue  # unlabeled → not addressable, skip
         f = _statement_fields(env, title, inner)
         f.update({"pos": m.start(), "chapter": chapter_at(m.start())})
@@ -244,8 +253,11 @@ def _first_arg(macro: str, text: str) -> str | None:
 
 
 def _statement_fields(env: str, title, inner: str) -> dict:
-    # a \label inside display math names an equation, not the statement
-    labels = _macro_args("label", _MATH_SPAN_RE.sub("", inner))
+    # A label in display math names an equation, and anything in a proof belongs
+    # to the proof/document layer. Neither can identify the statement itself.
+    metadata = _PROOF_SPAN_RE.sub("", inner)
+    metadata_no_math = _MATH_SPAN_RE.sub("", metadata)
+    labels = _macro_args("label", metadata_no_math)
     body = _strip_macros(inner)
     title, body = _lift_title(title, body)
     return {
@@ -256,24 +268,24 @@ def _statement_fields(env: str, title, inner: str) -> dict:
         "labels": labels,
         "title": (title or (labels[0] if labels else env)).strip(),
         "content_type": THM_ENVS[env],
-        "lean": _macro_args("lean", inner),
-        "uses": _macro_args("uses", inner),
-        "leanok": bool(re.search(r"\\leanok\b", inner)),
-        "mathlibok": bool(re.search(r"\\mathlibok\b", inner)),
+        "lean": _macro_args("lean", metadata),
+        "uses": _macro_args("uses", metadata),
+        "leanok": bool(re.search(r"\\leanok\b", metadata)),
+        "mathlibok": bool(re.search(r"\\mathlibok\b", metadata)),
         # Standalone hgraph retired groups, but Horizon still renders this axis.
-        "group": _first_arg("group", inner),
+        "group": _first_arg("group", metadata),
         # \sketch → the argument is deliberately incomplete (a proof sketch, an
         # omitted routine verification). Not a status to be fixed by syncing —
         # an author's statement about the maths, surfaced to the reader as-is.
-        "sketch": bool(re.search(r"\\sketch\b", inner)),
-        "level": _first_arg("level", inner),      # \level{coarse|medium|fine} → granularity
+        "sketch": bool(re.search(r"\\sketch\b", metadata)),
+        "level": _first_arg("level", metadata),      # \level{coarse|medium|fine} → granularity
         # Source-book provenance. `\dcref{…}` is the original spelling;
         # `\source{slug:page-0001}` is what downstream blueprints are authored
         # with, so accept both (dcref wins if a statement carries both). Both are
         # stripped from the body by the annotation regex above, so a spelling
         # that isn't captured here is discarded silently — the statement still
         # renders and only its citation quietly disappears.
-        "ref": _first_arg("dcref", inner) or _first_arg("source", inner),
+        "ref": _first_arg("dcref", metadata) or _first_arg("source", metadata),
         "body": body,
     }
 
@@ -515,9 +527,12 @@ def _unlabeled_statement_warnings(text: str) -> list[str]:
         text, re.DOTALL,
     ):
         env, inner = m.group(1), m.group(3)
-        annotated = (_macro_args("lean", inner) or _macro_args("uses", inner)
-                     or re.search(r"\\(leanok|mathlibok|sketch)\b", inner))
-        if annotated and not _macro_args("label", _MATH_SPAN_RE.sub("", inner)):
+        # Proofs are document content. Their labels/status macros must not
+        # make an otherwise unlabelled statement look like a graph node.
+        metadata = _PROOF_SPAN_RE.sub("", inner)
+        annotated = (_macro_args("lean", metadata) or _macro_args("uses", metadata)
+                     or re.search(r"\\(leanok|mathlibok|sketch)\b", metadata))
+        if annotated and not _macro_args("label", _MATH_SPAN_RE.sub("", metadata)):
             warnings.append(
                 f"{env} at byte {m.start()}: unlabeled blueprint statement "
                 "is not imported as a graph node")

@@ -126,6 +126,18 @@ directory. ([`commands/check.py`](../../src/archon_horizon/commands/check.py))
 - `horizon check [targets...] [--timeout <seconds>] [--json]`
 - `horizon check --lean <file> [--timeout <seconds>] [--json]`
 
+### `horizon benchmark`
+
+Rank Lean files by the sum of numeric budgets from `set_option maxHeartbeats`,
+`set_option synthInstance.maxHeartbeats`, and related resource options. High
+ranks are a cheap static signal for layered API debt and candidates for a clean
+module rewrite (`restart-module` skill). Also exposed as the dashboard
+**Benchmark** view and `GET /api/benchmark`.
+([`commands/benchmark.py`](../../src/archon_horizon/commands/benchmark.py),
+[`lean/benchmark.py`](../../src/archon_horizon/lean/benchmark.py))
+
+- `horizon benchmark [-p PROJECT]... [--min-heartbeats N] [-n LIMIT] [--details] [--json]`
+
 ---
 
 ## 4. Inbox & communication
@@ -147,10 +159,10 @@ Implemented in [`commands/inbox.py`](../../src/archon_horizon/commands/inbox.py)
 
 ## 5. Roadmap, tasks & projects
 
-**Roadmap** — the project's **mathematical status**: the main theorems and infrastructure formalized and still to build. It is a map that guides the work, **not** a task queue — marking an item active does not launch anything. Ground keeps it current; a human launches a milestone with `horizon run <roadmap-id>`, which infers a task from it. ([`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py)):
-`list [--focus --max-depth --milestone --owner]` · `add --id --title --project [--summary|--summary-file --status --kind --priority --parent --depth --owner --milestone]` · `set <id> [--status --summary|--summary-file --title --priority --kind --parent --depth --owner --milestone --pin-commit --unpin-commit …]` · `comment <id> --body` · `remove <id>`.
+**Roadmap** — the project's **mathematical status**: the main theorems and infrastructure formalized and still to build. It is a map that guides the work, **not** a task queue — marking an item active does not launch anything. Horizon keeps it current; Ground may audit it from fresh context when the lead agent chooses that perspective. A human launches a milestone with `horizon run <roadmap-id>`, which infers a task from it. ([`commands/roadmap.py`](../../src/archon_horizon/commands/roadmap.py)):
+`list [--focus --max-depth --milestone --owner]` · `show <id>` · `add --id --title --project [--summary|--summary-file --status --kind --priority --parent --depth --owner --milestone --depends-on --inbox-ref --task-ref]` · `set <id> [--status --summary|--summary-file --title --priority --kind --parent --depth --owner --milestone --project --depends-on --inbox-ref --task-ref --pin-commit --unpin-commit …]` · `rename <old> <new>` · `comment <id> --body` · `remove <id> [--cascade]`.
 
-`--owner` records the responsible team/agent and `--milestone` a grouping label (both filterable on `list`); on `set`, `--pin-commit`/`--unpin-commit` (repeatable) attach or drop commit SHAs pinned to the item as deliverables.
+`--owner` records the responsible team/agent and `--milestone` a grouping label (both filterable on `list`); on `set`, `--pin-commit`/`--unpin-commit` (repeatable) attach or drop commit SHAs pinned to the item as deliverables. `--parent ''` un-nests; `--depends-on` / `--inbox-ref` / `--task-ref` / `--project` replace the corresponding lists (pass `''` alone to clear optional lists). `rename` rewrites parent and depends-on links that pointed at the old id. `remove` un-nests children and drops depends-on edges by default; `--cascade` also deletes direct children.
 
 **Tasks** — the human's lever for launching sessions. Human-authored only; agents may read and `comment` (to suggest an edit) but `add`/`set`/`remove` refuse an agent (`ARCHON_HORIZON_AGENT_ROLE` set) — to propose work an agent opens an inbox item for the human. Also inferred on demand from a roadmap id. ([`commands/task.py`](../../src/archon_horizon/commands/task.py)):
 `list` · `show <id>` · `add --id --project --objective [--title --projects --file --priority --status]` · `set <id> [--status --priority --objective --title --roadmap-ref --inbox-ref]` · `comment <id> --body` · `remove <id>`.
@@ -161,6 +173,13 @@ On `set`, `--roadmap-ref`/`--inbox-ref` (each repeatable) link the task to roadm
 `add <name> <path> [--type --build]` · `archive <name>` · `remove <name>` · `merge <dest> <source>`.
 
 **Skills** ([`commands/skills.py`](../../src/archon_horizon/commands/skills.py)): `list` · `install`.
+
+**Scratch** ([`commands/tmp.py`](../../src/archon_horizon/commands/tmp.py)):
+`horizon tmp path` prints the workspace-local disposable directory used by
+agent subprocesses; `horizon tmp clean [--older-than-hours H] [--json]` previews
+stale entries, and `--apply` removes them while protecting run directories with
+live process markers. Scratch lives under `.archon-horizon/tmp/` and is excluded
+from the ledger; session scratch is normally reclaimed automatically.
 
 **Ledger** ([`commands/ledger.py`](../../src/archon_horizon/commands/ledger.py)) — the out-of-tree agent source journal (`.archon-horizon/vcs/workspace.git`). It records Lean, blueprints, and `config.yaml` only; Horizon state and `**/hgraph/` stay on disk.
 
@@ -196,4 +215,5 @@ On `set`, `--roadmap-ref`/`--inbox-ref` (each repeatable) link the task to roadm
 | `ARCHON_HORIZON_AGENT_ROLE` | Per-session role (`horizon`; older logs may contain `ground`); enforces agent write-lanes (e.g. agents can't author tasks). |
 | `ARCHON_HORIZON_ALLOW_SECRETS=1` | Bypass the autogit pre-commit secret guard. |
 | `ARCHON_HORIZON_NO_SYNC=1` | Disable the pre-command synchronizer digest (see §1). |
+| `ARCHON_HORIZON_TMP` / `ARCHON_HORIZON_TMP_ROOT` | Per-session scratch directory / workspace scratch root; `TMPDIR`, `TMP`, and `TEMP` are routed to the per-session path. |
 | `CLAUDE_CONFIG_DIR` / `CODEX_HOME` | Per-harness engine config/auth home (see the harness `options.config_dir`). |

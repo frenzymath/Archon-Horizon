@@ -25,6 +25,8 @@ from archon_horizon.hgraph.sync import (
     read_blueprint,
 )
 
+from archon_horizon.hgraph.dashboard import discover_bib
+
 from .hgraph_graph import _detect_entry
 from .workspace import _find_blueprint_dir
 
@@ -32,9 +34,9 @@ from .workspace import _find_blueprint_dir
 _TITLE_CANDIDATES = ("web.tex", "print.tex", "content.tex")
 
 _MACRO_RE = re.compile(r"\\(newcommand|renewcommand|providecommand|DeclareMathOperator)\*?\s*")
-# Leading \label after a chapter heading is an anchor, not body prose.
-_LEADING_LABEL_RE = re.compile(r"^\s*\\label\s*\{[^{}]*\}\s*")
 # Chapter files often reopen with \section{Same title} under a \chapter{…}.
+# A leading \label{…} is kept so the dashboard can resolve \ref/\cref to the
+# chapter (stripping it here used to leave every \cref{chap:…} broken).
 _LEADING_HEADING_RE = re.compile(
     r"^\s*\\(?:chapter|section|subsection)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}\s*"
     r"(?:\\label\s*\{[^{}]*\}\s*)?"
@@ -192,10 +194,10 @@ def _split_chapters(expanded: str) -> list[dict]:
 
     def emit(title: str, body: str, *, starred: bool = False) -> None:
         body = _strip_definitions(body)
-        body = _LEADING_LABEL_RE.sub("", body, count=1)
         # Drop a leading \section{…} only when it restates this chapter's title
         # (common leanblueprint pattern). A differently-titled first heading
         # (e.g. Schur's \subsection{…} under a broader \chapter) is kept.
+        # Keep a leading \label{…} so \cref{chap:…} can resolve in the UI.
         hm = _LEADING_HEADING_RE.match(body)
         if hm and re.sub(r"\s+", " ", hm.group(1)).strip() == title:
             body = body[hm.end():]
@@ -263,9 +265,10 @@ def _doc_title_author(bp_dir: Path) -> tuple[str | None, str | None]:
 def project_chapters(workspace: Workspace, name: str) -> dict:
     """Ordered blueprint chapters + macros + title for one project.
 
-    Shape: ``{chapters: [{slug, title, tex}], macros, docTitle, docAuthor,
+    Shape: ``{chapters: [{slug, title, tex}], macros, bib, docTitle, docAuthor,
     hasBlueprint, error}``. ``hasBlueprint`` is False (with an ``error``) when no
-    blueprint entry is found.
+    blueprint entry is found. ``bib`` is the parsed ``.bib`` list used to render
+    ``\\cite`` / the bibliography pane.
 
     Chapters come only from the configured blueprint entry's ``\\input`` tree
     (same entry detection as hgraph). Loose ``chapters/*.tex`` files that are not
@@ -274,6 +277,7 @@ def project_chapters(workspace: Workspace, name: str) -> dict:
     empty: dict = {
         "chapters": [],
         "macros": {},
+        "bib": [],
         "docTitle": None,
         "docAuthor": None,
         "hasBlueprint": False,
@@ -313,6 +317,8 @@ def project_chapters(workspace: Workspace, name: str) -> dict:
 
     doc_title, doc_author = _doc_title_author(bp_dir)
     macros = _discover_macros(bp_dir, expanded)
+    # discover_bib walks the blueprint tree for *.bib (same helper as hgraph site).
+    bib = discover_bib(str(entry))
 
     # API shape: only slug/title/tex (starred is optional metadata the UI ignores).
     public_chapters = [
@@ -323,6 +329,7 @@ def project_chapters(workspace: Workspace, name: str) -> dict:
     return {
         "chapters": public_chapters,
         "macros": macros,
+        "bib": bib,
         "docTitle": doc_title,
         "docAuthor": doc_author,
         "hasBlueprint": True,
