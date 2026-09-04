@@ -1,12 +1,15 @@
 """Serve a project's blueprint as ordered chapters for the textbook reader.
 
-Unlike :mod:`archon_horizon.blueprint.dag`, which parses the blueprint into a
-dependency graph of nodes, this returns the *raw* chapter LaTeX (comments
-preserved) plus a merged KaTeX macro map and the document title/author, so the
-dashboard can render the blueprint like a textbook (numbered chapters, sections,
-theorems, cross-references) the way ``leanblueprint web`` would.
+Unlike the DAG path (hgraph nodes/edges), this returns chapter LaTeX plus a
+merged KaTeX macro map and the document title/author so the dashboard can render
+the blueprint like a textbook.
 
-This mirrors Archon's ``/api/blueprint/chapters`` route, ported to Python.
+Chapter order and membership follow **hgraph**: expand the configured blueprint
+entry (``content.tex`` / ``web.tex`` / ``print.tex``) with recursive ``\\input``,
+then split on ``\\chapter``. Files under ``chapters/`` that are not reached from
+that entry are not chapters. Preamble-only commands (``\\newcommand``,
+``\\newtheorem``, …) are stripped from bodies the same way hgraph's
+``parse_document`` does, so macro definitions never leak as prose.
 """
 
 from __future__ import annotations
@@ -15,16 +18,31 @@ import re
 from pathlib import Path
 
 from archon_horizon.core.workspace import Workspace
+from archon_horizon.hgraph.sync import (
+    _HEAD_RE,
+    _brace_span,
+    _strip_definitions,
+    read_blueprint,
+)
 
+from archon_horizon.hgraph.dashboard import discover_bib
+
+from .hgraph_graph import _detect_entry
 from .workspace import _find_blueprint_dir
 
 # Where \title / \author typically live (the leanblueprint entry preambles).
 _TITLE_CANDIDATES = ("web.tex", "print.tex", "content.tex")
 
 _MACRO_RE = re.compile(r"\\(newcommand|renewcommand|providecommand|DeclareMathOperator)\*?\s*")
-_HEADING_RE = re.compile(r"\\(?:chapter|section)\*?\s*\{([^{}]*)\}")
-_STRIP_HEADING_RE = re.compile(r"\\(?:chapter|section)\*?\s*\{[^{}]*\}\s*")
-_INPUT_RE = re.compile(r"\\input\s*\{([^{}]+)\}")
+# Chapter files often reopen with \section{Same title} under a \chapter{…}.
+# A leading \label{…} is kept so the dashboard can resolve \ref/\cref to the
+# chapter (stripping it here used to leave every \cref{chap:…} broken).
+_LEADING_HEADING_RE = re.compile(
+    r"^\s*\\(?:chapter|section|subsection)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}\s*"
+    r"(?:\\label\s*\{[^{}]*\}\s*)?"
+)
+# Leftover brace groups from incompletely-scanned preamble cmds (e.g. {\par}).
+_JUNK_ONLY_RE = re.compile(r"^(\s*\{[^{}]*\}\s*)+$")
 
 
 def _strip_tex_comments(src: str) -> str:
@@ -129,49 +147,107 @@ def parse_macros(src: str) -> dict[str, str]:
     return out
 
 
-def _humanize(slug: str) -> str:
-    return slug.replace("_", " / ").replace("-", " ")
+def _slugify(title: str, used: set[str]) -> str:
+    """Stable URL-ish slug from a chapter title; disambiguate collisions."""
+    base = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "chapter"
+    slug = base
+    n = 2
+    while slug in used:
+        slug = f"{base}-{n}"
+        n += 1
+    used.add(slug)
+    return slug
 
 
-def _title_of(tex: str, slug: str) -> str:
-    m = _HEADING_RE.search(tex)
-    return m.group(1).strip() if m else _humanize(slug)
+def _is_empty_body(tex: str) -> bool:
+    """True when stripped body has no readable content (preamble leftovers)."""
+    s = tex.strip()
+    if not s:
+        return True
+    return bool(_JUNK_ONLY_RE.match(s))
 
 
-def _strip_heading(tex: str) -> str:
-    return _STRIP_HEADING_RE.sub("", tex, count=1)
+def _split_chapters(expanded: str) -> list[dict]:
+    """Split an expanded blueprint into ``{slug, title, tex}`` chapters.
 
-
-def project_chapters(workspace: Workspace, name: str) -> dict:
-    """Ordered blueprint chapters + macros + title for one project.
-
-    Shape: ``{chapters: [{slug, title, tex}], macros, docTitle, docAuthor,
-    hasBlueprint, error}``. ``hasBlueprint`` is False (with an ``error``) when no
-    chapter sources are found.
+    Mirrors hgraph ``parse_document``'s chapter boundaries: only ``\\chapter``
+    (starred or not) starts a new unit. Material before the first chapter is
+    kept as an Introduction when it still has prose after stripping definitions.
     """
-    empty: dict = {
-        "chapters": [],
-        "macros": {},
-        "docTitle": None,
-        "docAuthor": None,
-        "hasBlueprint": False,
-        "error": None,
-    }
-    try:
-        proj = workspace.project(name)
-        proj_root = workspace.root / proj.path
-        bp_dir = _find_blueprint_dir(proj_root, proj.blueprint_path, workspace.root)
-    except Exception:
-        bp_dir = None
-    if not bp_dir:
-        return {**empty, "error": f"No blueprint found for project {name!r}."}
+    # Drop \begin{document}...\end{document} wrapper when present.
+    doc = re.search(r"\\begin\{document\}(.*)\\end\{document\}", expanded, re.DOTALL)
+    if doc:
+        expanded = doc.group(1)
 
-    chapters_dir = bp_dir / "chapters" if (bp_dir / "chapters").is_dir() else bp_dir
-    chapter_files = sorted(p for p in chapters_dir.glob("*.tex"))
-    if not chapter_files:
-        return {**empty, "error": f"No blueprint chapters for project {name!r}."}
+    # Chapter markers only (level 1).
+    markers: list[tuple[int, int, str, bool]] = []
+    for m in _HEAD_RE.finditer(expanded):
+        if m.group(1) != "chapter":
+            continue
+        content, end = _brace_span(expanded, m.end() - 1)
+        title = re.sub(r"\s+", " ", content).strip()
+        starred = bool(m.group(2))
+        markers.append((m.start(), end, title, starred))
 
-    # Title / author for the intro page.
+    used_slugs: set[str] = set()
+    chapters: list[dict] = []
+
+    def emit(title: str, body: str, *, starred: bool = False) -> None:
+        body = _strip_definitions(body)
+        # Drop a leading \section{…} only when it restates this chapter's title
+        # (common leanblueprint pattern). A differently-titled first heading
+        # (e.g. Schur's \subsection{…} under a broader \chapter) is kept.
+        # Keep a leading \label{…} so \cref{chap:…} can resolve in the UI.
+        hm = _LEADING_HEADING_RE.match(body)
+        if hm and re.sub(r"\s+", " ", hm.group(1)).strip() == title:
+            body = body[hm.end():]
+        body = body.strip()
+        if _is_empty_body(body):
+            return
+        slug = _slugify(title, used_slugs)
+        chapters.append({
+            "slug": slug,
+            "title": title,
+            "tex": body,
+            **({"starred": True} if starred else {}),
+        })
+
+    if not markers:
+        # Single-file / section-only blueprint: one synthetic chapter.
+        emit("Blueprint", expanded)
+        return chapters
+
+    # Prose before the first \chapter (after stripping preamble junk).
+    emit("Introduction", expanded[: markers[0][0]])
+
+    for i, (_start, end, title, starred) in enumerate(markers):
+        stop = markers[i + 1][0] if i + 1 < len(markers) else len(expanded)
+        emit(title, expanded[end:stop], starred=starred)
+
+    return chapters
+
+
+def _discover_macros(bp_dir: Path, expanded: str) -> dict[str, str]:
+    """KaTeX macros: every ``.tex``/``.sty`` under the blueprint tree, then the
+    expanded entry (so ``\\input{macros}`` definitions are included once).
+
+    First definition wins (provide-style), matching hgraph's discover_macros.
+    """
+    macros: dict[str, str] = {}
+    if bp_dir.is_dir():
+        files = sorted(list(bp_dir.rglob("*.tex")) + list(bp_dir.rglob("*.sty")))
+        for f in files:
+            try:
+                for k, v in parse_macros(f.read_text("utf-8", errors="replace")).items():
+                    macros.setdefault(k, v)
+            except OSError:
+                continue
+    for k, v in parse_macros(expanded).items():
+        macros.setdefault(k, v)
+    return macros
+
+
+def _doc_title_author(bp_dir: Path) -> tuple[str | None, str | None]:
     doc_title: str | None = None
     doc_author: str | None = None
     for cand in _TITLE_CANDIDATES:
@@ -183,40 +259,77 @@ def project_chapters(workspace: Workspace, name: str) -> dict:
         doc_author = doc_author or _braced_arg(src, "author")
         if doc_title:
             break
+    return doc_title, doc_author
 
-    by_slug = {p.stem: p for p in chapter_files}
 
-    # Reading order from content.tex \input{...}; unreferenced chapters appended.
-    order: list[str] = []
-    content_path = bp_dir / "content.tex"
-    if content_path.is_file():
-        for m in _INPUT_RE.finditer(content_path.read_text("utf-8")):
-            slug = Path(m.group(1).strip()).name.removesuffix(".tex")
-            if slug in by_slug and slug not in order:
-                order.append(slug)
-    for slug in by_slug:
-        if slug not in order:
-            order.append(slug)
+def project_chapters(workspace: Workspace, name: str) -> dict:
+    """Ordered blueprint chapters + macros + title for one project.
 
-    chapters: list[dict] = []
-    for slug in order:
-        raw = by_slug[slug].read_text("utf-8")
-        chapters.append({"slug": slug, "title": _title_of(raw, slug), "tex": _strip_heading(raw)})
+    Shape: ``{chapters: [{slug, title, tex}], macros, bib, docTitle, docAuthor,
+    hasBlueprint, error}``. ``hasBlueprint`` is False (with an ``error``) when no
+    blueprint entry is found. ``bib`` is the parsed ``.bib`` list used to render
+    ``\\cite`` / the bibliography pane.
 
-    # Macros: every macros/*.tex, then chapter-local \newcommand (provide-style:
-    # the macros/ dir wins on collision).
-    macros: dict[str, str] = {}
-    macros_dir = bp_dir / "macros"
-    if macros_dir.is_dir():
-        for f in sorted(macros_dir.glob("*.tex")):
-            macros.update(parse_macros(f.read_text("utf-8")))
-    for ch in chapters:
-        for k, v in parse_macros(ch["tex"]).items():
-            macros.setdefault(k, v)
+    Chapters come only from the configured blueprint entry's ``\\input`` tree
+    (same entry detection as hgraph). Loose ``chapters/*.tex`` files that are not
+    reached from that entry are omitted.
+    """
+    empty: dict = {
+        "chapters": [],
+        "macros": {},
+        "bib": [],
+        "docTitle": None,
+        "docAuthor": None,
+        "hasBlueprint": False,
+        "error": None,
+    }
+    try:
+        proj = workspace.project(name)
+        proj_root = workspace.root / proj.path
+        bp_dir = _find_blueprint_dir(proj_root, proj.blueprint_path, workspace.root)
+    except Exception:
+        bp_dir = None
+        proj_root = None  # type: ignore[assignment]
+    if not bp_dir or proj_root is None:
+        return {**empty, "error": f"No blueprint found for project {name!r}."}
+
+    entry = _detect_entry(proj_root, bp_dir)
+    if entry is None or not entry.is_file():
+        return {
+            **empty,
+            "error": (
+                f"No blueprint entry (content.tex / web.tex / print.tex) "
+                f"for project {name!r}."
+            ),
+        }
+
+    try:
+        expanded = read_blueprint(entry)
+    except OSError as exc:
+        return {**empty, "error": f"Failed to read blueprint entry for {name!r}: {exc}"}
+
+    chapters = _split_chapters(expanded)
+    if not chapters:
+        return {
+            **empty,
+            "error": f"Blueprint entry for project {name!r} expanded to no chapters.",
+        }
+
+    doc_title, doc_author = _doc_title_author(bp_dir)
+    macros = _discover_macros(bp_dir, expanded)
+    # discover_bib walks the blueprint tree for *.bib (same helper as hgraph site).
+    bib = discover_bib(str(entry))
+
+    # API shape: only slug/title/tex (starred is optional metadata the UI ignores).
+    public_chapters = [
+        {"slug": ch["slug"], "title": ch["title"], "tex": ch["tex"]}
+        for ch in chapters
+    ]
 
     return {
-        "chapters": chapters,
+        "chapters": public_chapters,
         "macros": macros,
+        "bib": bib,
         "docTitle": doc_title,
         "docAuthor": doc_author,
         "hasBlueprint": True,

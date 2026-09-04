@@ -80,6 +80,69 @@ def test_adapter_emits_horizon_dag_shape(project: Path) -> None:
     assert {n["id"] for n in again["nodes"]} == set(by_id)
 
 
+def test_adapter_does_not_publish_prose_or_proof_nodes(tmp_path: Path) -> None:
+    """Remarks/examples/proofs remain document content, not formalisation TODOs."""
+    bp = tmp_path / "blueprint" / "src"
+    bp.mkdir(parents=True)
+    (bp / "content.tex").write_text(r"""
+\chapter{Kinds}
+\begin{remark}\label{rem:context}This is explanatory prose.\end{remark}
+\begin{example}\label{ex:context}This is an example.\end{example}
+\begin{conjecture}\label{conj:context}This is not a formalisation obligation.\end{conjecture}
+\begin{claim}\label{claim:context}This is an informal claim.\end{claim}
+\begin{theorem}\label{thm:result}The actual formalisation target.\end{theorem}
+\begin{proof}\label{proof:result}The proof is document prose.\end{proof}
+""", "utf-8")
+    (tmp_path / "Main.lean").write_text("theorem result : True := by trivial\n", "utf-8")
+
+    dag = build_project_graph(tmp_path)
+    assert dag is not None
+    assert {node["id"] for node in dag["nodes"]} == {"thm:result"}
+
+    # The standalone hgraph dashboard uses the same published vocabulary and
+    # must not reintroduce stale prose nodes from the synced graph.
+    from archon_horizon.hgraph.dashboard import collect
+    from archon_horizon.hgraph import Graph
+
+    entries = collect(Graph.open(tmp_path))["entries"]
+    assert {entry["label"] for entry in entries} == {"thm:result"}
+
+
+def test_proof_metadata_cannot_create_a_statement_anchor() -> None:
+    """Equation/proof labels are not fallback labels for an unlabelled theorem."""
+    from archon_horizon.hgraph.sync import parse_blueprint
+
+    statements, _proofs = parse_blueprint(r"""
+\begin{theorem}
+  A statement without a formal anchor.
+  \begin{proof}
+    \label{eq:proof-only}
+    \lean{Demo.FakeProof}
+    \leanok
+    Proof text.
+  \end{proof}
+\end{theorem}
+""")
+    assert statements == []
+
+
+def test_proof_only_annotations_do_not_warn_as_unlabelled_statement() -> None:
+    from archon_horizon.hgraph.sync import _unlabeled_statement_warnings
+
+    text = r"""
+\begin{theorem}
+  A statement without a formal anchor.
+  \begin{proof}
+    \label{eq:proof-only}
+    \lean{Demo.FakeProof}
+    \leanok
+    Proof text.
+  \end{proof}
+\end{theorem}
+"""
+    assert _unlabeled_statement_warnings(text) == []
+
+
 def test_adapter_descendant_counts_match_graph(project: Path) -> None:
     """The adapter counts descendants from one in-memory edge snapshot (per-node
     graph.descendants() re-reads every edge file — O(V·E), minutes on a large

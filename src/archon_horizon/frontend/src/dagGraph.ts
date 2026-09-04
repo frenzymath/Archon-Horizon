@@ -1,4 +1,11 @@
 const DEF_KINDS = new Set(['definition', 'example', 'remark', 'notation', 'convention']);
+// These environments can be labelled and rendered in the document, but they
+// are not formalisation targets. Keep this filter here as a cache-safe guard:
+// an older published DAG may still contain prose nodes until it is resynced.
+export const NON_FORMALIZATION_KINDS = new Set([
+  'remark', 'notation', 'convention', 'example', 'conjecture', 'claim', 'fact',
+  'exercise', 'note', 'proof', 'proposition_',
+]);
 const LEVEL: Record<string, number> = { coarse: 0, medium: 1, fine: 2 };
 const DONE = new Set(['lean_ok', 'mathlib_ok']);
 
@@ -57,7 +64,12 @@ const dotLabel = (value: string) => {
 
 export function buildChapterGraph(rawNodes: any[], rawEdges: any[]): ChapterGraph {
   const unique = new Map<string, any>();
-  rawNodes.forEach((node) => { if (node?.id != null && !unique.has(String(node.id))) unique.set(String(node.id), node); });
+  rawNodes.forEach((node) => {
+    const kind = String(node?.type ?? node?.kind ?? '').toLowerCase();
+    if (node?.id != null && !NON_FORMALIZATION_KINDS.has(kind) && !unique.has(String(node.id))) {
+      unique.set(String(node.id), node);
+    }
+  });
   const ids = new Set(unique.keys());
   const edges: Array<[string, string]> = [];
   const edgeSeen = new Set<string>();

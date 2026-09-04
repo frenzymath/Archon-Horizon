@@ -50,3 +50,15 @@ class Workspace:
     def artifact_dir(self, *parts: str) -> Path:
         """A path under ``.archon-horizon/artifacts`` for run/task outputs."""
         return self.state_path.joinpath("artifacts", *parts)
+
+    @property
+    def tmp_path(self) -> Path:
+        """Workspace-local disposable scratch root for agent/tool temp files."""
+        return self.state_path / "tmp"
+
+    def session_tmp_dir(self, *, run_id: str | None = None,
+                        session: str | None = None, role: str = "agent") -> Path:
+        """Create and return an isolated scratch directory for an invocation."""
+        from .scratch import session_tmp_dir
+
+        return session_tmp_dir(self, run_id=run_id, session=session, role=role)

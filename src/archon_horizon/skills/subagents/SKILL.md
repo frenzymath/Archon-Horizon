@@ -26,6 +26,36 @@ holds workspace overrides/custom helpers only; built-ins such as `ground`,
 `janitor`, and `work-reviewer` still appear in the compiled native directory.
 Pick the right helper and scope from those generated descriptions.
 
+The roster is a set of options, not a hidden pipeline. The Horizon agent decides
+whether a helper is worth the time, may use a different tool or create a
+workspace-specific helper, and should say when a review was skipped. For
+source-backed mathematics, [[formalization-review]] supplies shared questions;
+`blueprint` is the writable scoped source/Lean owner and `work-reviewer` is the
+fresh progress-integrity reviewer (objective, diff, report, and history). Use
+`source-fidelity-reviewer`, `mathematical-correctness-reviewer`,
+`blueprint-integrity-reviewer`, `proof-load-bearing-reviewer`,
+`consumer-dependency-reviewer`, `api-composition-reviewer`,
+`verification-integrity-reviewer`, `graph-traceability-reviewer`,
+`provenance-integration-reviewer`, `strategy-reviewer`, or
+`run-health-reviewer` for their named lanes. Use `lean-quality-reviewer` for
+proof/code hygiene and downstream compatibility. Use
+`definition-quality-reviewer` when the lead doubts a **core definition**: it
+judges defs by how theorems/lemmas consume them and by Mathlib-shaped criteria
+(`definition-quality` skill), rather than only polishing consumer proofs. Use
+`honesty-reviewer` when a new certificate, target-shaped structure, completion
+claim, or repeated route needs an explicit anti-evasion audit: classify
+conditional versus proved producers, test vacuity/packaging, and compare the
+source-facing frontier across rounds. This is the quickest way to catch a
+compiling sequence that is merely renaming or wrapping the same gap. `ground`
+keeps the workspace-level view without duplicating their scoped audits. For less
+frequent claims, `external-boundary-reviewer`, `transcription-fidelity-reviewer`,
+`release-reproducibility-reviewer`, and `review-adjudicator` are available as
+focused opt-in profiles.
+
+`default_enabled` on a descriptor controls whether its native definition is
+compiled during workspace setup; it does not dispatch the helper or require a
+review. A compiled reviewer remains dormant until the Horizon agent chooses it.
+
 ## Dispatch
 
 Spawn a subagent **by name** through your engine's own native subagent
@@ -36,12 +66,29 @@ one scoped slice so the workspace scales to many projects.
 
 Delegation is part of the normal workflow, not an exceptional recovery path.
 For a session that touches more than one file, more than one proof obligation,
-or is expected to run longer than ten minutes, dispatch at least one bounded
-review/helper before the final report. On a multi-session task, dispatch
-`ground` before the terminal completion claim and `janitor` at the scheduled
-hygiene checkpoints. Use the engine's native `spawn_agent`/Task mechanism,
-wait for the helper to finish, and reconcile its report in your own result. If
-no suitable helper is available, state why delegation was skipped in the report.
+or is expected to run longer than ten minutes, consider dispatching at least one
+bounded review/helper before the final report when that would improve
+confidence. For a new certificate or target-shaped wrapper, prefer
+`honesty-reviewer`; for a repeated task or unchanged frontier, prefer it plus
+`strategy-reviewer`/`work-reviewer`. On a multi-session task, consider `ground`
+before the terminal completion claim and `janitor` at the scheduled hygiene
+checkpoints. Use the engine's native `spawn_agent`/Task mechanism, wait for a
+chosen helper to finish, and reconcile its report in your own result. These are
+advisory signals, not runtime requirements; if no review is useful or
+available, state why delegation was skipped in the report.
+
+The exception is a live collection-health warning called out by the `horizon`
+skill: use the targeted `janitor`/`ground` response, or record why it cannot be
+run. That operational safeguard does not imply that every task needs a semantic
+review helper.
+
+Every descriptor invocation receives an isolated `$ARCHON_HORIZON_TMP` with
+`TMPDIR`/`TMP`/`TEMP` pointed at it. Use that path for disposable downloads and
+probes, and move anything worth keeping into the report, an attempt artifact,
+or the ledger. The directory is normally removed when the helper exits. If a
+crash leaves stale trees, ask `janitor` to inspect `"$HORIZON_BIN" tmp clean
+--older-than-hours 24 --json`; cleanup must use the command's explicit
+`--apply`, which protects live runs.
 
 ## Read-only and write scope
 
@@ -51,6 +98,12 @@ A descriptor's `read_only: true` is compiled to real engine enforcement — Clau
 can still file issues/memory and write its report via the `horizon inbox` CLI;
 that is how read-only agents act. The descriptor's `write_domain` documents what
 a writer is expected to touch (Lean/blueprint/reference source).
+
+Writable helpers such as **`janitor`**, **`blueprint`**, and **`debug`** are
+intentionally **not** read-only: janitor may restructure Lean/blueprint trees and
+fix import paths; blueprint owns scoped `.tex`; debug may fix toolchain files.
+Reviewers stay read-only. Do not mark a writer `read_only: true` "to be safe" —
+that disables the layout and authoring work they exist to do.
 
 ## Model and effort — the Horizon agent owns the spend
 

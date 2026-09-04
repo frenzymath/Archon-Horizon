@@ -217,7 +217,7 @@ def test_init_scaffolds_minimal_state_dirs(tmp_path: Path) -> None:
     ws = tmp_path / "ws"
     assert _run(ws, "init", "--no-interactive") == 0
     state_dirs = sorted(p.name for p in (ws / ".archon-horizon").iterdir() if p.is_dir())
-    assert state_dirs == ["blueprints", "inbox", "roadmap", "runs", "subagents", "tasks", "tools", "vcs"]
+    assert state_dirs == ["blueprints", "inbox", "roadmap", "runs", "subagents", "tasks", "tmp", "tools", "vcs"]
     # Engine-native orientation files point every engine at the horizon skill.
     for name in ("CLAUDE.md", "AGENTS.md"):
         body = (ws / name).read_text("utf-8")

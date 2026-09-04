@@ -76,9 +76,26 @@ export const getTranscriptPage = (ref: string, before?: number, limit = 120) =>
   getJson<TranscriptPage>(transcriptPagePath(ref, before, limit));
 export const getReport = (ref: string) => getJson<{ markdown: string; recommendation?: string }>(reportPath(ref));
 
+export interface BibEntry {
+  key: string;
+  type?: string;
+  title?: string | null;
+  author?: string | null;
+  year?: string | null;
+  journal?: string | null;
+  booktitle?: string | null;
+  publisher?: string | null;
+  volume?: string | null;
+  number?: string | null;
+  pages?: string | null;
+  url?: string | null;
+}
+
 export interface BlueprintChaptersResponse {
   chapters: { slug: string; title: string; tex: string }[];
   macros?: Record<string, string>;
+  /** Parsed `.bib` entries for `\cite` / the bibliography pane. */
+  bib?: BibEntry[];
   docTitle?: string | null;
   docAuthor?: string | null;
   hasBlueprint: boolean;
@@ -115,6 +132,52 @@ export const getProjects = () =>
   getJson<{ projects: ProjectStat[] }>('/api/projects');
 export const getProjectMetrics = (project: string) =>
   getJson<ProjectMetrics>(`/api/project/metrics?project=${encodeURIComponent(project)}`);
+
+export interface BenchmarkHit {
+  line: number;
+  option: string;
+  value: number;
+  text: string;
+}
+export interface BenchmarkFile {
+  project: string;
+  path: string;
+  heartbeats: number;
+  hits: number;
+  options?: string[];
+  details?: BenchmarkHit[];
+}
+export interface BenchmarkProjectRollup {
+  project: string;
+  files: number;
+  heartbeats: number;
+  hits: number;
+}
+export interface BenchmarkResponse {
+  indicator: string;
+  options: string[];
+  min_heartbeats: number;
+  files: BenchmarkFile[];
+  projects: BenchmarkProjectRollup[];
+  total_files: number;
+  total_heartbeats: number;
+  total_hits: number;
+}
+export const getBenchmark = (opts?: {
+  project?: string;
+  minHeartbeats?: number;
+  limit?: number;
+  details?: boolean;
+}) => {
+  const q = new URLSearchParams();
+  if (opts?.project) q.set('project', opts.project);
+  if (opts?.minHeartbeats !== undefined) q.set('min_heartbeats', String(opts.minHeartbeats));
+  if (opts?.limit !== undefined) q.set('limit', String(opts.limit));
+  if (opts?.details) q.set('details', '1');
+  const qs = q.toString();
+  return getJson<BenchmarkResponse>(`/api/benchmark${qs ? `?${qs}` : ''}`);
+};
+
 export const getSourceFiles = (project: string) =>
   getJson<{ files: SourceFile[] }>(`/api/source?project=${encodeURIComponent(project)}`);
 export const getSourceFile = (project: string, path: string) =>

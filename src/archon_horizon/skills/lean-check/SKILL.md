@@ -47,6 +47,11 @@ specific elaboration/kernel question must be settled before continuing.
 - A `sorry` left in place is an open obligation, not a success. Do not hide a
   hard obligation behind a new `sorry` unless a hint explicitly allows it.
 
+Kernel/build evidence answers whether Lean accepts the checked target; it does
+not establish that a source-backed declaration has the intended meaning. Pair
+the verification lens with [[formalization-review]] when the task makes a
+mathematical correspondence or completeness claim.
+
 ## Fast LSP proving loop
 
 The `lean-lsp` MCP server gives sub-second feedback — far faster than a build

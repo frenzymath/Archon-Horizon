@@ -22,7 +22,14 @@ COUNTABLE_KINDS: frozenset[str] = frozenset(
 
 def is_countable(node: dict[str, Any]) -> bool:
     """True when a node is a formalisation obligation (not prose like a remark)."""
-    return str(node.get("type", "")).lower() in COUNTABLE_KINDS
+    # Published DAGs historically used both ``type`` and ``kind``.  Prefer a
+    # known value from either field so old cache files can be filtered without
+    # a resync; an unrecognised value is deliberately not guessed as a theorem.
+    for key in ("type", "kind", "content_type"):
+        value = str(node.get(key, "")).lower()
+        if value in COUNTABLE_KINDS:
+            return True
+    return False
 
 
 def find_cycle(dag: dict[str, Any]) -> list[str] | None:

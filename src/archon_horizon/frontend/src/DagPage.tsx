@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DagNetwork from './components/DagNetwork';
-import { buildBlueprintModel, TexFragment } from './components/BlueprintDoc';
+import { NON_FORMALIZATION_KINDS } from './dagGraph';
+import { bibMapFrom, buildBlueprintModel, TexFragment } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
 import { syncBlueprintDags, getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
 import { isStaticDashboard } from './staticMode';
@@ -76,6 +77,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   }, [project]);
   const macros = blueprintData?.macros ?? {};
   const labelMap = useMemo(() => buildBlueprintModel(blueprintData?.chapters ?? [], true).labels, [blueprintData]);
+  const bibMap = useMemo(() => bibMapFrom(blueprintData?.bib), [blueprintData]);
   // The full DAG (with node statements / proofs / Lean source) is fetched on
   // demand rather than ridden along in the 5s /api/state poll — that heavy text
   // is only needed here and on the Blueprint page.
@@ -115,7 +117,9 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   // while the full payload is loading.
   const dag: any = (project ? (fullDag ?? state.blueprints?.[project]) : null) ?? {};
   const dagSig = useMemo(() => JSON.stringify(dag?.nodes ?? []) + '|' + JSON.stringify(dag?.edges ?? []), [dag]);
-  const nodes: any[] = useMemo(() => dag.nodes ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nodes: any[] = useMemo(() => (dag.nodes ?? []).filter((n: any) => (
+    !NON_FORMALIZATION_KINDS.has(String(nodeType(n)).toLowerCase())
+  )), [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const edges: any[] = useMemo(() => dag.edges ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const meta = dag.meta ?? {};
 
@@ -370,7 +374,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                     <div className="card">
                       <div className="card-title">LaTeX statement</div>
                       <div className="latex-rendered">
-                        <TexFragment tex={node.statement} macros={macros} labels={labelMap} onNavigate={openBlueprintRef} />
+                        <TexFragment tex={node.statement} macros={macros} labels={labelMap} bib={bibMap} onNavigate={openBlueprintRef} />
                       </div>
                     </div>
                   )}
@@ -378,7 +382,7 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                     <div className="card">
                       <div className="card-title">LaTeX proof</div>
                       <div className="latex-rendered">
-                        <TexFragment tex={String(node.proof_tex).trim()} macros={macros} labels={labelMap} onNavigate={openBlueprintRef} />
+                        <TexFragment tex={String(node.proof_tex).trim()} macros={macros} labels={labelMap} bib={bibMap} onNavigate={openBlueprintRef} />
                       </div>
                     </div>
                   )}

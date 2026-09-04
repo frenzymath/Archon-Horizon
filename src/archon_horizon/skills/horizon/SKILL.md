@@ -53,17 +53,27 @@ project rather than at that root. The absolute path to this skill is
 `horizon` CLI (invoke it as `"$HORIZON_BIN" …`):
 
 - **Roadmap** — YOUR strategy sketch across *all* projects, kept as a nested
-  outline. `"$HORIZON_BIN" roadmap list` renders the indented tree with per-parent
-  progress (`active · 3/7 done`); `--focus <id>` shows one subtree, `--max-depth 0`
-  the top level only. Structure it: nest sub-goals with `--parent`, keep your
-  item's status/strategy current as you work. It doubles as the **project board**:
-  set `--owner <team>` (who holds it), `--milestone <label>` (a free grouping tag,
-  filter with `roadmap list --milestone <label>`), and pin concrete deliverables
-  with `--pin-commit <sha>`. Roadmap commands print a **warning**
-  when parent/child statuses disagree (all sub-items done but parent open, or a
-  done parent with open children) — nothing is auto-corrected; you decide whether
-  to fix it or leave it (it may be intentional). They also warn when too many
-  milestones claim simultaneous `active` focus.
+  outline. **You own it.** An empty roadmap is unfinished orientation, not a
+  green light to improvise only in Lean: draft the plan before (or as) you start
+  the first substantive proof. `"$HORIZON_BIN" roadmap list` renders the indented
+  tree with per-parent progress (`active · 3/7 done`); `--focus <id>` shows one
+  subtree, `--max-depth 0` the top level only. Structure it as you reason —
+  do not wait for a human to seed it, and do not only flip status on items that
+  already exist:
+  - **Create** missing goals/sub-goals: `roadmap add --id … --title … [--parent …]
+    [--depends-on …] [--milestone …] [--owner …]`.
+  - **Move / re-nest** when the route changes: `roadmap set <id> --parent <p>`
+    (or `--parent ''` to un-nest), `--depth N`, `--depends-on …`.
+  - **Retire stale plan**: `roadmap set <id> --status rejected` or
+    `roadmap remove <id>` (children un-nest by default; `--cascade` deletes them).
+  - **Rename** when an id no longer matches the math: `roadmap rename <old> <new>`
+    (rewrites parent/depends links).
+  - **Track deliverables**: `--pin-commit <sha>`, status/summary updates, and
+    link the running task with `"$HORIZON_BIN" task set "$ARCHON_HORIZON_TASK"
+    --roadmap-ref <id>`.
+  It doubles as the **project board** (`--owner`, `--milestone`, pin commits).
+  Commands warn when parent/child statuses disagree or too many milestones are
+  simultaneously `active` — nothing is auto-corrected; you decide.
 - **Tasks** — a specific piece of work, usually the one a human launched and is
   watching. `"$HORIZON_BIN" task …`. Task commands warn when the open queue grows
   beyond the advisory limit or a `running` status looks orphaned.
@@ -84,10 +94,20 @@ project rather than at that root. The absolute path to this skill is
   a participant and owns closure: after consuming the answer, add a concise
   conclusion if needed and archive the thread. Reply to human-started threads but
   leave their closure to the human unless asked otherwise (skill: `horizon-inbox`).
+- **Blueprint** — the mathematical route, not an optional illustration. **You
+  own it.** A missing `blueprint/` (or a title/skeleton with no statements,
+  incomplete proofs, or no `\uses` cone for this task) is unfinished
+  orientation, same as an empty roadmap: write a complete source-facing
+  chapter *before* (or in the same breath as) the first substantive Lean.
+  Keep it the live route as you work — split lemmas, drop abandoned paths,
+  note adaptations — so Lean implements `.tex` rather than inventing a
+  second path. Skill: `blueprint-conventions`. Delegate a scoped slice to
+  the writable **`blueprint`** helper when the chapter is large.
 - **Blueprint graph** — declaration dependencies and what's proved. `"$HORIZON_BIN" graph -p <project> …` (skill: `hgraph`).
   Each node is also an **hgraph** file with attached comments/reviews —
   `"$HORIZON_BIN" graph -p <project> frontier` ranks what to prove next, and node-scoped failure memory
-  goes on the node itself (skill: `hgraph`).
+  goes on the node itself (skill: `hgraph`). The frontier is only a plan once
+  the blueprint exists; do not treat an empty graph as permission to skip `.tex`.
 - **Memory** — durable facts/dead-ends live in the inbox: read with
   `"$HORIZON_BIN" inbox list --kind memory --json`, write with
   `"$HORIZON_BIN" inbox add --kind memory --to horizon --body …`.
@@ -109,8 +129,38 @@ The harness exports these to every session — read them instead of guessing:
 | `ARCHON_HORIZON_ROUND` / `ARCHON_HORIZON_ROUNDS` | which round this is (0-based) / the run's planned total |
 | `ARCHON_HORIZON_TASK` / `ARCHON_HORIZON_TASK_TITLE` | the task id / title (full body: `"$HORIZON_BIN" task show "$ARCHON_HORIZON_TASK" --json`) |
 | `ARCHON_HORIZON_PROJECTS` | comma-separated projects this task spans |
+| `ARCHON_HORIZON_TMP` | disposable per-session scratch directory; temp-aware tools are routed here instead of `/tmp` |
+| `ARCHON_HORIZON_TMP_ROOT` | workspace scratch root (`.archon-horizon/tmp/`) for safe stale cleanup |
 | `HORIZON_BIN`, `HORIZON_GIT` | absolute paths to the CLI and the ledger-git wrapper |
 | `HORIZON_LEDGER_GIT_DIR`, `HORIZON_LEDGER_WORK_TREE` | the workspace ledger repo + its work tree — `"$HORIZON_GIT" …` is shorthand for `git --git-dir "$HORIZON_LEDGER_GIT_DIR" --work-tree "$HORIZON_LEDGER_WORK_TREE" …` |
+
+## Disposable scratch (quota-safe)
+
+Use `$ARCHON_HORIZON_TMP` for downloads, generated source, extraction trees,
+large probes, and other files that do not belong in the project or the durable
+session artifact directory. Horizon sets `TMPDIR`, `TMP`, and `TEMP` to this
+per-session path before launching the engine, so Python, Lean tooling, and shell
+children that honor standard temporary-directory variables follow the same
+route. If an older parent session has not exported the variables yet, initialize
+the fallback explicitly before a large probe:
+
+```bash
+export ARCHON_HORIZON_TMP="${ARCHON_HORIZON_TMP:-$ARCHON_HORIZON_ROOT/.archon-horizon/tmp/${ARCHON_HORIZON_RUN:-adhoc}/${ARCHON_HORIZON_SESSION:-manual}}"
+mkdir -p "$ARCHON_HORIZON_TMP"
+export TMPDIR="$ARCHON_HORIZON_TMP" TMP="$ARCHON_HORIZON_TMP" TEMP="$ARCHON_HORIZON_TMP"
+```
+
+Do not put reports, evidence, rejected attempts, or source changes here:
+copy durable material into the session/report or the ledger before the session
+ends.
+
+The path is normally removed automatically after the invocation. If a process
+crashes or a manually-created scratch tree remains, inspect it with
+`"$HORIZON_BIN" tmp clean --older-than-hours 24 --json` and apply cleanup only
+with `--apply`; the command protects scratch belonging to live run markers.
+Never delete another run's active scratch directory by hand. At a janitor
+checkpoint (roughly every second session and before a final report), perform
+that dry-run check and apply it when the candidates are clearly stale.
 
 ## Pace yourself (usage & interruption risk)
 
@@ -136,11 +186,24 @@ uncommitted, may be lost when the session ends. Commit early and often (below).
 
 ## Pick the highest-value work
 
-Read the roadmap and the live Lean state, then commit to the most valuable next
-piece. A node being large, multi-session, or blocked on missing mathlib
-infrastructure is **not** a reason to skip it — start it, build the missing
-lemma/definition yourself as project-local infrastructure, and push it as far as
-you genuinely can. Prefer ambitious progress over defensive avoidance.
+Read the roadmap, the blueprint, and the live Lean state, then commit to the
+most valuable next piece. **If the roadmap is empty or silent on your task's
+objective, build it first** (or in the same breath as the first commit): a
+coarse nested outline of the source-facing frontier, the next few producers,
+and what is blocked/out of scope. **If the project has no blueprint, or only a
+minimal stub that cannot guide this objective, write a complete mathematical
+route first** (statements, complete proofs, `\uses`, cites) covering at least
+that same cone — Lean follows the blueprint, not the reverse. Strategy lives on
+the roadmap *and* the blueprint so the next session does not re-derive it from
+transcripts. Reshape both whenever the route pivots — add a missing
+prerequisite, move a sub-goal under a new parent, reject a dead branch, pin the
+commit that closed a node. Status-only updates on a frozen outline, or Lean that
+has drifted ahead of `.tex`, are not enough when the plan itself changed.
+
+A node being large, multi-session, or blocked on missing mathlib infrastructure
+is **not** a reason to skip it — start it, build the missing lemma/definition
+yourself as project-local infrastructure, and push it as far as you genuinely
+can. Prefer ambitious progress over defensive avoidance.
 
 If this session was launched on a specific task, make concrete progress on that
 task's REAL objective — don't preemptively pivot to easy unrelated wins because
@@ -153,7 +216,9 @@ change or blocker, not every action. You own the task's terminal status (skill:
 ## Fresh-context checkpoints
 
 The old Ground pass is no longer a second orchestrator role, but independent
-review is still part of convergence. Spawn the **`ground`** subagent at these
+review remains a useful convergence option. The following checkpoints are
+advisory signals: choose the helper and scope that fit the work, and do not treat
+them as a runtime gate. Consider spawning the **`ground`** subagent at these
 checkpoints:
 
 - before marking a multi-step task `done`;
@@ -164,16 +229,20 @@ checkpoints:
 Give it the task/project scope and ask it to inspect the actual ledger diff,
 blueprint graph, Lean state, roadmap, inbox, and reports with fresh context. It
 is read-only on source and reports issues/memory; reconcile its findings before
-continuing. Use **`work-reviewer`** for a narrow diff/proof audit and **`janitor`**
-when the main concern is workspace hygiene. A one-session task may skip the
-periodic checkpoint, but must still obtain a fresh-context review before a
-terminal `done` claim.
+continuing. Use **`work-reviewer`** for a progress-integrity audit of one task's
+objective, report, diff, and history; route mathematical/source, blueprint,
+verification, API, and architecture questions to their corresponding
+specialist reviewers. Use **`janitor`** when the main concern is workspace
+hygiene. A one-session task may skip the
+periodic checkpoint, and a fresh-context review before a terminal `done` claim
+is a useful confidence check when the scope warrants it.
 
-Schedule upkeep even when the last command did not print a warning. On a
-multi-session run, dispatch **`janitor` at the start of every second Horizon
-session** and before the final report; on a one-session task, dispatch it once
-before claiming completion if the run touched roadmap, task, or inbox state.
-Record the checkpoint in the report and wait for the helper before continuing.
+Consider upkeep even when the last command did not print a warning. On a
+multi-session run, the optional recommendation to dispatch **`janitor` at the
+start of every second Horizon session** and before the final report applies; on a
+one-session task, consider dispatching it once before claiming completion if the
+run touched roadmap, task, or inbox state. Record the checkpoint in the report
+and wait for a helper you chose before continuing.
 If `janitor` is unavailable, ask **`ground`** for the same hygiene inspection;
 Ground is read-only, so apply or explicitly record its findings yourself.
 
@@ -188,13 +257,16 @@ address it `--to human` when a human decision is needed. A warning that
 survives your session should be one you *chose* to leave, with a trace saying
 why.
 
-Collection-health warnings are a dispatch trigger, not background noise. When
-`inbox`, `roadmap`, or `task` reports an overloaded queue, stale running item,
-or status mismatch, pause the proof loop and spawn **`janitor`** with the
-workspace scope. Wait for it, reconcile its report, rerun the command, and
-record any warning that remains intentionally. Do this at most once for the
-same warning in a session; a persistent warning still needs a report or inbox
-issue rather than repeated no-op calls.
+Collection-health warnings are a dispatch trigger for operational hygiene, not
+background noise. When `inbox`, `roadmap`, or `task` reports an overloaded queue,
+stale running item, or status mismatch, pause the proof loop and dispatch
+**`janitor`** with the workspace scope (or use the `ground` fallback). Wait for
+the chosen helper,
+reconcile its report, rerun the command, and record any warning that remains
+intentionally. Do this at most once for the same warning in a session; a
+persistent warning still needs a report or inbox issue rather than repeated
+no-op calls. This targeted health response is separate from optional semantic
+review checkpoints.
 
 ## Do the work (Lean)
 
@@ -239,11 +311,64 @@ specific file, or every call site of a name you already have.
 - Use the **Lean LSP MCP** for tight proof feedback, then verify with the narrowest
   faithful `lake` / `lake env lean` check. Skill: `lean-check`.
 - Use the DAG to choose and scope work, not just to report it. Skill: `hgraph`.
-- When editing blueprint material, follow the house format. Skill: `blueprint-conventions`.
-  The blueprint is timeless mathematics, never a formalization journal. Put Lean
-  implementation notes, failed tactics, and declaration-specific progress on the
-  corresponding hgraph node with `graph add comment`; do not insert
-  "Formalization note" paragraphs into blueprint `.tex` files.
+- Maintain the blueprint as you formalize, not only when a `.tex` file is
+  already open. Skill: `blueprint-conventions`.
+  The blueprint is timeless mathematics, never a formalization journal, and it is
+  the **first source of truth** before Lean: complete proofs, the chosen route
+  only, bibliography + `\dcref`/`\source` with how the text adapts or differs
+  from references. Author it when missing or too thin; refactor it when strategy
+  changes; after each coherent Lean change that affects the math path, update the
+  corresponding nodes so `.tex` still describes what Lean implements.
+  Put Lean implementation notes, failed tactics, and declaration-specific
+  progress on the corresponding hgraph node with `graph add comment`; do not
+  insert "Formalization note" paragraphs into blueprint `.tex` files.
+- Write Lean in mathlib style (naming, module docs, tree layout). Skill:
+  `mathlib-conventions`. Rank costly files with
+  `"$HORIZON_BIN" benchmark [-p <project>] --json` (sum of `set_option`
+  heartbeat budgets). Prefer a clean **module restart** over layered patches
+  when the same blocker loops — skill: `restart-module`.
+- **Definitions are often the root cause.** When theorems/lemmas around an API
+  look suboptimal for mathematical reasons that should be easy, load
+  `definition-quality` and consider dispatching **`definition-quality-reviewer`**
+  with witness consumers: pain in consumers often means a bad underlying def
+  (needless `abbrev` layers, lost defeq, deep instances), not only a hard proof.
+
+## Source and semantic review (choose as needed)
+
+For a source-backed definition, theorem, or exported API, consider loading the
+`formalization-review` skill. It offers reusable questions about source shape,
+proxy versus intrinsic objects, bridge lemmas, hypotheses and edge cases,
+blueprint attachments, claim evidence, and API composition. Use `blueprint` to
+author an assigned slice; ask `source-fidelity-reviewer` or
+`blueprint-integrity-reviewer` for an independent scoped audit. Ask
+`work-reviewer` only for a fresh progress-integrity audit of the task diff and
+history. For architecture or dependency-route questions, use
+`strategy-reviewer` for the project/roadmap route and `api-composition-reviewer`
+for the public abstraction boundary. When proofs fight an encoding or several
+lemmas share the same packaging pain, use `definition-quality-reviewer` on the
+suspect defs and their consumers. For a new certificate/context package,
+target-shaped assumption, `\leanok` or completion claim, or a task whose first unmet producer
+has survived two rounds, run `honesty-reviewer` explicitly. If it is unavailable,
+record the concrete skip reason in the final epistemic checkpoint.
+It classifies proved versus conditional/imported versus empty or sorry-backed
+certificates and compares the source-facing frontier for loops. If the task has
+repeated wrappers or re-expressions, pair it with `strategy-reviewer` and record
+the decision rather than silently dispatching another local helper. This
+recommendation does not auto-dispatch a helper and does not replace your
+judgement about scope.
+
+As a rough risk signal: a tiny local edit may need no helper; a source-backed
+definition, public API, or changed `\leanok` claim is a good reason to consider
+the corresponding source, semantic, or blueprint-integrity reviewer; a task
+with repeated rounds or a completion claim is a good reason to consider
+`work-reviewer` and `honesty-reviewer`; a proof-heavy export or refactor may benefit from
+`lean-quality-reviewer`; a proof-heavy export that may rest on a bad core def may
+benefit from `definition-quality-reviewer`; a broad strategy/build or workspace
+claim may benefit from `ground`; and a primarily imported/conditional boundary,
+source transcription, release claim, or disputed high-severity finding may
+benefit from the corresponding specialist. A primarily mechanical inbox or
+documentation issue may fit `janitor`. Combine roles only when the extra context
+is worth the cost.
 
 ## Read the other projects
 
@@ -297,13 +422,18 @@ staging explicit files over `add -A`. Beyond commits:
   sentence or at most three bullets: conclusion, evidence, next action. Do not
   copy the report, commit summary, or thread history into them.
 
-- Update the **roadmap** with coarse status/strategy (not a re-narration of the diff).
+- Update the **roadmap** as a living plan: status, summary, nesting, depends-on,
+  add/remove/rename items when the strategy changed — not only when a pre-existing
+  row needs a status flip, and never a re-narration of the diff.
+- Keep the **blueprint** in the same commit cone as the Lean it describes:
+  new lemmas get nodes, abandoned paths leave `.tex`, `\uses`/`\lean` stay honest.
 - Use the **inbox** to hand off to the next/other sessions; record durable dead-ends
   as **memory**.
 
 Before your final report, do one boundary-maintenance pass. Re-read the task's
-`roadmap_refs` and `inbox_refs`; update each roadmap milestone whose status or
-strategy changed, add a concise mathematical comment for a key advance, and
+`roadmap_refs` and `inbox_refs` (create and link roadmap items if the task still
+has none and the work is multi-step). Update each milestone whose status or
+structure changed, add a concise mathematical comment for a key advance, and
 archive or complete open inbox items your work actually resolved. Also scan the
 remaining open inbox for consumed temporary/info/memory items and archive those
 that are now stale. Never archive a standing protection merely to make the list
@@ -348,17 +478,33 @@ dependencies, and checks that failed or were not run. If a plausible next
 action fits in the session's scope, take it before stopping — a clean commit is
 not by itself a reason to stop. Do not replay the chronological session log.
 
+For source-backed formalization, add a compact epistemic checkpoint to the same
+report (it is not needed for an ordinary tooling task):
+`Claim class: proved producer | conditional interface | imported boundary |
+empty/vacuous | axiom/sorry-backed | unverified`; `Frontier before/after:` the
+source-facing node and first unmet producer; `Consumer:` the intended downstream
+declaration/node; and `Evidence:` the exact target/build, transitive `#print axioms`,
+and source/graph status. State `honesty-reviewer: used` or `skipped — <reason>`
+when a certificate, completion claim, or repeated frontier triggered the lane.
+A conditional or imported class may be a useful handoff, but it must not be
+described as discharging the source theorem or justify a source-facing `\leanok`.
+
 ## Cleaning up the work (you decide, via subagents)
 
 There is no second orchestrator role running alongside you. *You* are the driver,
-and the **`ground`** subagent is the scheduled fresh-context checkpoint when the
-workspace or strategy needs an external view. Available helpers (see the
+and the **`ground`** subagent is an available fresh-context checkpoint when the
+workspace or strategy benefits from an external view. Available helpers (see the
 `subagents` skill):
 
-- **janitor** — workspace hygiene: roadmap/READMEs concise, inbox from overflowing.
+- **janitor** — workspace hygiene: roadmap/READMEs concise, inbox from overflowing,
+  **writable** Lean/blueprint layout moves and renames (not proof redesign).
 - **ground** — workspace-wide strategy, graph, ledger, and convergence review.
-- **work-reviewer** — fresh-context review of your last work; is it converging?
-- **blueprint** — Lean ↔ blueprint statement/`\uses` correctness for a scoped slice.
+- **work-reviewer** — progress-integrity review of one task; is the claimed work
+  real, task-scoped, and converging rather than looping?
+- **honesty-reviewer** — anti-evasion review of certificates, completion claims,
+  hidden assumptions, vacuity, and repeated unchanged frontiers.
+- **blueprint** — author or repair a scoped `.tex` slice so it is the live
+  route (complete proofs, `\uses`); flag Lean mismatches you do not own.
 - **reference-retriever**, **debug**, **page-transcriber** — as needed.
 
 Keep proving; delegate the upkeep.

@@ -9,6 +9,80 @@ minor releases; `horizon init --update` migrates a workspace's managed files.
 
 ## [Unreleased]
 
+- Skills now treat a **missing or stub blueprint** like an empty roadmap:
+  unfinished orientation. Horizon should author a complete source-facing
+  chapter (statements, proofs, `\uses`, cites) before or with the first
+  Lean, and keep `.tex` the live route as strategy changes.
+
+## [0.1.5] — 2026-09-04
+
+Formalization-quality skills and reviewers, a heartbeat benchmark, complete
+roadmap CLI mutations, and workspace-local session scratch.
+
+### Added
+
+- **Formalization quality program (AJCR lessons)** — blueprint-first complete
+  proofs with bibliography/`\dcref`/`\source` and explicit adaptation notes;
+  mathlib naming/docstrings/tree layout with leanprover-community guide links;
+  writable `janitor` for Lean/blueprint layout moves; `restart-module` skill for
+  backup-and-rewrite when layered debt or fix-loops dominate; lean-quality and
+  API composition guidance treat `set_option` heartbeats as blockers. Corpus
+  guidance lives in [`docs/design/formalization-review.md`](./design/formalization-review.md).
+- **`definition-quality` skill + `definition-quality-reviewer`** — Mathlib-based
+  criteria for good/bad definitions; detect suspects from how theorems/lemmas
+  consume them (shared consumer pain → definition root cause).
+- **`horizon benchmark`** (+ dashboard **Benchmark** view / `/api/benchmark`) —
+  rank Lean files by summed `set_option` heartbeat budgets so agents can find
+  costly modules.
+- **Roadmap CLI completeness** — `horizon roadmap show`, `rename`, fuller `set`
+  (`--project`, `--depends-on`, `--inbox-ref`, `--task-ref`), and `remove
+  --cascade` (default remove un-nests children and drops depends-on edges).
+  Skills (`horizon`, `horizon-start`, `strategy-convergence`) and the janitor
+  descriptor now treat an empty or frozen roadmap as unfinished strategy: agents
+  should add/move/delete/rename items as the long-term plan changes, not only
+  flip status on pre-seeded rows.
+- Focused advisory skills for review method, progress integrity, source
+  fidelity, semantic adversarial checks, blueprint integrity, proof load-bearing,
+  consumer dependencies, API composition, Lean quality, Mathlib orientation,
+  verification evidence, graph traceability, provenance isolation, strategy
+  convergence, run health, external boundaries, transcription fidelity, release
+  reproducibility, and review adjudication.
+- **`honesty` skill and read-only `honesty-reviewer`** — certificate taxonomy
+  (proved/conditional/imported/axiom-backed/empty/unverified),
+  hypothesis-packaging and vacuity probes, stale-evidence checks, and a
+  source-frontier test for repeated wrapper/re-expression churn.
+- **`source-discovery`** — a channel and provenance map for local references,
+  GitHub repository/review history, Mathlib source and PRs, Tau Ceti artifacts,
+  and Zulip discussions, including credential and access-boundary guidance.
+- Separate read-only reviewer descriptors for those lanes. The roster remains
+  optional: no automatic review stage or dispatch gate was added.
+- Workspace-local, per-session scratch under `.archon-horizon/tmp/`: agent
+  subprocesses receive `TMPDIR`/`TMP`/`TEMP` there, successful sessions reclaim
+  their scratch automatically, and `horizon tmp clean --apply` safely removes
+  stale leftovers while protecting live runs.
+
+### Changed
+
+- **`work-reviewer`** stays narrowly focused on honest progress, anti-loop
+  checks, and task/report/diff consistency; focused reviewers own the other
+  lanes.
+- **Ground** is an optional workspace-wide perspective the lead may choose, not
+  a scheduled second orchestrator.
+- **Logs run/session task chip** — the task link sits in the same meta-chip row
+  as time/usage (not as a separate trailing control); long task ids ellipsize
+  so they no longer shove the other tags around.
+- Stale-skill fallback prompt is bounded and no longer mandates helper
+  dispatch; headless Horizon asks for `honesty-reviewer` before new
+  certificate/`\leanok` claims or repeated frontier moves.
+
+### Fixed
+
+- **Blueprint textbook chapters** are served from `content.tex` the same way
+  hgraph does (include only reached chapters, strip preamble definitions,
+  harvest KaTeX macros from the whole tree).
+- Published DAG caches still using `kind`/`content_type` are filtered to
+  countable nodes so stale remarks cannot affect graph status.
+
 ## [0.1.4] — 2026-08-28
 
 ### Added
@@ -264,7 +338,8 @@ a **Ground agent** (blueprints, DAG, roadmap, reports, inboxes) and a
 - **Install / update.** `curl … | bash` installer (`install.sh`) and a
   `horizon update` self-update command.
 
-[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.2...v0.1.3
 [0.1.0]: https://github.com/frenzymath/Archon-Horizon/releases/tag/v0.1.0

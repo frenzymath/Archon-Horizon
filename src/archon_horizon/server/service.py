@@ -52,6 +52,7 @@ from archon_horizon.transcript.sink import (
 )
 from archon_horizon.transcript.subagents import materialize_subagent_sessions
 from archon_horizon.server.git_api import get_git_log, get_git_diff
+from archon_horizon.lean.benchmark import benchmark_workspace
 from archon_horizon.server.source_api import file_stats, list_lean_files, read_lean_file
 from archon_horizon.vcs.git import WorkspaceGit, git_available
 
@@ -766,6 +767,31 @@ class WorkspaceService:
             "loc_code": sum(f["loc_code"] for f in files),
             "sorries": sum(f["sorries"] for f in files),
         }
+
+    def lean_benchmark(
+        self,
+        *,
+        project: str | None = None,
+        min_heartbeats: int = 1,
+        limit: int | None = None,
+        include_details: bool = False,
+    ) -> dict[str, Any]:
+        """Rank Lean files by summed ``set_option`` heartbeat budgets."""
+        names = [project] if project else self._discover_projects()
+        roots: dict[str, Path] = {}
+        for name in names:
+            if not name:
+                continue
+            try:
+                roots[name] = self._project_path(name)
+            except KeyError:
+                continue
+        return benchmark_workspace(
+            roots,
+            min_heartbeats=min_heartbeats,
+            include_details=include_details,
+            limit=limit,
+        )
 
     def _harness_state(self) -> dict[str, Any]:
         return {
@@ -1842,7 +1868,7 @@ class WorkspaceService:
         """
         eps = [
             "/api/state", "/api/performance", "/api/blueprints", "/api/transcripts",
-            "/api/git/log", "/api/git/diff", "/api/projects",
+            "/api/git/log", "/api/git/diff", "/api/projects", "/api/benchmark",
         ]
         transcripts = self.transcripts()
         if session_refs is not None:
@@ -1909,6 +1935,7 @@ class WorkspaceService:
         for name in self._discover_projects():
             encoded_name = quote(name, safe='')
             eps.append(f"/api/project/metrics?project={encoded_name}")
+            eps.append(f"/api/benchmark?project={encoded_name}")
             eps.append(f"/api/blueprint/chapters?project={encoded_name}")
             # Full per-project DAG (heavy) — the Blueprint/DAG pages fetch this on
             # demand now that /api/state carries only light DAG nodes, so the
@@ -2023,6 +2050,24 @@ class WorkspaceService:
             if proj:
                 return self.project_metrics(proj)
             return {"name": "", "lean_files": 0, "loc": 0, "loc_code": 0, "sorries": 0}
+        if parsed.path == "/api/benchmark":
+            proj = (query.get("project") or [""])[0] or None
+            try:
+                min_hb = int((query.get("min_heartbeats") or ["1"])[0])
+            except ValueError:
+                min_hb = 1
+            try:
+                limit_raw = (query.get("limit") or [""])[0]
+                limit = int(limit_raw) if limit_raw else None
+            except ValueError:
+                limit = None
+            details = (query.get("details") or ["0"])[0] in ("1", "true", "yes")
+            return self.lean_benchmark(
+                project=proj,
+                min_heartbeats=max(0, min_hb),
+                limit=limit,
+                include_details=details,
+            )
         if parsed.path == "/api/project/history":
             proj = (query.get("project") or [""])[0]
             try:

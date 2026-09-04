@@ -1220,6 +1220,28 @@ button.danger { color: var(--red); }
 .project-picker-select select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 13px; }
 .project-picker-count { font-size: 11px; color: var(--text-muted); }
 
+/* Heartbeat benchmark view */
+.benchmark-toolbar { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.benchmark-details-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none; }
+.benchmark-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0 16px; }
+.benchmark-stat { min-width: 120px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); }
+.benchmark-stat-value { display: block; font-size: 18px; font-weight: 650; font-family: var(--font-mono); color: var(--text-primary); }
+.benchmark-stat-label { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.benchmark-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.benchmark-table th, .benchmark-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.benchmark-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); font-weight: 600; }
+.benchmark-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.benchmark-table .mono { font-family: var(--font-mono); font-size: 12px; }
+.benchmark-table tr.bench-hot td:nth-child(2) { color: var(--red); font-weight: 650; }
+.benchmark-table tr.bench-warm td:nth-child(2) { color: var(--orange); font-weight: 600; }
+.benchmark-table tr.bench-cool td:nth-child(2) { color: var(--text-secondary); }
+.benchmark-detail-row td { background: var(--bg-secondary); }
+.benchmark-hits { margin: 4px 0 8px 24px; padding: 0; color: var(--text-secondary); font-size: 12px; }
+.benchmark-hits li { margin: 2px 0; }
+button.linkish { background: none; border: none; padding: 0; color: var(--blue); cursor: pointer; font: inherit; }
+button.linkish:hover { text-decoration: underline; }
+.muted { color: var(--text-muted); }
+
 /* Lean source view */
 .lean-file-row { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 3px 8px; font-size: 12px; font-family: var(--font-mono);
   color: var(--text-secondary); background: none; border: none; cursor: pointer; border-radius: 4px; }
@@ -1371,16 +1393,59 @@ button.danger { color: var(--red); }
 
 /* ── Session tree (collapsible) ───────────────────────────────────── */
 .session-node { font-size: 12px; }
-.selectable-tree .session-line { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 5px; background: var(--bg-primary); border-left: 3.5px solid transparent; box-shadow: inset 0 0 0 1px var(--border); margin-bottom: 3px; transition: background 0.1s ease, box-shadow 0.1s ease; }
+.selectable-tree .session-line {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--bg-primary);
+  border-left: 3.5px solid transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  margin-bottom: 3px;
+  transition: background 0.1s ease, box-shadow 0.1s ease;
+  min-width: 0;
+}
 .selectable-tree .session-line:hover { background: var(--bg-tertiary); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .selectable-tree .session-line.active { background: #eff6ff; box-shadow: inset 0 0 0 1px #bfdbfe; }
 .selectable-tree .session-line.active .session-main strong { color: var(--blue); }
-.selectable-tree .session-main { flex: 1; min-width: 0; }
-.session-list button.session-main, .selectable-tree button.session-main { width: auto; flex: 1; display: flex; flex-direction: column; align-items: stretch; gap: 1px; min-width: 0; background: none; border: none; padding: 3px 2px; }
+.selectable-tree .session-main {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 3px 2px;
+}
+.session-list button.session-main {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 3px 2px;
+}
 .session-list button.session-main:hover { background: none; }
 .session-row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .session-row1 strong { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.session-row2 { display: flex; flex-wrap: wrap; gap: 4px; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; padding-left: 22px; }
+.session-row2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding-left: 22px;
+}
 .session-row2 .model-chip { color: #6d28d9; background: #f5f3ff; box-shadow: inset 0 0 0 1px #ddd6fe; text-transform: lowercase; letter-spacing: .2px; }
 .session-row2 .effort-chip { color: #b45309; background: #fffbeb; box-shadow: inset 0 0 0 1px #fde68a; text-transform: lowercase; letter-spacing: .2px; }
 .session-role { color: var(--text-muted); font-style: italic; font-size: 11px; }
@@ -1389,8 +1454,10 @@ button.danger { color: var(--red); }
 .meta-chip {
   display: inline-flex;
   align-items: center;
+  gap: 3px;
   width: fit-content;
   max-width: 100%;
+  min-width: 0;
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--bg-tertiary);
@@ -1403,8 +1470,26 @@ button.danger { color: var(--red); }
 }
 .meta-chip.muted { color: var(--text-muted); }
 .meta-chip.cost { color: #047857; background: #ecfdf5; box-shadow: inset 0 0 0 1px #a7f3d0; }
-.meta-chip.task-chip { color: #1d4ed8; background: #eff6ff; box-shadow: inset 0 0 0 1px #bfdbfe; text-decoration: none; font-weight: 650; }
+/* Task chips share the meta row; long ids ellipsize so time/usage stay visible. */
+.meta-chip.task-chip {
+  color: #1d4ed8;
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px #bfdbfe;
+  text-decoration: none;
+  font-weight: 650;
+  max-width: min(100%, 22ch);
+  overflow: hidden;
+}
 .meta-chip.task-chip:hover { color: #1e40af; background: #dbeafe; text-decoration: none; }
+.task-chip-label { flex: none; }
+.task-chip-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
 
 /* Role-coded left bar + logo, mirroring the inbox source bars, so each session
    row reads as ground / horizon / publish / subagent at a glance. */
@@ -1427,9 +1512,40 @@ button.danger { color: var(--red); }
 
 /* Run group (collapsible, shows just the run id by default) */
 .transcript-run-group { margin-bottom: 4px; }
-.run-header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; width: 100%; min-width: 0; padding: 6px 8px; font-size: 13px; border-radius: 6px; background: var(--bg-secondary); box-shadow: inset 0 0 0 1px var(--border); color: var(--text-primary); margin-bottom: 4px; transition: background 0.15s ease, box-shadow 0.15s ease; cursor: pointer; }
+.run-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+}
 .run-header:hover { background: var(--bg-tertiary); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .run-header:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--border-strong), 0 0 0 2px rgba(59, 130, 246, 0.22); }
+.run-header-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-width: 0;
+}
+.run-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 12rem;
+}
 .run-header strong { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-primary); }
 .run-header .session-tag { margin-left: 0; color: var(--text-muted); }
 .run-header .ev-caret { color: var(--text-muted); font-size: 10px; }

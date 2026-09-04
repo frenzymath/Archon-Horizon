@@ -52,6 +52,7 @@ def _item_dict(item: RoadmapItem) -> dict:
         "priority": item.priority,
         "depends_on": list(item.depends_on),
         "inbox_refs": list(item.inbox_refs),
+        "task_refs": list(item.task_refs),
         "scope": serde.to_jsonable(item.scope),
         "parent": item_parent(item),
         "depth": item_depth(item),
@@ -59,6 +60,38 @@ def _item_dict(item: RoadmapItem) -> dict:
         "milestone": item_milestone(item),
         "pinned_commits": list(item_pinned_commits(item)),
     }
+
+
+def _normalize_id_list(values: list[str] | None) -> list[str] | None:
+    """``None`` means untouched; otherwise de-dupe, strip, drop empties (order kept)."""
+    if values is None:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        for part in str(raw).split(","):
+            value = part.strip()
+            if value and value not in seen:
+                seen.add(value)
+                out.append(value)
+    return out
+
+
+def _rewrite_id_refs(items: list[RoadmapItem], old_id: str, new_id: str) -> list[RoadmapItem]:
+    """Rewrite parent / depends_on / nested metadata links that pointed at ``old_id``."""
+    rewritten: list[RoadmapItem] = []
+    for item in items:
+        meta = dict(item.metadata)
+        parent = str(meta.get("parent") or "").strip()
+        if parent == old_id:
+            meta["parent"] = new_id
+        depends = tuple(new_id if dep == old_id else dep for dep in item.depends_on)
+        rewritten.append(
+            dataclasses.replace(item, depends_on=depends, metadata=meta)
+            if depends != item.depends_on or meta != item.metadata
+            else item
+        )
+    return rewritten
 
 
 def _apply_board_meta(
@@ -200,6 +233,35 @@ def list_items(
     _warn_roadmap(items)
 
 
+@app.command("show")
+def show_item(
+    ctx: typer.Context,
+    item_id: str = typer.Argument(..., help="Roadmap item id."),
+    as_json: bool = _JSON,
+) -> None:
+    """Show one roadmap item in full (fields, hierarchy, board metadata)."""
+    store = _store(ctx)
+    items = store.load().items
+    item = next((it for it in items if it.id == item_id), None)
+    if item is None:
+        log.error(f"No roadmap item {item_id!r}.")
+        raise typer.Exit(1)
+    payload = _item_dict(item)
+    progress = subtree_progress(items)
+    if item_id in progress:
+        done, total = progress[item_id]
+        payload["subtree_done"] = done
+        payload["subtree_total"] = total
+    warnings = _roadmap_warnings(items)
+    if as_json:
+        emit_json({**payload, **({"warnings": warnings} if warnings else {})})
+        return
+    log.info(str(payload))
+    if item.summary:
+        log.panel(item.summary, title="summary")
+    _warn_roadmap(items)
+
+
 @app.command("set")
 def set_item(
     ctx: typer.Context,
@@ -214,12 +276,22 @@ def set_item(
     depth: int | None = typer.Option(None, "--depth", help="Indentation level when there is no --parent (0 = top level)."),
     owner: str | None = typer.Option(None, "--owner", help="Team/agent responsible; pass '' to clear."),
     milestone: str | None = typer.Option(None, "--milestone", help="Milestone label for grouping/filtering; pass '' to clear."),
+    project: list[str] | None = typer.Option(None, "--project", help="Replace the item's projects (repeatable; omit to leave unchanged)."),
+    depends_on: list[str] | None = typer.Option(None, "--depends-on", help="Replace depends_on ids (repeatable; pass '' alone to clear)."),
+    inbox_ref: list[str] | None = typer.Option(None, "--inbox-ref", help="Replace inbox_refs (repeatable; pass '' alone to clear)."),
+    task_ref: list[str] | None = typer.Option(None, "--task-ref", help="Replace task_refs (repeatable; pass '' alone to clear)."),
     pin_commit: list[str] = typer.Option((), "--pin-commit", help="Pin a commit SHA as a deliverable (repeatable)."),
     unpin_commit: list[str] = typer.Option((), "--unpin-commit", help="Remove a pinned commit SHA (repeatable)."),
     author: str | None = typer.Option(None, "--author", help="Who is making the change (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
-    """Update fields of an existing roadmap item."""
+    """Update fields of an existing roadmap item.
+
+    Nesting (``--parent`` / ``--depth``), board metadata (``--owner`` /
+    ``--milestone`` / pin commits), dependencies, projects, and refs are all
+    editable here so agents can reshape the long-term plan without hand-editing
+    YAML. Empty-string values clear optional fields (parent, owner, milestone,
+    depends-on, refs)."""
     store = _store(ctx)
     items = list(store.load().items)
     idx = next((n for n, it in enumerate(items) if it.id == item_id), None)
@@ -244,6 +316,29 @@ def set_item(
         changes["title"] = title
     if priority is not None:
         changes["priority"] = priority
+    projects = _normalize_id_list(project)
+    if projects is not None:
+        if not projects:
+            log.error("A roadmap item needs at least one --project.")
+            raise typer.Exit(1)
+        changes["projects"] = tuple(projects)
+        changes["scope"] = dataclasses.replace(item.scope, projects=tuple(projects))
+    depends = _normalize_id_list(depends_on)
+    if depends is not None:
+        unknown = [dep for dep in depends if dep != item_id and not any(it.id == dep for it in items)]
+        if unknown:
+            log.error(f"Unknown depends-on id(s): {', '.join(unknown)}.")
+            raise typer.Exit(1)
+        if item_id in depends:
+            log.error("An item cannot depend on itself.")
+            raise typer.Exit(1)
+        changes["depends_on"] = tuple(depends)
+    inbox_refs = _normalize_id_list(inbox_ref)
+    if inbox_refs is not None:
+        changes["inbox_refs"] = tuple(inbox_refs)
+    task_refs = _normalize_id_list(task_ref)
+    if task_refs is not None:
+        changes["task_refs"] = tuple(task_refs)
     if parent is not None or depth is not None:
         store.append_history(item_id, _history_entry(actor, "nested",
                              note=(f"parent={parent.strip() or 'none'}" if parent is not None else f"depth={depth}")))
@@ -254,7 +349,18 @@ def set_item(
         board_fields.append("milestone")
     if pin_commit or unpin_commit:
         board_fields.append("pinned_commits")
-    edited_fields = [f for f in changes if f != "status"] + board_fields
+    if projects is not None:
+        board_fields.append("projects")
+    if depends is not None:
+        board_fields.append("depends_on")
+    if inbox_refs is not None:
+        board_fields.append("inbox_refs")
+    if task_refs is not None:
+        board_fields.append("task_refs")
+    edited_fields: list[str] = []
+    for field in [*(f for f in changes if f not in {"status", "scope"}), *board_fields]:
+        if field not in edited_fields:
+            edited_fields.append(field)
     if edited_fields:
         store.append_history(item_id, _history_entry(actor, "edited",
                              note=", ".join(edited_fields) + " updated"))
@@ -270,7 +376,12 @@ def set_item(
     if as_json:
         emit_json({**_item_dict(items[idx]), "warnings": _roadmap_warnings(items)})
         return
-    log.success(f"Updated roadmap item {item_id} ({', '.join([*changes, *board_fields]) or 'no fields'}).")
+    touched: list[str] = []
+    for field in (*changes, *board_fields):
+        if field == "scope" or field in touched:
+            continue
+        touched.append(field)
+    log.success(f"Updated roadmap item {item_id} ({', '.join(touched) or 'no fields'}).")
     _warn_roadmap(items)
 
 
@@ -289,6 +400,9 @@ def add_item(
     depth: int | None = typer.Option(None, "--depth", help="Indentation level when there is no --parent (0 = top level)."),
     owner: str | None = typer.Option(None, "--owner", help="Team/agent responsible."),
     milestone: str | None = typer.Option(None, "--milestone", help="Milestone label for grouping/filtering."),
+    depends_on: list[str] = typer.Option((), "--depends-on", help="Prerequisite roadmap item id(s) (repeatable)."),
+    inbox_ref: list[str] = typer.Option((), "--inbox-ref", help="Linked inbox item id(s) (repeatable)."),
+    task_ref: list[str] = typer.Option((), "--task-ref", help="Linked task id(s) (repeatable)."),
     author: str | None = typer.Option(None, "--author", help="Who is adding the item (ground|horizon|human)."),
     as_json: bool = _JSON,
 ) -> None:
@@ -307,6 +421,11 @@ def add_item(
         raise typer.Exit(1)
     if parent and parent.strip():
         _validate_parent(items, item_id, parent.strip())
+    deps = _normalize_id_list(list(depends_on)) or []
+    unknown = [dep for dep in deps if not any(it.id == dep for it in items)]
+    if unknown:
+        log.error(f"Unknown depends-on id(s): {', '.join(unknown)}.")
+        raise typer.Exit(1)
     actor = author or agent_author("human")
     item = RoadmapItem(
         id=item_id,
@@ -316,6 +435,9 @@ def add_item(
         status=RoadmapStatus(status.lower()),
         kind=RoadmapKind(kind.lower()),
         priority=priority,
+        depends_on=tuple(deps),
+        inbox_refs=tuple(_normalize_id_list(list(inbox_ref)) or ()),
+        task_refs=tuple(_normalize_id_list(list(task_ref)) or ()),
         scope=ItemScope(projects=tuple(projects)),
         metadata=_apply_board_meta(
             _hierarchy_meta(
@@ -331,6 +453,46 @@ def add_item(
         emit_json({**_item_dict(item), "warnings": _roadmap_warnings(items)})
         return
     log.success(f"Added roadmap item {item_id}.")
+    _warn_roadmap(items)
+
+
+@app.command("rename")
+def rename_item(
+    ctx: typer.Context,
+    item_id: str = typer.Argument(..., help="Current roadmap item id."),
+    new_id: str = typer.Argument(..., help="New roadmap item id."),
+    author: str | None = typer.Option(None, "--author", help="Who is renaming (ground|horizon|human)."),
+    as_json: bool = _JSON,
+) -> None:
+    """Rename a roadmap item id and rewrite parent/depends_on links that pointed at it."""
+    new_id = new_id.strip()
+    if not new_id:
+        log.error("New id must be non-empty.")
+        raise typer.Exit(1)
+    store = _store(ctx)
+    items = list(store.load().items)
+    idx = next((n for n, it in enumerate(items) if it.id == item_id), None)
+    if idx is None:
+        log.error(f"No roadmap item {item_id!r}.")
+        raise typer.Exit(1)
+    if any(it.id == new_id for it in items):
+        log.error(f"Roadmap item {new_id!r} already exists.")
+        raise typer.Exit(1)
+    actor = author or agent_author() or items[idx].metadata.get("author")
+    old = items[idx]
+    items[idx] = dataclasses.replace(
+        old,
+        id=new_id,
+        metadata={**old.metadata, "updated_at": utc_now().isoformat()},
+    )
+    items = _rewrite_id_refs(items, item_id, new_id)
+    _save(store, tuple(items))
+    store.append_history(new_id, _history_entry(actor, "renamed", before=item_id, after=new_id))
+    if as_json:
+        renamed = next(it for it in items if it.id == new_id)
+        emit_json({**_item_dict(renamed), "renamed_from": item_id, "warnings": _roadmap_warnings(items)})
+        return
+    log.success(f"Renamed roadmap item {item_id} → {new_id}.")
     _warn_roadmap(items)
 
 
@@ -366,13 +528,50 @@ def comment_item(
 def remove_item(
     ctx: typer.Context,
     item_id: str = typer.Argument(..., help="Roadmap item id to remove."),
+    cascade: bool = typer.Option(
+        False,
+        "--cascade",
+        help="Also remove direct children nested under this item (parent=item_id).",
+    ),
+    author: str | None = typer.Option(None, "--author", help="Who is removing (ground|horizon|human)."),
+    as_json: bool = _JSON,
 ) -> None:
-    """Remove a roadmap item."""
+    """Remove a roadmap item.
+
+    By default, children that nested under the removed id are un-nested (parent
+    cleared) rather than deleted, and ``depends_on`` entries pointing at it are
+    dropped. Pass ``--cascade`` to delete direct children as well."""
     store = _store(ctx)
-    items = [it for it in store.load().items if it.id != item_id]
-    if len(items) == len(store.load().items):
+    loaded = list(store.load().items)
+    if not any(it.id == item_id for it in loaded):
         log.error(f"No roadmap item {item_id!r}.")
         raise typer.Exit(1)
-    _save(store, tuple(items))
-    log.success(f"Removed roadmap item {item_id}.")
-    _warn_roadmap(items)
+    actor = author or agent_author() or "human"
+    drop = {item_id}
+    if cascade:
+        drop.update(it.id for it in loaded if item_parent(it) == item_id)
+    kept: list[RoadmapItem] = []
+    for it in loaded:
+        if it.id in drop:
+            continue
+        meta = dict(it.metadata)
+        if str(meta.get("parent") or "").strip() == item_id:
+            meta.pop("parent", None)
+            meta["updated_at"] = utc_now().isoformat()
+        depends = tuple(dep for dep in it.depends_on if dep not in drop)
+        kept.append(
+            dataclasses.replace(it, depends_on=depends, metadata=meta)
+            if depends != it.depends_on or meta != it.metadata
+            else it
+        )
+    _save(store, tuple(kept))
+    store.append_history(
+        item_id,
+        _history_entry(actor, "deleted", note="cascade" if cascade and len(drop) > 1 else "removed"),
+    )
+    if as_json:
+        emit_json({"removed": sorted(drop), "warnings": _roadmap_warnings(kept)})
+        return
+    removed = ", ".join(sorted(drop))
+    log.success(f"Removed roadmap item{'s' if len(drop) > 1 else ''} {removed}.")
+    _warn_roadmap(kept)

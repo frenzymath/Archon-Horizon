@@ -13,6 +13,8 @@ import re
 import sys
 from pathlib import Path
 
+from archon_horizon.blueprint.checks import is_countable
+
 from .graph import Graph
 from .sync import DISPLAY_ENVS, load_config, parse_document, read_blueprint
 
@@ -59,7 +61,8 @@ def _entry(n, formalizes, deps, nodes, g) -> dict:
              "file": nodes[l].meta.get("file"), "code": _clip(nodes[l].content)}
             for l in formalizes.get(n.id, []) if l in nodes]
     dep = [{"id": t, "title": nodes[t].title, "label": nodes[t].meta.get("label"), "type": ty}
-           for t, ty in deps.get(n.id, []) if t in nodes]
+           for t, ty in deps.get(n.id, [])
+           if t in nodes and is_countable({"type": nodes[t].meta.get("content_type")})]
     reviews, comments = g.attachments(n.id, "review"), g.attachments(n.id, "comment")
     last = reviews[-1] if reviews else None
     return {
@@ -252,7 +255,9 @@ def collect(g: Graph, *, title: str = "Blueprint") -> dict:
     nodes, formalizes, deps = _index(g)
     order = {n.id: n.meta.get("order") for n in nodes.values()}
     entries = [_entry(n, formalizes, deps, nodes, g)
-               for n in nodes.values() if n.meta.get("generated") == "blueprint"]
+               for n in nodes.values()
+               if n.meta.get("generated") == "blueprint"
+               and is_countable({"type": n.meta.get("content_type")})]
     # document order first (sync stamps `order` on every blueprint node);
     # alphabetical is only the fallback for hand-added nodes without one
     entries.sort(key=lambda e: (e.get("chapter") or "",
@@ -406,8 +411,12 @@ def build_document(g: Graph, blueprint: str | Path, *, title: str) -> dict:
     """The full blueprint document, numbered, + a by-id map of enriched statements,
     a label→number cross-reference table, and a statement→chapter location map."""
     nodes, formalizes, deps = _index(g)
-    entries = {n.meta.get("label"): _entry(n, formalizes, deps, nodes, g)
-               for n in nodes.values() if n.meta.get("generated") == "blueprint"}
+    entries = {
+        n.meta.get("label"): _entry(n, formalizes, deps, nodes, g)
+        for n in nodes.values()
+        if n.meta.get("generated") == "blueprint"
+        and is_countable({"type": n.meta.get("content_type")})
+    }
     # Assign Horizon's group plus upstream's level stubs before snapshotting enrich.
     _assign_groups_levels(list(entries.values()))
     chapters = parse_document(read_blueprint(blueprint))

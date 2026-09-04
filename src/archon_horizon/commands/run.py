@@ -281,6 +281,7 @@ class RunCommand:
         from archon_horizon.config.loader import build_stores
         from archon_horizon.core.clock import utc_now
         from archon_horizon.core.events import Event
+        from archon_horizon.core.scratch import remove_session_tmp, scratch_environment
         from archon_horizon.harnesses.command import _horizon_bin
         from archon_horizon.vcs.git import WorkspaceGit, install_ledger_git_wrapper
         from archon_horizon.vcs.integration import (
@@ -394,7 +395,17 @@ class RunCommand:
 
         # A generic engine has no parseable session file, so just hand over the TTY.
         if launch.engine == "generic":
-            run_interactive(launch, interactive_cwd)
+            scratch_dir, scratch_env = scratch_environment(
+                workspace,
+                run_id=self.run_id or "interactive",
+                session="interactive",
+                role=role,
+            )
+            launch = dataclasses.replace(launch, env={**launch.env, **scratch_env})
+            try:
+                run_interactive(launch, interactive_cwd)
+            finally:
+                remove_session_tmp(scratch_dir)
             return
 
         if resumed_run_id is not None:
@@ -454,8 +465,15 @@ class RunCommand:
             },
         ))
 
+        scratch_dir, scratch_env = scratch_environment(
+            workspace,
+            run_id=runlog.id,
+            session=session.name,
+            role=role,
+        )
         session_env = {
             **launch.env,
+            **scratch_env,
             "ARCHON_HORIZON_ROOT": str(workspace.root.resolve()),
             "ARCHON_HORIZON_SKILL": str(
                 (workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
@@ -550,6 +568,7 @@ class RunCommand:
                         )
         finally:
             clear_process_marker(runlog.path)
+            remove_session_tmp(scratch_dir)
 
         agent_head = ledger.current_sha()
         candidate_shas = ledger.commit_shas_between(session_base_sha, agent_head)

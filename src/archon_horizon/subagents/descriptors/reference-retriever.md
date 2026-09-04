@@ -25,6 +25,13 @@ TeX/LaTeX when available and keep the PDF. When a blueprint needs a PDF-only
 page range, build a page-level TeX corpus so the blueprint can cite it with
 `\source{...}`.
 
+Load `source-discovery` before searching outside the local references library.
+It covers GitHub repository history and reviews, upstream Mathlib material,
+Tau Ceti review artifacts, and Zulip context. Use those channels to locate or
+clarify a source, then preserve a stable locator and retrieve the authoritative
+artifact. Maintainer discussions and review comments are context, not proof;
+never promote an unmerged proposal or inaccessible message into a source claim.
+
 ## What your directive gives you
 
 Work from whatever is provided: topic, theorem number, arXiv ID, DOI, title,

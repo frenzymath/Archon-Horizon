@@ -47,12 +47,18 @@ The **Horizon Agent** acts as the dedicated autonomous formalization engine. Gra
 - Respecting standing protections (soft freezes) established by helpers or human supervisors.
 
 ### Ground Helper
-The read-only **Ground** helper is dispatched by Horizon before terminal task
-completion, after long stretches of work, and after strategy pivots. It rebuilds
-context from the ledger diff, reports, roadmap, inbox, graph, and Lean state and
-answers whether the workspace is converging. It files concise issues or memory
-items but does not edit source or mark tasks done. `work-reviewer` handles a
-narrow proof/diff audit; `janitor` handles documentation and inbox hygiene.
+The read-only **Ground** helper is an optional perspective that Horizon can use
+before terminal task completion, after long stretches of work, or after strategy
+pivots. It rebuilds context from the ledger diff, reports, roadmap, inbox, graph,
+and Lean state and answers whether the workspace is converging. It files concise
+issues or memory items but does not edit source or mark tasks done.
+`work-reviewer` handles a narrow progress-integrity audit; dedicated read-only
+reviewers handle honesty/anti-evasion (weak or empty certificates, hidden
+assumptions, and repeated frontier churn), source fidelity, mathematical correctness, blueprint/graph
+traceability, proof load-bearing, API composition, verification evidence,
+consumer routes, provenance, strategy, and run health. `janitor` handles
+documentation and inbox hygiene. No runtime gate requires any helper: the lead
+agent chooses the scope and depth of review.
 
 ---
 
@@ -109,9 +115,10 @@ Archon Horizon decouples high-level orchestration from the underlying LLM execut
 ## 5. Native Subagents & Skills
 
 When a workspace is initialized or updated (`horizon init --update`, and again at the start of every run), Horizon compiles agent descriptors into native engine structures. The descriptors are provisioned by [`commands/subagent.py`](../../src/archon_horizon/commands/subagent.py) and [`commands/skills.py`](../../src/archon_horizon/commands/skills.py) during [`horizon init`](../../src/archon_horizon/commands/init.py), compiled per-engine by [`subagents/compile.py`](../../src/archon_horizon/subagents/compile.py), and MCP wiring lives in [`config/mcp.py`](../../src/archon_horizon/config/mcp.py):
-- **Subagents** (both engines): Specialized roles such as `ground`, `work-reviewer`, and `blueprint` are compiled to workspace-local `.claude/agents/<name>.md` (Claude) and `.codex/agents/<name>.toml` (Codex). Read-only is engine-enforced (Claude `disallowedTools`; Codex `sandbox_mode = "read-only"`).
+- **Subagents** (both engines): Specialized roles such as `ground`, `work-reviewer`, `blueprint`, and the focused read-only reviewers are compiled to workspace-local `.claude/agents/<name>.md` (Claude) and `.codex/agents/<name>.toml` (Codex). Read-only is engine-enforced (Claude `disallowedTools`; Codex `sandbox_mode = "read-only"`).
 - **Model ownership:** descriptors do not pin a model, tier, or effort. Helpers inherit the parent by default; Horizon chooses a lighter capable model for mechanical work or the same/high-effort model for mathematical review through the engine's native dispatch mechanism.
-- **Skills**: Modular capability guides are provisioned under `.claude/skills/<name>/SKILL.md`. **Claude Code** auto-discovers them. **Codex** has no such discovery, so Horizon inlines a skills index (names, descriptions, and the absolute `SKILL.md` paths to read on demand) into each compiled Codex agent.
+- **Skills**: Modular capability guides are provisioned under `.claude/skills/<name>/SKILL.md`. **Claude Code** auto-discovers them. **Codex** has no such discovery, so Horizon inlines a skills index (names, descriptions, and the absolute `SKILL.md` paths to read on demand) into each compiled Codex agent. The `formalization-review` skill routes to focused honesty/anti-evasion, source, semantic, proof, blueprint, API, verification, provenance, strategy, and run-health packs; it does not add an automatic review stage.
+- **Review profiles**: Less frequent source-boundary, transcription, release-reproducibility, and disputed-finding adjudication profiles are also available; the lead dispatches them only when the claim warrants their cost.
 
 Claude reports child events inline. Headless Codex instead writes every native
 child to its own rollout file, so [`CodexHarness`](../../src/archon_horizon/harnesses/codex.py)

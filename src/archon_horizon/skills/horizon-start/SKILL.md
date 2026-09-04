@@ -68,7 +68,13 @@ of the run.* Nobody handed you anything **in this run** — but the workspace is
 almost never greenfield. Earlier runs live under `.archon-horizon/runs/`; the
 roadmap, the inbox and the ledger carry their conclusions. Skim the roadmap and
 recent ledger history before deciding a strategy that a previous run already
-tried and rejected.
+tried and rejected. If `roadmap list` is empty (or has no item covering this
+task's objective), **draft the strategy outline before deep proof work** —
+`roadmap add` nested goals for the source-facing frontier and the next producers,
+then `task set … --roadmap-ref` so later sessions inherit the plan. If the
+task's project has **no blueprint, or only a stub**, author a complete
+source-facing chapter in the same orientation pass (skill:
+`blueprint-conventions`) rather than starting Lean against an empty graph.
 
 **`ARCHON_HORIZON_RUN` is unset** → *not launched by the orchestrator* (an
 interactive or hand-driven session). No run context exists to reconstruct;
