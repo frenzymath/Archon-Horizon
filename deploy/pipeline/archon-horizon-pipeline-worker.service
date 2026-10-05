@@ -1,0 +1,22 @@
+[Unit]
+Description=Archon Horizon Pipeline Worker
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/archon-horizon-pipeline
+Environment=TMPDIR=%h/.local/share/archon-horizon-pipeline/tmp
+ExecStart=%h/.local/share/archon-horizon/venv/bin/horizon-pipeline worker --worker-config %h/.config/archon-horizon-pipeline/worker.json
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=120s
+KillMode=mixed
+UMask=0077
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=1000
+
+[Install]
+WantedBy=default.target

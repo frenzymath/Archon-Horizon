@@ -17,11 +17,23 @@ jobs:
   tests:
     name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: horizon_test
+          POSTGRES_PASSWORD: horizon_test_ci
+          POSTGRES_DB: horizon_pipeline_test
+        ports:
+          - 5432:5432
+        options: >-
+          --label archon-horizon.scope=pipeline-development
+          --health-cmd "pg_isready -U horizon_test -d horizon_pipeline_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
     strategy:
       fail-fast: false
       matrix:
-        # The floor declared by requires-python, plus the version the demo
-        # workflow builds with.
+        # The supported Python floor and the package build version.
         python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +49,10 @@ jobs:
         run: python scripts/version.py --check
 
       - name: Run tests
+        env:
+          HORIZON_NO_VERSION_CHECK: '1'
+          HORIZON_PIPELINE_TEST_URL: postgresql+psycopg://horizon_test:horizon_test_ci@127.0.0.1:5432/horizon_pipeline_test
+          HORIZON_PIPELINE_BACKUP_TEST_CONTAINER: ${{ job.services.postgres.id }}
         run: python -B -m pytest -q
 
   frontend:
@@ -65,8 +81,18 @@ jobs:
       - name: Build
         run: npm --prefix src/archon_horizon/frontend run build
 
+      - name: Test
+        run: npm --prefix src/archon_horizon/frontend test
+
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+        working-directory: src/archon_horizon/frontend
+
+      - name: Test pipeline dashboard
+        run: npm --prefix src/archon_horizon/frontend run test:pipeline
+
   package:
-    name: wheel contents
+    name: distribution contents
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -96,3 +122,6 @@ jobs:
 
       - name: Assert the wheel ships data files and no node_modules
         run: python scripts/check_wheel.py
+
+      - name: Assert the source archive ships rebuild inputs and no local state
+        run: python scripts/check_sdist.py

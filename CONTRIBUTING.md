@@ -1,153 +1,79 @@
 # Contributing to Archon Horizon
 
-Thanks for your interest in improving Archon Horizon. This guide is mostly about
-**how to write code that fits the project**, the conventions the existing code
-follows. Process (versioning,
-releases, issues) is at the end.
+Read [AGENTS.md](AGENTS.md) and [architecture](docs/architecture.md). The runtime
+is `src/archon_horizon/pipeline`; all CLI entrypoints invoke that implementation.
 
-## Development setup
+## Setup And Checks
 
-```bash
-git clone https://github.com/frenzymath/Archon-Horizon.git
-cd Archon-Horizon
-python -m pip install -e ".[dev]"     # requires-python >= 3.11
-```
+Use Python 3.11 or newer and Node.js 20:
 
-Run the tests (no install needed — `pyproject.toml` sets `pythonpath = ["src"]`):
-
-```bash
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[dev]'
+npm --prefix src/archon_horizon/frontend ci
+mkdir -p "$HOME/.horizon/development-tmp"
+export TMPDIR="$HOME/.horizon/development-tmp"
 python -B -m pytest -q
+python scripts/version.py --check
+npm --prefix src/archon_horizon/frontend run typecheck
+npm --prefix src/archon_horizon/frontend test
+npm --prefix src/archon_horizon/frontend run build
+npm --prefix src/archon_horizon/frontend run test:pipeline
 ```
 
-Tests are smoke/contract style under [`tests/`](./tests); add one next to the
-behavior you change. A change should keep the whole suite green.
+Run checks in the foreground and wait for completion. Install the browser once
+with `npx playwright install chromium` in the frontend directory. Browser fixtures
+use isolated data; inspect a fixture before pointing it at a real service.
 
-Enable the versioned git hooks once per clone:
+Set `HORIZON_PIPELINE_TEST_URL` to a disposable PostgreSQL database for database
+and HTTP tests. They create/drop random schemas. Never use the operator database.
+CI provides PostgreSQL 17. Backup tests additionally require
+`HORIZON_PIPELINE_BACKUP_TEST_CONTAINER` naming a disposable container labelled
+`archon-horizon.scope=pipeline-development`.
 
-```bash
-git config core.hooksPath .githooks
-```
+## Layout
 
-The `commit-msg` hook strips AI-assistant attribution (`Co-authored-by:` trailers
-naming Claude/Anthropic, "Generated with Claude Code" lines) so it never lands in
-history.
+| Path | Responsibility |
+| --- | --- |
+| `src/archon_horizon/pipeline/cli.py` | Operator and dispatched-agent commands |
+| `src/archon_horizon/pipeline/` | API, domain services, PostgreSQL, scheduler, integrations |
+| `src/archon_horizon/pipeline/worker/` | Provider execution, local journals, publication, sandbox and builds |
+| `src/archon_horizon/pipeline/skills/` | Bundled skills grouped into operations, Lean, and review procedures |
+| `src/archon_horizon/pipeline/subagents/` | Implementation, research, validation, planning and reviewer descriptors |
+| `src/archon_horizon/pipeline/migrations/` | Required Alembic schema history for current databases |
+| `src/archon_horizon/search/` | Lean index and standalone workspace search MCP |
+| `src/archon_horizon/frontend/` | Current React dashboard and tests |
+| `deploy/pipeline/` | Service and explicit configuration examples |
+| `scripts/` | Version and distribution validation |
 
----
+Preserve operator data and unrelated working changes. Keep credentials, provider
+homes, journals, databases, caches, and release artifacts outside source control.
 
-## Code conventions
+## Changes
 
-### Layering
+Use typed request contracts and revision-checked domain services. Keep queue
+claims and state changes transactional. Retries must reconcile the same intent;
+an uncertain network outcome is not proof an operation failed. API startup checks
+the database revision; apply schema changes only through the explicit `migrate`
+command. Never rewrite applied migration history.
 
-The dependency direction is one-way: **`core` → stores/inboxes/harnesses →
-commands → `cli`**. Nothing lower reaches up.
+Workers must remain usable with `[pipeline-worker]` alone. Do not import server
+or search dependencies in worker startup. Use structured provider streams and
+retain unknown usage as unknown. Keep browser reads cancellable, bounded and
+cached, and preserve drafts on refresh or revision conflicts.
 
-- **`cli.py`** owns the Typer app and command *registration* only — no behavior.
-- **`commands/<name>.py`** owns that command's CLI options and delegates to a
-  small command class (e.g. `RunCommand`) or a library service. Keep argument
-  parsing out of the library layer.
-- **`core/`** holds pure contracts (dataclasses, enums, domain logic) with **no
-  I/O**. Anything that touches disk, the network, git, or a subprocess lives in
-  `store/`, `inboxes/`, `harnesses/`, `vcs/`, or a command module — never in
-  `core/`. If you're tempted to `open()` a file in `core/`, it belongs elsewhere.
+Skills use `metadata.category` (`operations`, `lean`, `review`, or `custom`).
+Bundles expose grouped `SKILLS.md` and `SUBAGENTS.md` indexes; agents read
+relevant bodies on demand. Specialist descriptors include skill references and
+live under their category in `pipeline/subagents/`; their names do not create
+execution roles, functions or provider-native agent types.
+`skill_source_root` supplies operator additions. Reviewer source descriptions
+live under `pipeline/subagents/reviewers/`; the same loader
+feeds presets and prompts. Existing project descriptors are revisioned records,
+edited in the dashboard or API. Source edits do not overwrite them or an existing
+session's pinned bundle. See [reviewer workflow](docs/pipeline-reviewers.md).
 
-### CLI output & the `--json` contract
-
-- **Every command supports `--json`** and emits *pure* JSON on stdout; all human
-  chrome (the banner, progress, tables) goes to stderr. The root callback routes
-  logging to stderr when `--json` is set — see `cli.py`.
-- **Never `print()` to stdout** in a command path. Use `archon_horizon.log` for
-  human output and `emit_json(...)` (in `commands/shared.py`) for machine output.
-- Commands read the workspace root from `ctx.obj["root"]`; don't re-resolve it.
-
-### Types & dataclasses
-
-- Start every module with `from __future__ import annotations`.
-- Model contracts and config as **frozen, slotted dataclasses**
-  (`@dataclass(frozen=True, slots=True)`) — see `config/schema.py`,
-  `core/`. Parse external/YAML data through a classmethod (`from_raw`) that
-  validates and applies defaults, so the rest of the code sees typed objects.
-- Prefer explicit types over `Any`; `tuple[...]` for immutable sequences on
-  contracts.
-
-### Defensive by default; never crash a run
-
-- **Parsers degrade, they don't raise.** A line that doesn't match a known shape
-  yields nothing rather than throwing (`transcript/parsers.py`), so an engine
-  version bump degrades gracefully. Per-engine format knowledge lives *only* in
-  the parsers — don't leak it elsewhere.
-- **Optional/best-effort steps are wrapped** so they can't abort a run: subagent
-  compilation, transcript ingestion, and log materialization catch their own
-  exceptions and emit an `ERROR` event or `log.warn` instead of propagating (see
-  `harnesses/command.py`, `commands/run.py`).
-- **Degrade when a tool is absent** rather than failing hard: `git_available()`
-  is `False` but constructors still build; a missing engine binary becomes a
-  clear `HarnessResult(ok=False, ...)`, not a traceback.
-- Classify failures you can act on (rate limit vs. usage limit vs. genuine
-  error) and retry only the transient ones — see the retry/classification in
-  `harnesses/command.py`.
-
-### The engine seam
-
-Engines plug in behind the `Harness` ABC (`harnesses/base.py`). **Adding an
-engine is a new argv + a new parser, not a new code path.** Keep engine-specific
-details confined to: the argv/env builder (`config/harnesses.py`), the native
-log parser (`transcript/parsers.py`), and the per-engine descriptor compiler
-(`subagents/compile.py`). Orchestration stays engine-agnostic.
-
-### Managed files: marker-guarded & idempotent
-
-Files Horizon writes into a workspace (skills, native subagents, MCP config, git
-excludes) are **regenerated on every run / `horizon init --reinit`**, so they
-self-heal — but they must **never silently clobber a user's edits**. Follow the
-existing patterns:
-
-- Write only files carrying our generated-marker; leave a hand-authored file with
-  the same name alone (`_write_if_ours` in `subagents/compile.py`).
-- On reinit, preserve local content and prompt before overwriting where relevant
-  (`_sync_managed_file` in `commands/init.py`).
-- Make the operation idempotent: re-running produces the same result and repairs
-  drift (e.g. `_ensure_repo_hygiene` rewrites git excludes/hooks each init).
-
-### Version control model
-
-Horizon keeps history **out-of-tree** and never creates a `.git` at a workspace
-or project root. Excludes live in each git dir's `info/exclude` (not a
-`.gitignore`); new repos are pinned to the `main` branch **at creation only** and
-a user's manual branch switch is respected (nothing checks out/resets/pushes).
-Keep this model intact — see `vcs/git.py`.
-
-### Comments & docstrings
-
-Match the surrounding density, which is high and explains the **why**, not the
-what. Module docstrings state the design intent; inline comments justify a
-non-obvious decision (a workaround, an ordering constraint, a footgun avoided).
-If a reviewer would ask "why is this here?", answer it in a comment.
-
-### Backward compatibility
-
-While `0.x`, keep changes backward-compatible where you can. If a change alters
-an on-disk format, make `horizon init --reinit` migrate it and note it in
-`docs/CHANGELOG.md`. General, modular `class`-based structure is preferred over
-one-off scripts.
-
----
-
-## Versioning & releases
-
-- The authoritative version is `archon_horizon.__version__`
-  (`src/archon_horizon/__init__.py`); `pyproject.toml` reads it dynamically.
-  Run `python scripts/version.py X.Y.Z` for a release bump: it synchronizes the
-  README badge, dashboard package/lock metadata, and demo workspace stamp. Run
-  `python scripts/version.py --check` to detect drift.
-- Semantic Versioning; while `0.x`, minor releases may change on-disk formats
-  (document migrations in `docs/CHANGELOG.md`).
-- To cut a release: run the version script, move `docs/CHANGELOG.md` `[Unreleased]`
-  entries under a dated heading, run the tests, then commit and tag `vX.Y.Z`.
-  `install.sh` pulls the `main` tarball, so a
-  release is live on `main` immediately; the tag is for provenance.
-
-## Reporting issues
-
-Open an issue at <https://github.com/frenzymath/Archon-Horizon/issues> with your
-`horizon --version`, the command you ran, and the relevant `--json` output or
-logs.
+Build the frontend before producing wheels/source archives, then run
+`scripts/check_wheel.py` and `scripts/check_sdist.py`. Use a clean build directory
+so removed source files cannot survive as stale package artifacts.

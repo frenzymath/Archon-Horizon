@@ -14,14 +14,12 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "version.py"
 def _fixture(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "src/archon_horizon/frontend").mkdir(parents=True)
-    (root / "demo/.archon-horizon").mkdir(parents=True)
     (root / "src/archon_horizon/__init__.py").write_text('__version__ = "0.1.0"\n', "utf-8")
     (root / "README.md").write_text("![Version](https://img.shields.io/badge/version-0.1.0-blue)\n", "utf-8")
     package = {"name": "dashboard", "version": "0.1.0"}
     lock = {"version": "0.1.0", "packages": {"": {"name": "dashboard", "version": "0.1.0"}}}
     (root / "src/archon_horizon/frontend/package.json").write_text(json.dumps(package), "utf-8")
     (root / "src/archon_horizon/frontend/package-lock.json").write_text(json.dumps(lock), "utf-8")
-    (root / "demo/.archon-horizon/version").write_text("0.1.0\n", "utf-8")
     return root
 
 
@@ -45,7 +43,8 @@ def test_set_version_updates_every_surface(tmp_path: Path) -> None:
 
 def test_check_reports_drift(tmp_path: Path) -> None:
     root = _fixture(tmp_path)
-    (root / "demo/.archon-horizon/version").write_text("9.9.9\n", "utf-8")
+    path = root / "src/archon_horizon/frontend/package.json"
+    path.write_text(json.dumps({"name": "dashboard", "version": "9.9.9"}), "utf-8")
     result = _run(root, "--check")
     assert result.returncode == 1
-    assert "demo workspace: 9.9.9" in result.stderr
+    assert "frontend package: 9.9.9" in result.stderr

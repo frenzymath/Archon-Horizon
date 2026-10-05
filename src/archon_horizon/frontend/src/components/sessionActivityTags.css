@@ -1,0 +1,11 @@
+.platform-session-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
+.platform-session-tag { display: inline-flex; align-items: center; gap: 4px; min-height: 23px; max-width: 100%; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--platform-accent, #337c6a) 28%, #dce5df); border-radius: 999px; background: color-mix(in srgb, var(--platform-accent, #337c6a) 8%, #fff); color: var(--platform-accent-text, #18734b); font-size: 10px; font-weight: 600; line-height: 1.4; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.platform-session-tag svg { flex: 0 0 auto; }
+.platform-session-tag:hover, .platform-session-tag:focus { color: #0b665d; text-decoration: underline; }
+.platform-session-tag.live { background: #e8f7ee; border-color: #b7e0c6; color: #14653f; }
+.platform-session-live { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
+.platform-session-live .activity-document-reference { max-width: min(280px, 100%); }
+.platform-node-list-row > .platform-session-tags { flex: 0 1 auto; min-width: 0; }
+.platform-record-dates .platform-session-tags, .platform-document-dates .platform-session-tags { display: inline-flex; margin: 0; }
+.formalization-dag-sessions { margin: 10px 0 14px; }
+.formalization-dag-sessions:empty { display: none; margin: 0; }

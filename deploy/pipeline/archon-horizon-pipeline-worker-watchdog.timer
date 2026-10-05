@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Archon Horizon worker progress every minute
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+Unit=archon-horizon-pipeline-worker-watchdog.service
+
+[Install]
+WantedBy=timers.target

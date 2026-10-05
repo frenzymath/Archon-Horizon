@@ -2,10 +2,12 @@ let worker: Worker | null = null;
 let workerFailed = false;
 let sequence = 0;
 const pending = new Map<number, { resolve: (svg: string) => void; reject: (error: Error) => void }>();
+const inFlight = new Map<string, Promise<string>>();
 const cache = new Map<string, string>();
 const CACHE_MAX = 200;
 
 function remember(dot: string, svg: string): string {
+  cache.delete(dot);
   if (cache.size >= CACHE_MAX) {
     const oldest = cache.keys().next().value;
     if (oldest !== undefined) cache.delete(oldest);
@@ -42,36 +44,26 @@ function graphvizWorker(): Worker | null {
   return worker;
 }
 
+let mainThreadInstance: ReturnType<typeof import('@viz-js/viz')['instance']> | undefined;
 async function layoutOnMainThread(dot: string): Promise<string> {
-  const { instance } = await import('@viz-js/viz');
-  const viz = await instance();
+  mainThreadInstance ??= import('@viz-js/viz').then(({ instance }) => instance());
+  const viz = await mainThreadInstance;
   return remember(dot, viz.renderString(dot, { format: 'svg' }));
 }
 
 export function layoutDot(dot: string): Promise<string> {
   const hit = cache.get(dot);
   if (hit) return Promise.resolve(hit);
+  const active = inFlight.get(dot);
+  if (active) return active;
   const activeWorker = graphvizWorker();
-  if (!activeWorker) return layoutOnMainThread(dot);
-  return new Promise<string>((resolve, reject) => {
+  const layout = !activeWorker ? layoutOnMainThread(dot) : new Promise<string>((resolve, reject) => {
     const id = ++sequence;
     pending.set(id, { resolve: (svg) => resolve(remember(dot, svg)), reject });
-    activeWorker.postMessage({ id, dot });
+    try { activeWorker.postMessage({ id, dot }); }
+    catch (error) { pending.delete(id); reject(error); }
   }).catch((error) => workerFailed ? layoutOnMainThread(dot) : Promise.reject(error));
-}
-
-let prefetchToken = 0;
-export function prefetchLayouts(dots: string[]): void {
-  const token = ++prefetchToken;
-  const queue = dots.filter((dot) => !cache.has(dot));
-  const later = (callback: () => void) => typeof requestIdleCallback === 'function'
-    ? requestIdleCallback(callback, { timeout: 4000 })
-    : window.setTimeout(callback, 300);
-  const next = () => {
-    if (token !== prefetchToken) return;
-    const dot = queue.shift();
-    if (!dot) return;
-    layoutDot(dot).catch(() => {}).finally(() => later(next));
-  };
-  later(next);
+  const result = layout.finally(() => inFlight.delete(dot));
+  inFlight.set(dot, result);
+  return result;
 }

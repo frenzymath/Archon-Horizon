@@ -5,14 +5,267 @@ All notable changes to Archon Horizon are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is `0`, the API and on-disk formats may change between
-minor releases; `horizon init --update` migrates a workspace's managed files.
+minor releases. See the [pipeline setup guide](pipeline-setup.md) for current
+service configuration and catalog updates.
 
 ## [Unreleased]
 
-- Skills now treat a **missing or stub blueprint** like an empty roadmap:
-  unfinished orientation. Horizon should author a complete source-facing
-  chapter (statements, proofs, `\uses`, cites) before or with the first
-  Lean, and keep `.tex` the live route as strategy changes.
+### Pipeline redesign
+
+- `horizon`, `horizon-pipeline`, and `python -m archon_horizon` now enter the
+  same PostgreSQL control plane. The former SQLite control plane, its CLI
+  commands, and `/api/v2` endpoints are removed; the current API is `/api/v3`
+  and the dashboard is served at `/pipeline`.
+- Existing 0.1.5 data is not converted by the new Alembic migrations. Prepare
+  a separate installation and PostgreSQL database, review its configuration,
+  then run the explicit `migrate` command. See [setup](pipeline-setup.md).
+- Missions now form a revision-checked ownership tree, while mathematical
+  dependencies remain in the roadmap graph. Runs use durable assignments,
+  retained obligations and provider context, leased executions, and a root
+  maintainer that closes each phase. Preprocessing, formalization, and
+  postprocessing share the same scheduling and review machinery.
+- Workers journal uncertain API requests and Git publications for recovery.
+  The dashboard provides phase-aware projects, missions, activity, roadmap
+  progress, administration, and Forgejo/Zulip integrations. Installation
+  extras separate control-plane, worker, client, and search dependencies.
+- Release wheels include the built dashboard, grouped skills, reviewer and
+  specialist descriptions, and migration history. Source distributions retain
+  the frontend build inputs and development checks.
+
+### Earlier development notes
+
+The notes below record intermediate work since 0.1.5. Some describe the
+superseded SQLite platform or `/api/v2` behavior; the pipeline redesign above
+and the current guides define the shipped interfaces.
+
+- Host storage admission measures 10 GiB / 10% headroom against the user or
+  group quota when one is set, not against the larger tmpfs or backing
+  filesystem. Quota-limited `/tmp` with remaining space no longer marks the
+  host unavailable or blocks new workers.
+
+- Maintainer review treats a `formally_proved` parent whose `children` are
+  still informal as stale graph: cascade bounded prerequisite updates into
+  the same PR rather than merging an inverted DAG.
+
+- Workspace and graph Forgejo issues are worker-accessible
+  (`GET`/`POST`/`PATCH /api/v2/forge/issues`). SessionStart briefings list
+  open tickets so collaborators and maintainers can raise a lease before a
+  larger change and close completed hygiene without a periodic scan. Zulip
+  remains live discussion; theorem gaps stay on the graph.
+
+- Packaged `horizon-efficiency` skill: filter context with `ls`/`rg`/`git
+  log` instead of dumping threads or trees; use LSP before Lake; skip
+  re-checking already labeled or extra-library evidence; do not weaken
+  hypotheses for short-term progress; treat Zulip as targeted `@` mentions
+  (humans via `@**Name**`, workers via `[@label](...horizon-mention=1)`),
+  not a session log. Collaborator and maintainer profiles load it with
+  `horizon-start`.
+
+- Project-library PRs are legacy. Skills and prompts no longer ask agents to
+  create or review `library-{project}` contributions; Lean is published in the
+  shared workspace. Startup no longer auto-provisions a library repository,
+  `POST /api/v2/projects/{project}/library` refuses new creation, and
+  briefings/maintenance no longer scan or count library PRs. SessionStart hooks
+  and the Activity dashboard rewrite leftover launch snapshots that still said
+  `N Library PRs open` / `N awaiting review` onto the live DAG counts. The
+  SessionStart briefing is injected once at a cold session start; resume,
+  compact, and recovered-thread relaunches skip it. Existing
+  forge library repositories are left in place.
+
+- Ready graph PRs automatically queue one maintainer child in their
+  owning live run, sharing its session budget, allocation, and cancellation.
+  A live maintenance queue and PR lifecycle notices keep newly ready work from
+  being abandoned; the maintainer stop gate rechecks that queue. The public
+  profile is now `horizon-maintainer` (`reviewer` remains a compatibility alias),
+  with a dedicated graph maintenance skill. Managed PR creation and
+  periodic discovery now enforce repository and wait-state labels, request the
+  `horizon-maintainer` reviewer, reject merges while awaiting the author, and
+  replace stale wait labels with a terminal label after merge or closure.
+
+- Missions can pin nodes that exist only in graph pull requests through
+  `metadata.node_attempts`. Open, closed, rejected, superseded, and merged PR
+  versions remain addressable without becoming canonical DAG state; worker
+  startup includes the proposed node document, and
+  `horizon node show PROJECT NODE --pull N` reads it directly. New graph PRs
+  receive a concise purpose and changed-node/impact body instead of being
+  created without a description.
+
+- Prompt runs now use explicit `horizon-collaborator` and
+  `horizon-maintainer` Markdown profiles, independent of specialty templates and
+  harness selection. Runs default to collaborator credentials; collaborators
+  can queue scoped maintenance batches, and maintainers can return implementation
+  work to collaborators without changing the caller's credential. Each session
+  starts with a live briefing of global running/queued work, eligible slots,
+  open Library/DAG PRs, and review wait states. Managed prompt reports use an
+  exact five-section checklist and a durable stop gate; an incomplete mission
+  or unused capacity continues scheduling, and a pending live audit cannot race
+  a terminal report outcome.
+
+- A node is one Markdown file (`node.md`) with Git-like history stored in
+  SQLite. Object IDs are the SHA-1 Git would assign to a repository that
+  contains only that file: blob of the UTF-8 bytes, a one-entry tree
+  (`100644 node.md`), and commits whose `tree` is that tree. `HEAD` is
+  `refs/heads/main`; open PRs are `refs/pull/{n}/head`. Collaborators propose
+  node creation, node edits, and DAG wiring in atomic, multi-node graph pull
+  requests. Maintainers can auditably amend a changeset before merge, and PR
+  impact reports identify affected dependants, missing nodes, and cycles.
+  Simultaneous progress `labels` replace the exclusive node `stage`; legacy
+  stages migrate on write, and synthetic warning revisions are no longer
+  created. The dashboard node page
+  shows the accepted Markdown, child nodes, and PRs. Forgejo links are
+  relative to the dashboard host and open the node's `node.md`. Selecting a
+  PR renders the node as if that change were accepted.
+  Published Lean lives in the shared workspace; a historical
+  `library-{project}` Forge repository may still exist.
+
+- The dashboard no longer polls compact state, missions, or Activity.
+  Those views load on open or on **Refresh**. Compact `/api/v2/state`
+  is view-scoped (`projects`, `hosts`, `activity`) so unused catalogs,
+  Markdown bodies, and graph activity stay off the wire. Objective and
+  mission lists omit document bodies until an item is opened. Node
+  listings omit live-run attachments unless `include_activity=true`.
+  Markdown skips KaTeX unless the page contains math, and DAG math
+  labels render for the selected node only. Node directory search still
+  pages from SQLite.
+
+- Node directory search and pagination read a SQLite current-claim index
+  (title/label/id/tags plus dependency edges) instead of materializing the
+  compact graph projection. Statement bodies are still excluded from search.
+
+- Control-plane Python modules live under semantic packages in
+  `src/archon_horizon/platform/` (`graph`, `control`, `api`, `scheduler`,
+  `hosts`, `integrations`, `workers`). Public names on
+  `archon_horizon.platform` are unchanged. Import modules from the new
+  packages (`archon_horizon.platform.api.http`, and so on). Reinstall
+  managed Forge Lean-metrics hooks after upgrade so they invoke
+  `python -m archon_horizon.platform.integrations.forge_metrics`.
+
+- Remote Tailscale Serve access is no longer treated as the loopback
+  maintainer console. Serve identity and forwarded headers require a
+  Horizon account even when the TCP peer is `127.0.0.1`. The live
+  dashboard proxy forwards Host and Tailscale headers to the API and
+  does not answer `/api/v2/state` from its local read replica.
+
+- Single-machine initialization is non-interactive. `horizon init` writes
+  API, local user, and worker profiles without prompting; flags override
+  bind, port, workers, forge, and Tailscale. Loopback dashboard access is
+  the builtin maintainer console. Remote access uses Horizon accounts
+  (hashed passwords, viewer/operator/maintainer roles, optional hashed API
+  keys). New signups start as viewers. Managed Forge and Zulip identities
+  are created per account and never shown as API keys. Each Forge user is
+  added to project organizations on `horizon-viewers`, `horizon-operators`,
+  or `horizon-maintainers` according to the Horizon role.
+
+- Lean search splits Mathlib, published workspace, and extra libraries.
+  Informal Mathlib uses the LSP `lean_leansearch` tool; type-shaped Mathlib uses
+  `lean_loogle`. Published project Lean is indexed from the forge default branch
+  (`GET /api/v2/projects/{project}/search`). Agents can add search-only clones
+  (`POST /api/v2/search/libraries` with name, git URL, and commit) and query
+  them without compiling. Maintainers can remove a clone with
+  `DELETE /api/v2/search/libraries/{name}`. The dashboard Search tab exposes
+  the same workspace and pool queries, plus library add/remove. Local
+  `lean_search` / `horizon search` still cover the worker checkout, including
+  module headers. Text and header ranking use bm25s (NumPy/SciPy) and persist
+  the inverted index next to the declaration cache. Name search uses an
+  exact/prefix index (no subsequence ranking). Type patterns bind `?a`/`_` to
+  one identifier or bracket group. Cold index builds extract Lean files in
+  parallel. Search API calls and LeanSearch / Loogle MCP queries appear on the
+  session Activity timeline. Indexes are complementary to walking the actual
+  trees: agents should still `ls`/`rg` workspace, Library, graph, Mathlib, and
+  extra-library checkouts, and may inspect public repositories and pull
+  requests. An empty query is not evidence that a listed source is empty.
+
+- Zulip topic titles expose a leading status emoji (`💬` open, `⚠️` waiting,
+  `📣` operator, `✅` resolved, `💾` memory, `🔧` infrastructure, `🚫` stuck).
+  `GET /api/v2/zulip/topics` accepts `status` and `emoji` filters and returns
+  `status`, `mark`, and `title` on each topic. `horizon zulip topics` lists
+  them; `horizon zulip prefix-topics` adds the channel default to unmarked
+  titles. Queue planners rank `mission_candidates` by priority then depth and
+  inspect waiting/open/stuck/operator titles before dispatch.
+
+- Graph node guidance requires semantic kebab-case labels, short mathematical
+  titles, informal descriptions in textbook prose, and a `## References`
+  section with a fenced BibTeX entry plus the source theorem number or
+  section and page. Workers must not prefix `lem-`/`thm-`/`def-` or encode
+  Lean types and implementation adjectives in the label, title, or informal
+  body.
+
+- Harness configuration refreshes register profiles without forcing a full
+  scheduler pass for each host. The background scheduler admits queued work
+  using the updated profiles while existing worker processes continue.
+
+- Agent writing guidance favors concise Markdown bullets, descriptive links,
+  node/proof references, and textbook-style mathematical statements. Zulip posts
+  use linked attribution footers and readable session mentions, preserving
+  legacy provenance and notification detection. Reports link recognized proof,
+  session, and workspace commit IDs without rewriting their stored content.
+
+- Lean source metrics retain library LOC and lexical axiom counts when a file
+  has an unterminated comment or literal. Commit checks and reports show the
+  exact source warning and location; malformed files cannot produce a clean
+  axiom check or suppress metrics for the rest of MorganTianLib.
+
+- Quota/balance and startup failures retry the same session behind shared
+  cooldowns; unchanged queue planners back off. Worker startup errors retain
+  redacted phase/traceback diagnostics. Full disks and transient database errors
+  preserve completed worker results and command receipts without rerunning work.
+  Cleanup protects preparing sessions, ignored sources and operator locks, and
+  telemetry errors no longer terminate the harness. API retries respect
+  Retry-After and preserve admission keys after malformed responses. Disconnected
+  response clients close cleanly without repeated error writes and tracebacks.
+  Background notification fetches back off during API or local inbox outages.
+  Assignment prompts bound legacy mission excerpts and omit the full catalog
+  index; worker guidance prioritizes Lean repair loops and concise linked evidence.
+
+- Coordination notices are batched after 20 tools and two minutes, with up to
+  three titles and prompt delivery for direct mentions. Worker Zulip posts
+  notify mentioned sessions; mission events notify their parent/coordinator.
+  Run frontiers suggest deep unfinished missions and expose node overlaps.
+  Workers use short missions, optional history lookups and sustained Lean
+  edit/check/fix work; default prompts omit ancestor mission documents.
+  Infrastructure retries also refresh the assignment. Active DAG nodes retain
+  their proof-status fill with a pink outline, and queue planners do not mark
+  their root mission's nodes active.
+
+- Node and DAG views show clickable tags for a node's running sessions and for
+  the sessions that created or last updated the node or its proofs.
+
+- Activity occupancy uses running sessions against the run's available
+  scheduler slots, queued counts, and clickable running-session chips. The
+  agent tree can show only live sessions, mission tags include involved nodes
+  with the same hover previews as objectives, and a successful
+  coordination-hook delivery is recorded as a notification event.
+
+- The missions dashboard pages compact summaries instead of waiting for every
+  mission body, and shows a loading state until the first page arrives.
+
+- Release archives include the frontend rebuild inputs, tests, documentation,
+  and notices, with CI checks excluding local configuration and operator state.
+  Development instructions use the tracked skill catalog; `CLAUDE.md` imports
+  `AGENTS.md`. Obsolete frontend screens and empty legacy directories have been
+  removed, and pytest discovery is scoped to Horizon's own tests.
+
+- Zulip uses one channel per project plus shared `guide`, `issues`, and
+  `blockers` channels. `guide` is a short human reference for topic marks;
+  agents may read it and cannot post there. Project channels are named from
+  the project title. New projects receive a kebab-case id from that title.
+  Managed setup removes Zulip's default `general`/`sandbox`/`zulip` streams.
+  Worker posts get a server-added
+  provenance header. Agents follow `horizon-zulip` for concise, human
+  discussion rather than a progress log.
+
+- Managed Lean checks prefer LSP feedback during editing and coordinate necessary
+  builds across hosts using expiring leases and streamed SHA-256 artifact storage.
+  Compatible Lake versions reuse actual root and dependency artifacts, with
+  separate worker and maintainer caches. Each host shares Lake artifacts and
+  dependency Git objects across checkouts; reflinks reduce source duplication
+  where supported. The current worker and build setup is in the
+  [pipeline setup guide](pipeline-setup.md#managed-lean-checks).
+
+- The formalization graph holds statements, proof alternatives, source evidence,
+  and failed attempts. Objectives hold roadmaps, missions hold executable
+  assignments, and project workspaces preserve shared mathematical files.
+  Packaged skills follow this control-plane workflow.
 
 ## [0.1.5] — 2026-09-04
 
@@ -27,7 +280,7 @@ roadmap CLI mutations, and workspace-local session scratch.
   writable `janitor` for Lean/blueprint layout moves; `restart-module` skill for
   backup-and-rewrite when layered debt or fix-loops dominate; lean-quality and
   API composition guidance treat `set_option` heartbeats as blockers. Corpus
-  guidance lives in [`docs/design/formalization-review.md`](./design/formalization-review.md).
+  guidance was recorded in the 0.1.5 development history.
 - **`definition-quality` skill + `definition-quality-reviewer`** — Mathlib-based
   criteria for good/bad definitions; detect suspects from how theorems/lemmas
   consume them (shared consumer pain → definition root cause).
@@ -170,7 +423,7 @@ roadmap CLI mutations, and workspace-local session scratch.
 
 The "lightweight harness, finished" release, extended with multi-team
 collaboration on a shared workspace. Full rationale and measurements in
-[`docs/design/v0.1.2-architecture-review.md`](./design/v0.1.2-architecture-review.md).
+the 0.1.2 development history.
 
 ### Added
 

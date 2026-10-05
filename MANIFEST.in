@@ -1,4 +1,30 @@
-# Ship the built dashboard assets; never the frontend toolchain or deps.
+# Keep source releases usable for development and rebuilding the dashboard.
+include AGENTS.md CLAUDE.md CONTRIBUTING.md NOTICE THIRD_PARTY_NOTICES.md install.sh uv.lock
+include .githooks/commit-msg
+recursive-include docs *.md
+recursive-include deploy/pipeline *.json *.yaml *.service *.timer
+include deploy/pipeline/browser-integrations.Caddyfile
+recursive-include scripts *.py
+recursive-include tests *.py
+include src/archon_horizon/frontend/index.html
+include src/archon_horizon/frontend/package.json
+include src/archon_horizon/frontend/package-lock.json
+include src/archon_horizon/frontend/tsconfig.json
+include src/archon_horizon/frontend/vite.config.ts
+recursive-include src/archon_horizon/frontend/src *.ts *.tsx *.css
+recursive-include src/archon_horizon/frontend/tests *.ts *.tsx *.cjs
+
+# Wheels use the separate package-data list in pyproject.toml.
 recursive-include src/archon_horizon/frontend/dist *
 prune src/archon_horizon/frontend/node_modules
+prune .claude
+prune .codex
+prune .archon-horizon
+prune .horizon
+prune .horizon-agent-library
+prune agent-library
+prune lean-cache
+prune ignored-folder
+exclude config.yaml .mcp.json
+global-exclude .env .env.* *.token *.sqlite *.sqlite-*
 global-exclude __pycache__ *.py[cod]

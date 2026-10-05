@@ -1,0 +1,12 @@
+.instruction-catalog .instruction-folder { border-bottom: 1px solid var(--border); }
+.instruction-folder ul { list-style: none; padding: 0 8px 8px; margin: 0; }
+.instruction-folder summary { display: flex; align-items: center; gap: 7px; padding: 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.instruction-folder summary small { margin-left: auto; color: var(--text-muted); }
+.instruction-description { margin: 12px 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.instruction-related { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; margin: 14px 0; }
+.instruction-related span { color: var(--text-muted); }
+.instruction-resource { display: flex; align-items: center; gap: 12px; font-size: 12px; margin: 18px 0; }
+.instruction-resource select { width: min(100%, 580px); min-width: 0; padding: 7px; border: 1px solid var(--border); background: #fff; border-radius: 4px; font: inherit; }
+.instruction-source { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 var(--font-mono, monospace); }
+.instruction-catalog .capability-file-metadata code { overflow-wrap: anywhere; }
+.instruction-catalog .capability-entry-name strong { overflow-wrap: anywhere; }

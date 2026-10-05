@@ -1,0 +1,110 @@
+.desktop-administration {
+  min-width: 0;
+}
+.desktop-administration .desktop-host-stats {
+  grid-template-columns: minmax(100px, 1fr) minmax(150px, 1fr);
+}
+.desktop-administration .platform-slot {
+  color: var(--platform-accent);
+}
+.desktop-administration .platform-slot.busy {
+  background: var(--platform-accent);
+}
+.desktop-administration .platform-machine-head {
+  grid-template-columns: 18px minmax(140px, 1fr) minmax(280px, 380px) auto 28px;
+}
+.desktop-admin-dialog {
+  width: min(660px, calc(100vw - 48px));
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.desktop-admin-dialog::backdrop {
+  background: rgba(35, 27, 46, 0.3);
+}
+.desktop-administration .desktop-account-columns,
+.desktop-administration .desktop-account-row {
+  grid-template-columns: minmax(230px, 1fr) minmax(300px, 1fr);
+}
+.desktop-administration .pl-admin-form,
+.desktop-admin-dialog .pl-admin-form {
+  max-width: none;
+  border: 0;
+}
+.desktop-administration .pl-admin-fields,
+.desktop-admin-dialog .pl-admin-fields {
+  gap: 14px;
+}
+.desktop-administration .pl-admin-fields label,
+.desktop-admin-dialog .pl-admin-fields label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.desktop-administration .pl-admin-fields input:not([type="checkbox"]),
+.desktop-administration .pl-admin-fields select,
+.desktop-admin-dialog .pl-admin-fields input:not([type="checkbox"]),
+.desktop-admin-dialog .pl-admin-fields select {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-color: var(--border);
+}
+.desktop-administration .pl-admin-actions button,
+.desktop-admin-dialog .pl-admin-actions button {
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.desktop-administration .pl-admin-actions .pl-admin-primary,
+.desktop-admin-dialog .pl-admin-actions .pl-admin-primary {
+  background: var(--platform-accent);
+  border-color: var(--platform-accent);
+}
+.desktop-administration .pl-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.desktop-administration .pl-section-heading h3 {
+  font-size: 16px;
+  margin: 0;
+}
+.desktop-administration .pl-section-heading > span {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.desktop-admin-dialog .pl-admin-machine {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.desktop-admin-dialog .pl-admin-machine .pl-admin-form {
+  padding-bottom: 0;
+}
+.desktop-reviewer-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.desktop-reviewer-project select {
+  min-width: 180px;
+  max-width: 300px;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: #fff;
+  font: inherit;
+}
+.desktop-reviewer-form {
+  padding-top: 22px;
+}
+.desktop-reviewer-form textarea {
+  font: 12px/1.65 var(--font-mono, monospace);
+  min-height: 320px;
+}

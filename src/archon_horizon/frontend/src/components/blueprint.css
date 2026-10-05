@@ -1,0 +1,86 @@
+.platform-blueprint-markdown { color: var(--text, #24292f); font-size: 14px; line-height: 1.7; min-width: 0; overflow-wrap: anywhere; }
+.platform-blueprint-markdown > :first-child { margin-top: 0; }
+.platform-blueprint-markdown > :last-child { margin-bottom: 0; }
+.platform-blueprint-markdown p { margin: 0.7em 0; }
+.platform-blueprint-markdown h1, .platform-blueprint-markdown h2, .platform-blueprint-markdown h3 { font-weight: 600; letter-spacing: 0; line-height: 1.4; margin: 1.4em 0 0.6em; }
+.platform-blueprint-markdown h1 { font-size: 21px; }
+.platform-blueprint-markdown h2 { font-size: 18px; }
+.platform-blueprint-markdown h3 { font-size: 16px; }
+.platform-blueprint-markdown ul, .platform-blueprint-markdown ol { padding-left: 1.5em; }
+.platform-blueprint-markdown li { margin: 0.3em 0; }
+.platform-blueprint-markdown a, .platform-bibliography a { color: #0969a6; text-decoration: none; }
+.platform-blueprint-markdown a:hover, .platform-bibliography a:hover { text-decoration: underline; }
+.platform-blueprint-markdown img { max-width: 100%; height: auto; }
+.platform-blueprint-markdown blockquote { margin: 1em 0; padding: 0.1em 0 0.1em 18px; border-left: 3px solid #afb8c1; }
+.platform-blueprint-markdown .platform-math-callout { border-left-color: #23856b; padding: 8px 0 8px 18px; }
+.platform-math-callout-label { display: block; color: #23745f; font-size: 12px; font-weight: 650; }
+.platform-math-callout.callout-warning { border-left-color: #b87c21; }
+.platform-math-callout.callout-warning > .platform-math-callout-label { color: #966015; }
+.platform-math-callout.callout-proof, .platform-math-callout.callout-sketch { border-left-color: #7b699f; }
+.platform-math-callout.callout-proof > .platform-math-callout-label, .platform-math-callout.callout-sketch > .platform-math-callout-label { color: #715c97; }
+.platform-blueprint-markdown .platform-math-callout > :last-child { margin-bottom: 0; }
+.platform-blueprint-markdown pre, .platform-bibtex-source pre { max-width: 100%; overflow: auto; margin: 14px 0; padding: 14px 16px; border: 1px solid #dfe4e8; border-radius: 4px; background: #f6f8fa; font-size: 12px; line-height: 1.65; }
+.platform-blueprint-markdown code, .platform-bibtex-source code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.platform-blueprint-markdown :not(pre) > code { background: #f0f2f4; border-radius: 3px; padding: 1px 4px; font-size: 0.9em; }
+.platform-blueprint-markdown pre code { white-space: pre; overflow-wrap: normal; }
+.platform-blueprint-markdown .hl-kw { color: #7b4396; }
+.platform-blueprint-markdown .hl-decl { color: #0969a6; font-weight: 600; }
+.platform-blueprint-markdown .hl-comment { color: #6c757d; font-style: italic; }
+.platform-blueprint-markdown .hl-sorry { color: #a6570b; background: #fff1d6; }
+.platform-blueprint-markdown .katex-display { margin: 0.8em 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.platform-blueprint-markdown .katex { font-size: 1.08em; }
+.platform-blueprint-markdown table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
+.platform-blueprint-markdown th, .platform-blueprint-markdown td { padding: 7px 11px; border: 1px solid #dfe4e8; text-align: left; }
+.platform-blueprint-markdown th { background: #f6f8fa; }
+.platform-bibliography { min-width: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.platform-bibliography > ol { list-style: none; padding: 0; margin: 0; }
+.platform-bibliography > ol > li { padding: 12px 0; border-bottom: 1px solid #e7ebef; }
+.platform-bibliography > ol > li:first-child { padding-top: 0; }
+.platform-reference-heading { display: flex; flex-wrap: wrap; gap: 0 5px; }
+.platform-reference-key { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; color: #6c757d; }
+.platform-reference-title { font-weight: 600; }
+.platform-reference-title svg { display: inline; margin-left: 5px; vertical-align: -1px; }
+.platform-reference-venue { color: #58616b; }
+.platform-reference-doi { font-size: 12px; }
+.platform-reference-citation { display: inline; color: #0969a6; font-weight: 600; text-decoration: none; }
+.platform-reference-citation:hover, .platform-reference-citation:focus { text-decoration: underline; }
+.platform-reference-citation.unresolved { color: #936e3c; background: #f9f3e8; border-radius: 3px; padding: 1px 3px; font-weight: 600; }
+.platform-node-reference.loading { color: #5a7280; background: #edf3f5; }
+.platform-bibtex-source { margin-top: 16px; }
+.platform-bibtex-source summary { color: #626d78; cursor: pointer; font-size: 12px; }
+.platform-bibliography-error { border-left: 3px solid #c44c42; padding-left: 12px; color: #9e342e; }
+.platform-bibliography-error p { margin: 5px 0; white-space: pre-wrap; }
+.platform-document-view { min-width: 0; }
+.platform-document-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 16px; }
+.platform-document-tags:empty { display: none; }
+.platform-document-tag { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 9px; border-radius: 999px; font-size: 11px; line-height: 1.45; font-weight: 500; overflow-wrap: anywhere; letter-spacing: 0; }
+.platform-document-tag.tone-green { color: #236747; background: #e5f2e9; }
+.platform-document-tag.tone-blue { color: #286283; background: #e5f0f7; }
+.platform-document-tag.tone-violet { color: #71528b; background: #f0eaf6; }
+.platform-document-tag.tone-red { color: #974954; background: #f9e9ec; }
+.platform-document-tag.tone-amber { color: #886a22; background: #fbf2d9; }
+.platform-document-tag.tone-neutral { color: #59645e; background: #edf0ed; }
+.platform-document-tag.progress-formalized { color: #13663e; background: #eaf5ee; }
+.platform-document-tag.progress-formally_stated { color: #4b3f9a; background: #eeeaf8; }
+.platform-document-tag.progress-informal_proved { color: #1d7a6c; background: #e6f4f1; }
+.platform-document-tag.progress-proof_sketch { color: #8a6728; background: #f8f1de; }
+.platform-document-tag.progress-conditionally_proved { color: #9b4f1d; background: #fae7d4; }
+.platform-document-tag.progress-kernel_checked { color: #236344; background: #def1e5; }
+.platform-document-tag.progress-informal_stated { color: #3f6178; background: #e8f0f5; }
+.platform-document-tag.progress-milestone { color: #275f79; background: #edf6fa; box-shadow: inset 0 0 0 1px #9bbdcd; }
+.platform-document-references { margin-top: 24px; }
+.platform-document-references > h2 { font-size: 18px; font-weight: 600; letter-spacing: 0; line-height: 1.4; }
+.platform-document-error { border-left: 3px solid #c44c42; padding: 10px 12px; color: #9e342e; margin-bottom: 16px; font-size: 12px; }
+.platform-document-error p { white-space: pre-wrap; margin: 6px 0 0; }
+.platform-document-loading { display: block; font-size: 12px; color: #6c756f; }
+.platform-node-preview.platform-node-math-preview { max-height: 240px; }
+.platform-node-math-preview .platform-blueprint-markdown { max-height: 155px; overflow: hidden; margin: 6px 0; font-size: 11px; }
+.platform-node-math-preview .platform-blueprint-markdown p { display: block; margin: 4px 0; line-height: 1.5; }
+.platform-node-math-preview .platform-blueprint-markdown h1, .platform-node-math-preview .platform-blueprint-markdown h2, .platform-node-math-preview .platform-blueprint-markdown h3 { font-size: 11px; margin: 4px 0; }
+.platform-node-math-preview .platform-blueprint-markdown .platform-math-callout { margin: 5px 0; padding: 2px 0 2px 9px; }
+.platform-node-math-preview .platform-blueprint-markdown .katex-display { margin: 3px 0; }
+@media (max-width: 600px) {
+  .platform-blueprint-markdown { font-size: 13px; }
+  .platform-blueprint-markdown h1 { font-size: 19px; }
+  .platform-blueprint-markdown pre, .platform-bibtex-source pre { padding: 10px; }
+}

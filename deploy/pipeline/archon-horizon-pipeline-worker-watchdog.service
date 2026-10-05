@@ -1,0 +1,7 @@
+[Unit]
+Description=Archon Horizon worker progress supervision
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/archon-horizon/venv/bin/horizon-pipeline worker-watchdog --worker-config %h/.config/archon-horizon-pipeline/worker.json --restart-service archon-horizon-pipeline-worker.service
+TimeoutStartSec=45

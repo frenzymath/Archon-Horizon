@@ -1,138 +1,88 @@
-<div align="center">
-
 # Archon Horizon
 
-**Frenzymath · PKU@AI4Math**
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 
-*Workspace-first orchestration for long-horizon Lean 4 formalization agents*
+Archon Horizon coordinates automatic Lean formalization across projects and worker
+machines. Missions form a tree of scoped outcomes with explicit acceptance
+criteria. One PostgreSQL control plane schedules their assignments, preserves
+provider context, records progress, and reliably publishes work to Forge. The dashboard
+brings together roadmaps, graphs, missions, Activity, Forgejo, and Zulip.
 
-[![Live demo](https://img.shields.io/badge/live%20demo-open%20dashboard-brightgreen?logo=githubpages)](https://frenzymath.github.io/Archon-Horizon/)
-![Version](https://img.shields.io/badge/version-0.1.5-blue)
-[![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![Lean](https://img.shields.io/badge/domain-Lean%204-1f6feb)
+## Installation
 
-</div>
+Use Python 3.11 or newer. Release wheels include the dashboard. To install
+from a source checkout, also use Node.js 20 and npm:
 
----
-
-> [!IMPORTANT]
-> This is the first public release of **Archon Horizon**. This version is stable, and already used in our projects, but be aware that new versions may introduce big changes. We advise you to check this repository regularly for updates. We try to maintain backward compatibility, although some interfaces may change.
-
-Archon Horizon orchestrates autonomous AI agents that formalize mathematics in **Lean 4** across **multiple interdependent projects**. A workspace is the unit of work: the Horizon agent plans over shared blueprints and dependency graphs, runs long proving sessions, builds with `lake`, and repairs failures without constant human supervision. Fresh-context helpers provide independent review and workspace hygiene without creating a second orchestration loop.
-
-The **Horizon Agent** owns the proof loop and decides when to dispatch helpers. The read-only **Ground** helper is an optional workspace-wide perspective for strategy, graph/task consistency, ledger hygiene, and convergence; `work-reviewer`, `blueprint`, `janitor`, and the other helpers remain available for narrower slices.
-
-> [!NOTE]
-> Archon Horizon is the successor to [**Archon**](https://github.com/frenzymath/Archon), which formalizes research-level mathematics within a *single* project. Horizon generalizes that model to **workspaces of many projects**. The main argument is that LLMs will able to maintain larger and larger formalization projects, **Archon Horizon** will be able to orchestrate them in a scalable workspace.
-
-> 📚 Full guides live in [`docs/`](./docs/README.md). 📝 Release notes in [`docs/CHANGELOG.md`](./docs/CHANGELOG.md).
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Quick Start](#quick-start)
-  - [1. Install](#1-install)
-  - [2. Scaffold a workspace](#2-scaffold-a-workspace)
-  - [3. Run](#3-run)
-- [CLI Overview](#cli-overview)
-- [Live Demo](#live-demo)
-- [License](#license)
-
----
-
-## Features
-
-- **Fresh-context convergence checks.** The Horizon agent can choose a read-only Ground review before terminal task completion or during long runs, with narrower `work-reviewer` and `janitor` helpers available as needed. → [Architecture](./docs/architecture/README.md)
-- **Separated advisory reviews.** Focused skills and read-only native reviewers cover progress integrity, honesty/anti-evasion (including weak or empty certificates and route churn), source fidelity, mathematical edge cases, blueprint/graph traceability, proof load-bearing, API and Lean quality, verification evidence, provenance, strategy, run health, source boundaries, transcription, release reproducibility, and review adjudication. The Horizon agent chooses the lanes; there is no review gate. → [Guidance](./docs/design/formalization-review.md)
-- **Multi-engine harnesses.** Orchestration is decoupled from the execution engine behind a single `Harness` seam, so agents can run on Claude Code, OpenAI Codex, or any custom command. Kimi/Moonshot, DeepSeek, and OpenRouter routing are built in, and a `null` harness keeps tests offline. → [Architecture](./docs/architecture/README.md#4-harness-seam--provider-routing)
-- **Multi-project workspaces.** A workspace holds many interdependent Lean projects under one root — embedded as subdirectories or tracked as out-of-tree Git checkouts (no fragile submodules). Everything (config, models, freezes) is declared in a single [`config.yaml`](./docs/configuration/README.md). → [Workspaces & Projects](./docs/workspaces-and-projects/README.md)
-- **Async inboxes, per-team ownership & standing protections.** Humans and agents collaborate through a local filesystem inbox and an optional GitHub shadow-sync, observed only at round boundaries so proof searches are never interrupted mid-flight. Items can be shared or **owned by one task** (a private per-team inbox), carry **per-team read-state** (`inbox read`/`unread`, `list --mine/--unread`), and be **direct-messaged** to another running team. Standing protections soft-freeze foundational signatures and files so autonomous runs can't quietly break your API. → [Inboxes](./docs/inboxes-and-communication/README.md)
-- **Parallel teams on a shared board.** Each `horizon run` is a team (a lead agent plus its subagent workers); parallel teams coordinate through shared state — a roadmap that doubles as a **project board** (owner, milestone labels, pinned commits, a live `/board` view), the inbox, and the commit ledger — rather than synchronous meetings. A stderr **synchronizer** keeps each agent aware of unread messages and other live runs, and launching work for *other* teams is gated by an opt-in `workspace.delegation` policy (default deny). → [Architecture](./docs/architecture/README.md)
-- **Blueprints & dependency graphs.** LaTeX-subset blueprints and Lean sources synchronize into a vendored, plain-files semantic graph. `horizon graph` exposes frontier, dependency, review, and comment operations; the dashboard renders a deterministic chapter-collapsed Graphviz view. → [Blueprints & semantic graphs](./docs/blueprints-and-graph/README.md)
-- **Dashboard & offline search.** A live web dashboard renders the DAG (KaTeX), run logs, native Codex subagent trees, context compactions, and inbox, and can export a self-contained static snapshot for GitHub Pages. `horizon search` runs BM25, Loogle-style name, and signature-pattern search over `.lean` sources with no GPU, API key, or network. → [Dashboard & Search](./docs/dashboard-and-search/README.md)
-- **Public demo workspace.** A tiny two-chapter Lean/blueprint fixture ships outside the Python package with synthetic Claude Code and Codex runs, so the dashboard can be explored without credentials. → [Open the live demo](https://frenzymath.github.io/Archon-Horizon/)
-
-*More depth on every topic — including the full [`config.yaml`](./docs/configuration/README.md) reference — lives in [`docs/`](./docs/README.md).*
-
----
-
-## Quick Start
-
-### 1. Install
-
-The recommended way is running the one-liner below, inside a Python 3.11+ virtual environment:
-
-```bash
-# One-liner: fetch latest main, install, and run tool checks
-curl -sSL https://raw.githubusercontent.com/frenzymath/Archon-Horizon/refs/heads/main/install.sh | bash
-```
-
-If you prefer to install from source:
-
-```bash
+```sh
 git clone https://github.com/frenzymath/Archon-Horizon.git
 cd Archon-Horizon
-python -m pip install .
-horizon setup        # Check external tools (Claude Code, Lean 4 toolchain, …)
+python3 -m venv .venv
+. .venv/bin/activate
+npm --prefix src/archon_horizon/frontend ci
+npm --prefix src/archon_horizon/frontend run build
+python -m pip install '.[control-plane]'
 ```
 
-> [!WARNING]
-> Horizon lets AI engines run terminal commands. Prefer a dedicated non-root user, a Docker container, or a VM. When running Claude Code as root, you may need `IS_SANDBOX=1`.
+Workers install `[pipeline-worker]`. Add `[search]` where Lean indexing is used;
+use `[dev]` for development. Configure PostgreSQL and explicit installation paths
+as described in the [setup guide](docs/pipeline-setup.md):
 
-### 2. Scaffold a workspace
-
-```bash
-mkdir my-workspace && cd my-workspace
-horizon init
+```sh
+horizon --config /absolute/path/server.json init --interactive
+# Review the plan, then repeat with --apply.
+horizon --config /absolute/path/server.json migrate
+horizon --config /absolute/path/server.json create-admin operator
+horizon --config /absolute/path/server.json serve
 ```
 
-`init` walks you through `config.yaml`, adding member Lean projects, and structuring your first tasks. 
+`horizon`, `horizon-pipeline`, and `python -m archon_horizon` invoke the same
+implementation. The dashboard is at `/pipeline`; the authenticated API is
+`/api/v3`. Configuration and database changes are explicit commands, never side
+effects of importing the package or opening the dashboard.
 
-👉 See the [Workspaces guide](./docs/workspaces-and-projects/README.md) and the [Configuration guide](./docs/configuration/README.md) for `config.yaml`.
+## Runs And Review
 
-### Live Demo
+A run selects pre-processing, main formalization, or post-processing. All use
+the same queue, worker/maintainer roles, continuation, and publication machinery.
+Each phase can run independently. The workspace is free working space; review
+policies apply to changes entering roadmap or library repositories.
 
-The [public demo](https://frenzymath.github.io/Archon-Horizon/) is rebuilt by
-GitHub Actions from [`demo/`](./demo/). It is intentionally small: two blueprint
-chapters, partial Lean coverage, one open issue, and two historical runs showing
-different engines and an optional Ground review checkpoint. The
-[`/board`](https://frenzymath.github.io/Archon-Horizon/#/board) view shows the
-roadmap as a project board — two milestones, owners, and commits pinned to the
-items they delivered.
+New default runs start with one root maintainer that chooses work, reviews
+results and owns phase completion. Workers deliver scoped results; maintainers
+request concrete repairs or accept them. Planning belongs within these roles.
+Event waits release execution capacity instead of keeping a model polling.
+Agents can inspect dashboard-equivalent run observations with
+`horizon-pipeline agent context --view operations` and invoke an
+`orchestration-auditor` native helper for a concrete anomaly. A standing
+orchestrator is not part of this default path. See the
+[phase workflows](docs/architecture.md#phase-workflows) and
+[recovery contract](docs/coordination-recovery.md).
 
-### 3. Run
+Assignments retain their obligation ledger and provider context across
+continuations. Host journals preserve uncertain requests and unpublished Git
+checkpoints for retry. Reviewers use pinned descriptions and exact PR revisions;
+the maintainer chooses useful perspectives and makes the final merge decision.
 
-```bash
-horizon run my_task           # a single task or project
-horizon run '*'               # every member project
-horizon dashboard             # live progress at http://127.0.0.1:8765
-```
+Delegation creates a narrower child mission with a recorded purpose and bounded
+scope. The mission tree records responsibility; the mathematical dependency graph
+records prerequisites. Agents revise their own mission subtree through
+revision-checked API operations and inspect shared capacity before adding work.
+Queue readiness is derived from mission state, assignment conditions, leases and
+available resources. An execution ending is distinct from its mission being accepted.
+See [mission coordination](docs/mission-coordination.md) for the agent workflow,
+enforced boundaries and recovery rules.
 
-> [!TIP]
-> Keep Horizon current with `horizon update` (upgrade the package) followed by `horizon init --update` (refresh managed subagents and skills inside a workspace).
+The grouped skill catalog is
+[`src/archon_horizon/pipeline/skills`](src/archon_horizon/pipeline/skills).
+Worker and reviewer subagent descriptions live separately in
+[`pipeline/subagents`](src/archon_horizon/pipeline/subagents), grouped by specialty.
+Read the [reviewer guide](docs/pipeline-reviewers.md) for skills, descriptors,
+review attribution, and editing existing project configuration.
 
----
-
-## CLI Overview
-
-Every command supports `--json` for machine-readable output on `stdout`. Run `horizon -h` for all commands, and `horizon <command> -h` for command-specific flags.
-
-- `horizon init` — scaffold a workspace or refresh managed files (`--update`).
-- `horizon run <target>` — run autoformalization on a task or project, everything (`*`), or a single role (`ground` / `horizon`, optionally `--backend interactive`).
-- `horizon discuss` — open an interactive session to talk with the workspace: status, recent runs, and edits to projects/tasks/inbox/roadmap on request.
-- `horizon attempt save` — preserve a rejected draft and optional diagnostics as a session artifact.
-- `horizon check` — serialize and record resource-heavy Lean checks across concurrent sessions.
-- `horizon benchmark` — rank Lean files by summed `set_option` heartbeat budgets.
-- `horizon tmp` — inspect or clean workspace-local session scratch.
-- `horizon dashboard` — live server, or static HTML export (`--static`).
-
-👉 See the [full CLI reference](./docs/cli-reference/README.md) for all commands and flags.
-
----
+See the [documentation index](docs/README.md),
+[architecture](docs/architecture.md), and [development guide](CONTRIBUTING.md).
 
 ## License
 
-Licensed under the [Apache License 2.0](./LICENSE). Third-party attributions are in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+[Apache License 2.0](LICENSE). Third-party attributions are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
