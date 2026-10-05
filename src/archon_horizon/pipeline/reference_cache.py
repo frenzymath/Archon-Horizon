@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -130,6 +131,13 @@ class ReferenceCache:
         finally:
             Path(temporary).unlink(missing_ok=True)
 
+    def _touch(self, path):
+        newest = max((entry.stat().st_mtime_ns for entry in self.root.iterdir()
+                      if re.fullmatch(r"[0-9a-f]{64}\.(?:json|bib)", entry.name)
+                      and not entry.is_symlink()), default=0)
+        timestamp = max(time.time_ns(), newest + 1_000_000)
+        os.utime(path, ns=(timestamp, timestamp), follow_symlinks=False)
+
     def _prune(self, keep):
         entries = {}
         for path in self.root.iterdir():
@@ -225,8 +233,7 @@ class ReferenceCache:
         if not existing or existing[1].revision != revision or existing[1].sha256 != digest or existing[0]["etag"] != etag:
             self._replace(content_path, content)
             self._replace(metadata_path, json.dumps(metadata, sort_keys=True).encode())
-        else:
-            os.utime(metadata_path, None, follow_symlinks=False)
+        self._touch(metadata_path)
         self._prune(key)
         return CachedReference(reference_id, revision, digest, content, content_path)
 

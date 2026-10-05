@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+import time
 from uuid import uuid4
 
 import httpx
@@ -76,6 +78,9 @@ def test_lru_eviction_and_stream_byte_limit_are_bounded(tmp_path):
     cache = ReferenceCache(tmp_path, "https://horizon.invalid", "token", max_entries=2,
         client=httpx.Client(transport=httpx.MockTransport(lambda _: response())))
     first, second = cache.get(uuid4()), cache.get(uuid4())
+    tied_mtime = time.time_ns() + 1_000_000_000
+    for entry in (first.path, first.path.with_suffix(".json"), second.path, second.path.with_suffix(".json")):
+        os.utime(entry, ns=(tied_mtime, tied_mtime))
     cache.get(first.reference_id)
     third = cache.get(uuid4())
     assert first.path.exists() and third.path.exists() and not second.path.exists()
