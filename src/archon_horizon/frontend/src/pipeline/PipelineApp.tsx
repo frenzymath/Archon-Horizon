@@ -97,10 +97,10 @@ function Shell({account, error, reload}: {account?: Account; error: Error | null
   const view = url.get("view") || "overview";
   const inProject = tab === "projects" && !!projectId;
   const inNode = inProject && ["node", "node-dag"].includes(view);
-  const navigate = (values: Record<string, string>) => {
+  const navigate = (values: Record<string, string>, replace = false) => {
     const next = new URLSearchParams(url);
     Object.entries(values).forEach(([key, value]) => value ? next.set(key, value) : next.delete(key));
-    history.pushState({}, "", `/pipeline?${next}`);
+    history[replace ? "replaceState" : "pushState"]({}, "", `/pipeline?${next}`);
     setUrl(next);
     if (values.tab) setOpened(previous => new Set([...previous, values.tab]));
   };

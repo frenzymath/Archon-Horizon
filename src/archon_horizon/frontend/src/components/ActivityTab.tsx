@@ -22,7 +22,7 @@ export type ActivityDataSource = {
   writable?: boolean;
   refreshVersion?: number;
   location?: { runId: string; sessionId: string };
-  onNavigate?: (values: Record<string, string>) => void;
+  onNavigate?: (values: Record<string, string>, replace?: boolean) => void;
 };
 const ActivitySource = createContext<ActivityDataSource>({ basePath: "/dashboard/activity", request, writable: false });
 function ActivityMarkdown(props: ComponentProps<typeof DocumentView>) {
@@ -967,9 +967,9 @@ function ActivityBody({ projects = [] }: { projects?: Project[] }) {
     url.searchParams.delete("view");
     if (run) url.searchParams.set("run", run); else url.searchParams.delete("run");
     if (session) url.searchParams.set("session", session); else url.searchParams.delete("session");
-    history[replace ? "replaceState" : "pushState"]({}, "", url);
+    if (!onNavigate) history[replace ? "replaceState" : "pushState"]({}, "", url);
     setRunId(run); setSessionId(session);
-    onNavigate?.({ tab: "activity", run, session, assignment: "" });
+    onNavigate?.({ tab: "activity", run, session, assignment: "" }, replace);
   };
   useEffect(() => {
     if (!runId && sessionLink.data?.id === sessionId && sessionLink.data.run_id) navigate(sessionLink.data.run_id, sessionId, true);

@@ -50,7 +50,7 @@ def test_catalog_cannot_move_identity_or_overlap_review_policy(world):
 def test_context_recovery_preserves_workspace_and_ledger_and_requires_stopped_execution(world):
     run = world.run()
     world.disable_automations(run)
-    assignment = world.assignment(run)
+    assignment = world.assignment(run, role="maintainer")
     claim = world.claim()
     thread = get(world.conn, "provider_thread", claim["provider_thread_record_id"])
     with pytest.raises(DomainError) as error:
@@ -64,6 +64,7 @@ def test_context_recovery_preserves_workspace_and_ledger_and_requires_stopped_ex
     assert replacement["workspace_id"] == old["workspace_id"]
     assert get(world.conn, "provider_thread", old["id"])["status"] == "closed"
     assert world.ledger(assignment["id"])[0]["status"] == "open"
+    assert world.scheduler.tick(world.conn)["retired_maintainers"] == 0
     assert world.claim()["provider_thread_record_id"] == str(replacement["id"])
 
 

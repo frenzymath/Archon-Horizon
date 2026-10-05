@@ -42,7 +42,7 @@ export type DesktopActivityProps = {
   sessionId: string;
   writable: boolean;
   command: (value: Command) => Promise<boolean>;
-  onNavigate: (values: Record<string, string>) => void;
+  onNavigate: (values: Record<string, string>, replace?: boolean) => void;
 };
 
 export default function DesktopActivity({accountId, projects, runId, sessionId, writable, command, onNavigate}: DesktopActivityProps) {

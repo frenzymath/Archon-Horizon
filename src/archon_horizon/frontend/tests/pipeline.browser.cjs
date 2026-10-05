@@ -682,7 +682,9 @@ const server = http.createServer(async (req, res) => {
     assert.match(await tab.locator(".activity-heading-actions").innerText(), /cancelled/i);
     assert.equal(await tab.getByRole("button", {name: "Cancel run", exact: true}).count(), 0);
     await tab.screenshot({path: path.join(artifacts, "cancelled-run-phase-desktop.png"), fullPage: true});
-    await tab.getByRole("button", {name: "All runs", exact: true}).click();
+    await tab.goBack();
+    await tab.locator(".activity-run-row").filter({hasText: "Improve the library"}).waitFor();
+    assert.equal(new URL(tab.url()).searchParams.get("run"), null, "Back should return to the Activity list");
     await tab
       .locator(".activity-run-row")
       .filter({ hasText: run.title })

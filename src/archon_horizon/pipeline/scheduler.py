@@ -382,11 +382,13 @@ class Scheduler:
         """Replace recurring batches whose retained provider context is gone."""
         assignment, thread, request, run = (tables[name] for name in
                                             ("assignment", "provider_thread", "provider_request", "run"))
+        current_status = select(thread.c.status).where(
+            thread.c.assignment_id == assignment.c.id, thread.c.kind == "primary")\
+            .order_by(thread.c.number.desc()).limit(1).scalar_subquery()
         rows = list(conn.execute(select(assignment).join(run, assignment.c.run_id == run.c.id).where(
             assignment.c.role == "maintainer",
             assignment.c.status == "pending", run.c.status == "active",
-            select(thread.c.id).where(thread.c.assignment_id == assignment.c.id,
-                thread.c.kind == "primary", thread.c.status.not_in(("creating", "available"))).exists(),
+            current_status.not_in(("creating", "available")),
             ~select(request.c.id).join(thread, request.c.provider_thread_id == thread.c.id).where(
                 thread.c.assignment_id == assignment.c.id,
                 request.c.status.in_(("pending", "submitted", "running", "uncertain"))).exists(),
