@@ -45,7 +45,7 @@ def test_initial_and_continuation_include_control_without_resolving_it(world):
         assert "Use the corrected theorem statement" in prompt
         assert str(notice["id"]) in prompt
         assert "This summary does not acknowledge or resolve notices" in prompt
-        assert ("Read $HORIZON_SKILLS_DIR" in prompt) is initial
+        assert ("Entrypoint: $HORIZON_SKILLS_DIR/" in prompt) is initial
     assert get(world.conn, "notification", notice["id"]) == notice
     assert "Handle 1 pending control notifications." in world.service.completion_findings(world.conn, assigned["id"])
     change(world.conn, "notification", notice["id"], disposition="handled", disposition_note="Corrected the goal")

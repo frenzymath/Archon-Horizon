@@ -102,7 +102,7 @@ class Scheduler:
             changed = change(conn, "provider_thread", row["id"], status="unavailable")
             emit(conn, actor.id, project_of(conn, "assignment", assignment_id), "provider_thread", changed,
                  ["status"], previous="available",
-                 note="Retired a failed native context so the next bounded episode starts fresh")
+                 note="Retired a failed native context pending explicit recovery")
             retired += 1
         return retired
 
@@ -728,6 +728,11 @@ class Scheduler:
 
     def available_workspace(self, conn, assignment, host_id):
         thread, workspace, execution = (tables[name] for name in ("provider_thread", "workspace", "execution"))
+        latest = conn.execute(select(thread.c.status).where(
+            thread.c.assignment_id == assignment["id"], thread.c.kind == "primary")
+            .order_by(thread.c.created_at.desc(), thread.c.id.desc()).limit(1)).scalar_one_or_none()
+        if latest not in (None, "creating", "available"):
+            return None
         previous = self.retained_thread_for_host(conn, assignment["id"], host_id)
         if not previous and self.has_native_foreign_thread(conn, assignment["id"], host_id):
             return None

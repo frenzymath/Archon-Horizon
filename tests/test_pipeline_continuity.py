@@ -65,7 +65,7 @@ def test_checkpoint_releases_slot_and_resumes_same_native_context(world):
     assert world.claim() is None
 
 
-def test_failed_provider_turn_consumes_no_progress_window(world):
+def test_failed_provider_turn_counts_toward_no_progress_window(world):
     run = world.run(retry_policy={"max_no_progress_requests": 3})
     world.disable_automations(run)
     assignment = world.assignment(run)
@@ -77,12 +77,6 @@ def test_failed_provider_turn_consumes_no_progress_window(world):
                created_at=now - timedelta(minutes=4 - number), finished_at=now - timedelta(minutes=4 - number))
     assert world.service.progress_stalled(world.conn, assignment["id"], 3)
     assert world.ledger(assignment["id"])[0]["status"] == "open"
-    world.command("update_assignment", settled, not_before=None)
-    resumed = world.claim()
-    assert resumed["assignment_id"] == claim["assignment_id"]
-    assert resumed["provider_thread_record_id"] == claim["provider_thread_record_id"]
-    assert resumed["provider_thread_id"] == "retained-context"
-    assert get(world.conn, "assignment", assignment["id"])["checkpoint_requested_at"] is None
 
 
 def test_checkpoint_releases_slot_while_outbox_delivers_and_resumes_context(world):

@@ -76,7 +76,8 @@ def test_root_forge_condition_is_scoped_to_run_and_phase(root_world):
     def evaluate():
         assignment = next(row for row in assignments(world, run)
                           if row["automation_id"] == automation["id"])
-        return world.service.condition_readiness(world.conn, assignment, now)
+        return world.service.condition_readiness(world.conn,
+            {**assignment, "start_condition": {"version": 1, "expression": expression}}, now)
 
     # A Forge item from another run must not wake this run's maintainer.
     create(world.conn, "forge_item", repository_id=repository["id"], origin_run_id=other_run["id"],
