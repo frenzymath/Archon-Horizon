@@ -730,7 +730,7 @@ class Scheduler:
         thread, workspace, execution = (tables[name] for name in ("provider_thread", "workspace", "execution"))
         latest = conn.execute(select(thread.c.status).where(
             thread.c.assignment_id == assignment["id"], thread.c.kind == "primary")
-            .order_by(thread.c.created_at.desc(), thread.c.id.desc()).limit(1)).scalar_one_or_none()
+            .order_by(thread.c.number.desc()).limit(1)).scalar_one_or_none()
         if latest not in (None, "creating", "available"):
             return None
         previous = self.retained_thread_for_host(conn, assignment["id"], host_id)
