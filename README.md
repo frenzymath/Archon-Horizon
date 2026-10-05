@@ -8,6 +8,26 @@ criteria. One PostgreSQL control plane schedules their assignments, preserves
 provider context, records progress, and reliably publishes work to Forge. The dashboard
 brings together roadmaps, graphs, missions, Activity, Forgejo, and Zulip.
 
+> [!WARNING]
+> Archon Horizon is **alpha software**. Interfaces, database schemas, worker
+> contracts, and operational workflows may change between releases.
+
+> [!IMPORTANT]
+> Version `0.2.0` is a substantial architectural change from `0.1.x`: the
+> control plane now uses PostgreSQL, the API is `/api/v3`, and the dashboard is
+> served at `/pipeline`. The former SQLite runtime and `/api/v2` interfaces are
+> retired.
+
+> [!CAUTION]
+> Migration from `0.1.x` is not automatic or trivial. The new Alembic history
+> does not convert the previous SQLite data model. Use a separate PostgreSQL
+> installation, review the configuration, and run the explicit `migrate`
+> command before operating the new runtime.
+
+> [!NOTE]
+> Archon Horizon has been used to coordinate development of the
+> [FrenzyMath Poincare Conjecture formalization](https://github.com/frenzymath/Poincare-Conjecture).
+
 ## Installation
 
 Use Python 3.11 or newer. Release wheels include the dashboard. To install
