@@ -387,6 +387,7 @@ class Scheduler:
             .order_by(thread.c.number.desc()).limit(1).scalar_subquery()
         rows = list(conn.execute(select(assignment).join(run, assignment.c.run_id == run.c.id).where(
             assignment.c.role == "maintainer",
+            assignment.c.automation_id.is_not(None),
             assignment.c.status == "pending", run.c.status == "active",
             current_status.not_in(("creating", "available")),
             ~select(request.c.id).join(thread, request.c.provider_thread_id == thread.c.id).where(

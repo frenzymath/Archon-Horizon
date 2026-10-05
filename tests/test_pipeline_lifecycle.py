@@ -68,6 +68,23 @@ def test_context_recovery_preserves_workspace_and_ledger_and_requires_stopped_ex
     assert world.claim()["provider_thread_record_id"] == str(replacement["id"])
 
 
+def test_manual_maintainer_with_unavailable_context_waits_for_explicit_recovery(world):
+    run = world.run()
+    world.disable_automations(run)
+    assignment = world.assignment(run, role="maintainer")
+    claim = world.claim()
+    world.scheduler.finish(world.conn, world.host_actor, get(world.conn, "execution", claim["execution_id"]),
+                           "failed", {"kind": "transport", "code": "connection_error", "message": "Connection interrupted"})
+    thread = change(world.conn, "provider_thread", claim["provider_thread_record_id"], status="unavailable")
+    assert world.scheduler.tick(world.conn)["retired_maintainers"] == 0
+    pending = get(world.conn, "assignment", assignment["id"])
+    assert pending["status"] == "pending"
+    assert pending["automation_id"] is None
+    assert world.claim() is None
+    replacement = world.command("recover_context", thread, note="Native state cannot be resumed")
+    assert world.claim()["provider_thread_record_id"] == str(replacement["id"])
+
+
 def test_draining_finishes_existing_work_but_only_accepts_explicit_repairs(world):
     run = world.run()
     world.disable_automations(run)
