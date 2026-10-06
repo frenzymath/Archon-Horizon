@@ -1,0 +1,8 @@
+[Unit]
+Description=Check Archon Horizon Pipeline API liveness
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/archon-horizon/venv/bin/horizon-pipeline --config %h/.config/archon-horizon-pipeline/server.json watchdog --restart-service archon-horizon-pipeline-api.service
+TimeoutStartSec=45s
+UMask=0077

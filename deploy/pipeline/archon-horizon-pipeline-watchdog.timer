@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically check Archon Horizon Pipeline API liveness
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=30s
+Unit=archon-horizon-pipeline-watchdog.service
+
+[Install]
+WantedBy=timers.target

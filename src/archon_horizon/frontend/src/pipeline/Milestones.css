@@ -1,0 +1,21 @@
+.milestones { margin: 24px 0; border-top: 1px solid #d5d9de; padding-top: 16px; }
+.milestones h2 { font-size: 18px; margin: 0; }
+.milestone-table-scroll { overflow-x: auto; }
+.milestones table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
+.milestones th, .milestones td { padding: 10px 8px; border-bottom: 1px solid #d5d9de; vertical-align: top; }
+.milestones th:first-child { width: 64%; }
+.milestones code { display: block; overflow-wrap: anywhere; font-size: 12px; margin-top: 5px; }
+.milestones details { font-size: 13px; margin-top: 8px; }
+.milestones summary { cursor: pointer; padding: 4px 0; }
+.milestone-action { border-top: 1px solid #d5d9de; padding: 10px 0; }
+.milestone-action fieldset { border: 0; padding: 12px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.milestone-action label { display: grid; gap: 5px; min-width: 0; }
+.milestone-action input, .milestone-action select, .milestone-action textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px; font: inherit; }
+.milestone-wide { grid-column: 1 / -1; }
+.milestone-action .milestone-host { display: flex; align-items: center; margin: 8px 0; }
+.milestone-host input { width: 16px; height: 16px; }
+.milestone-action button { margin-right: 12px; margin-bottom: 8px; }
+.milestone-accepted { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: #23633f; }
+.milestone-evidence { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.milestones a { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .milestone-action fieldset { grid-template-columns: minmax(0, 1fr); } .milestones th:first-child { width: 52%; } }

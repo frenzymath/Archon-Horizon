@@ -1,0 +1,2 @@
+.platform-record-dates { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--text-secondary, #747474); font-size: 11px; line-height: 1.6; font-weight: 400; }
+.platform-record-dates > span { min-width: 0; overflow-wrap: anywhere; }

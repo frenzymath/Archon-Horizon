@@ -1,0 +1,78 @@
+{
+    admin off
+    auto_https off
+}
+
+# TLS terminates at the installation's public ingress. These listeners and
+# the native services must remain private; browser identities come from Horizon.
+http://:9880 {
+    bind 127.0.0.1
+    @public host {$HORIZON_BROWSER_HOST}
+    handle @public {
+        route {
+            request_header -X-WEBAUTH-USER
+            request_header -X-WEBAUTH-EMAIL
+            request_header -X-WEBAUTH-FULLNAME
+            request_header -X-Horizon-Integration-User
+            @native_client {
+                header Authorization *
+                not header Cookie *horizon_session=*
+            }
+            handle @native_client {
+                reverse_proxy {$HORIZON_FORGE_UPSTREAM} {
+                    header_up X-Forwarded-Proto https
+                    header_up -Cookie
+                }
+            }
+            forward_auth {$HORIZON_BROWSER_API} {
+                uri /api/v3/integrations/{$HORIZON_FORGE_INTEGRATION}/browser-identity
+                copy_headers X-Horizon-Integration-User>X-WEBAUTH-USER
+                header_up -Authorization
+            }
+            reverse_proxy {$HORIZON_FORGE_UPSTREAM} {
+                header_up X-Forwarded-Proto https
+                header_up -Authorization
+                header_up Cookie "(^|;[ ]*)(horizon_session|horizon_integration_[a-f0-9]+)=[^;]*" "$1"
+                header_down -X-Frame-Options
+                header_down +Content-Security-Policy "frame-ancestors 'self' {$HORIZON_BROWSER_ORIGIN}"
+            }
+        }
+    }
+    handle {
+        respond "Unknown integration host" 403
+    }
+}
+
+http://:9881 {
+    bind 127.0.0.1
+    @public host {$HORIZON_BROWSER_HOST}
+    handle @public {
+        route {
+            request_header -X-Horizon-Integration-User
+            @native_client {
+                header Authorization *
+                not header Cookie *horizon_session=*
+            }
+            handle @native_client {
+                reverse_proxy {$HORIZON_ZULIP_UPSTREAM} {
+                    header_up X-Forwarded-Proto https
+                    header_up -Cookie
+                }
+            }
+            forward_auth {$HORIZON_BROWSER_API} {
+                uri /api/v3/integrations/{$HORIZON_ZULIP_INTEGRATION}/browser-identity
+                header_up -Authorization
+            }
+            reverse_proxy {$HORIZON_ZULIP_UPSTREAM} {
+                header_up X-Forwarded-Proto https
+                header_up -Authorization
+                header_up Cookie "(^|;[ ]*)(horizon_session|horizon_integration_[a-f0-9]+)=[^;]*" "$1"
+                header_down -X-Frame-Options
+                header_down +Content-Security-Policy "frame-ancestors 'self' {$HORIZON_BROWSER_ORIGIN}"
+            }
+        }
+    }
+    handle {
+        respond "Unknown integration host" 403
+    }
+}

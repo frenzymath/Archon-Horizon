@@ -40,7 +40,6 @@ def _read_versions(root: Path) -> dict[str, str]:
     versions = {
         "Python package": _source_version(root),
         "README badge": badge.group(2) if badge else "<missing>",
-        "demo workspace": (root / "demo" / ".archon-horizon" / "version").read_text("utf-8").strip(),
     }
     versions.update(_json_versions(root))
     return versions
@@ -91,8 +90,6 @@ def set_version(root: Path, version: str) -> None:
     lock["version"] = version
     lock.setdefault("packages", {}).setdefault("", {})["version"] = version
     lock_path.write_text(json.dumps(lock, indent=2) + "\n", "utf-8")
-
-    (root / "demo" / ".archon-horizon" / "version").write_text(version + "\n", "utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

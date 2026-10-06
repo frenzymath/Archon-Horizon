@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "host_id": "00000000-0000-0000-0000-000000000001",
+  "api_url": "https://horizon.example.org",
+  "token_file": "/absolute/private/worker-token",
+  "journal_root": "/absolute/pipeline/worker-journal",
+  "workspace_roots": ["/absolute/formalization-workspaces"],
+  "slots": 2,
+  "cleanup_target_free_percent": 20,
+  "max_request_seconds": 3600,
+  "max_execution_seconds": 14400,
+  "milestone_checks": false,
+  "lean_build": {
+    "root": "/absolute/pipeline/lean-build",
+    "max_parallel_builds": 1,
+    "timeout_seconds": 1800,
+    "queue_timeout_seconds": 30,
+    "minimum_free_bytes": 1073741824,
+    "artifact_cache": true,
+    "cache_max_bytes": 10737418240,
+    "cache_max_age_seconds": 604800,
+    "native_cache_max_bytes": 4294967296,
+    "native_cache_min_age_seconds": 604800
+  },
+  "checkpoint_seconds": 300,
+  "publication_poll_seconds": 5,
+  "publication_concurrency": 1,
+  "harnesses": [
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "adapter": "codex_exec",
+      "executable": "/opt/provider/bin/codex",
+      "provider_home": "/absolute/pipeline/provider-state/codex",
+      "scratch_root": "/absolute/pipeline/provider-scratch/codex",
+      "model": "REPLACE_WITH_ENROLLED_MODEL",
+      "environment": {
+        "PATH": "/opt/horizon/bin:/opt/provider/bin:/opt/elan/bin:/usr/local/bin:/usr/bin:/bin",
+        "ELAN_HOME": "/opt/elan"
+      },
+      "sandbox": {
+        "schema_version": 1,
+        "mode": "rootless_container",
+        "image_digest": "REPLACE_WITH_TESTED_IMAGE_AT_SHA256_DIGEST",
+        "network": "outbound",
+        "memory_limit_bytes": 8589934592,
+        "cpu_limit": 4,
+        "process_limit": 512,
+        "extra_mounts": [
+          {
+            "source": "/absolute/pipeline/lean-build",
+            "target": "/horizon-build",
+            "access": "read_write"
+          }
+        ]
+      }
+    }
+  ],
+  "publication_remotes": {},
+  "publication_header_files": {}
+}

@@ -1,0 +1,26 @@
+name: archon-horizon-pipeline
+services:
+  postgres:
+    image: ${HORIZON_POSTGRES_IMAGE:?Select a tested postgres image pinned by sha256 digest}
+    environment:
+      POSTGRES_DB: horizon_pipeline
+      POSTGRES_USER: horizon_pipeline
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_password
+    secrets:
+      - database_password
+    ports:
+      - "127.0.0.1:${HORIZON_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - ${HORIZON_POSTGRES_DATA:?Select a new absolute PostgreSQL data directory}:/var/lib/postgresql/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U horizon_pipeline -d horizon_pipeline"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+    stop_grace_period: 60s
+    labels:
+      archon-horizon.scope: pipeline-operator-managed
+secrets:
+  database_password:
+    file: ${HORIZON_POSTGRES_PASSWORD_FILE:?Select a private absolute password file}

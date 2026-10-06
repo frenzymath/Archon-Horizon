@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "archon-horizon"
 dynamic = ["version"]
-description = "Workspace-first orchestration for long-horizon Lean formalization agents."
+description = "Distributed orchestration for Lean formalization agents, projects, and review."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Axel Delaval" }]
 keywords = ["lean", "lean4", "formalization", "agents", "orchestration", "mathlib"]
 classifiers = [
@@ -20,18 +20,52 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-dependencies = [
-    "PyYAML>=6",
-    "typer>=0.12",
-    # Imported directly by the CLI (custom help formatter, exception handling);
-    # declared explicitly rather than relied on as a Typer transitive dep.
-    "click>=8.1",
-    "rich>=13",
-    "pyfiglet>=1.0",
-]
+# Runtime dependencies are selected per control-plane, worker, or client host.
+dependencies = []
 
 [project.optional-dependencies]
+client = ["pydantic>=2.10,<3", "httpx>=0.28,<1", "tenacity>=9,<10"]
+control-plane = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "pydantic>=2.10,<3",
+    "SQLAlchemy>=2.0.36,<2.1",
+    "psycopg[binary]>=3.2,<4",
+    "alembic>=1.14,<2",
+    "httpx>=0.28,<1",
+    "tenacity>=9,<10",
+    "argon2-cffi>=23.1,<26",
+    "PyYAML>=6,<7",
+    "pybtex>=0.25,<0.26",
+    "python-stdnum>=2.1,<3",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+]
+pipeline-worker = [
+    "pydantic>=2.10,<3",
+    "httpx>=0.28,<1",
+    "tenacity>=9,<10",
+    "PyYAML>=6",
+]
+search = ["numpy>=2", "scipy>=1.11", "bm25s>=0.2"]
 dev = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "pydantic>=2.10,<3",
+    "SQLAlchemy>=2.0.36,<2.1",
+    "psycopg[binary]>=3.2,<4",
+    "alembic>=1.14,<2",
+    "httpx>=0.28,<1",
+    "tenacity>=9,<10",
+    "argon2-cffi>=23.1,<26",
+    "pybtex>=0.25,<0.26",
+    "python-stdnum>=2.1,<3",
+    "opentelemetry-api>=1.30,<2",
+    "opentelemetry-sdk>=1.30,<2",
+    "PyYAML>=6",
+    "numpy>=2",
+    "scipy>=1.11",
+    "bm25s>=0.2",
     "pytest>=8",
 ]
 
@@ -42,9 +76,9 @@ Changelog = "https://github.com/frenzymath/Archon-Horizon/blob/main/docs/CHANGEL
 Issues = "https://github.com/frenzymath/Archon-Horizon/issues"
 
 [project.scripts]
-# Thin entry: ``agent-hook-fast`` bypasses the full Typer CLI import so engine
-# lifecycle hooks stay cheap on every tool boundary.
-horizon = "archon_horizon.__main__:main"
+horizon = "archon_horizon.pipeline.cli:main"
+horizon-pipeline = "archon_horizon.pipeline.cli:main"
+horizon-lean-check = "archon_horizon.pipeline.worker.lean_build:main"
 
 # include-package-data is intentionally OFF: it sweeps the whole package tree,
 # which pulled hundreds of ``frontend/node_modules`` files into the wheel. We
@@ -57,12 +91,12 @@ include-package-data = false
 version = { attr = "archon_horizon.__version__" }
 
 [tool.setuptools.package-data]
-# Non-.py data we ship: skill + subagent-descriptor markdown, and the built
+# Non-.py data we ship: skill and reviewer markdown, and the built
 # dashboard assets (the frontend *source* and node_modules are excluded).
 "archon_horizon" = [
-    "skills/**/*.md",
-    "subagents/**/*.md",
-    "hgraph/*.md",
+    "pipeline/skills/**/*.md",
+    "pipeline/skills/**/scripts/*.py",
+    "pipeline/subagents/**/*.md",
     "frontend/dist/**/*",
 ]
 
@@ -75,3 +109,4 @@ exclude = ["archon_horizon.frontend*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]

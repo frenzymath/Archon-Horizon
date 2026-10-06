@@ -1,9 +1,13 @@
 __pycache__/
+dev/
+ignored-folder/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-horizon/
+.horizon-workers
 dist/
 build/
 *.egg-info/
@@ -11,14 +15,18 @@ build/
 # frontend
 node_modules/
 frontend/dist/
-src/archon_horizon/server/static/
-
-# ephemeral workspace leases (never committed; see vcs/integration.py)
-.archon-horizon/locks/
-.archon-horizon/run.lock
+# Local operator state and generated worker bundles.
+.archon-horizon/
+.horizon/
+.horizon-agent-library/
+/agent-library/
+/lean-cache/
+/config.yaml
 
 # local scratch / probes
 .claude/
+.codex/
+/.mcp.json
 subagent_test/
 /claude_error.log
 /claude_test.jsonl
@@ -27,3 +35,7 @@ subagent_test/
 
 # local manuscript drafts
 /arxiv-paper/
+.env
+_site/
+*.lock
+*.tmp

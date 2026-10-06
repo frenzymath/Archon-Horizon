@@ -1,63 +1,14 @@
 # Archon Horizon Documentation
 
-In-depth guides for [**Archon Horizon**](../README.md) — workspace-first orchestration for long-horizon Lean 4 formalization agents. Each topic lives in its own subfolder, and each guide links inline to the relevant source files under [`src/archon_horizon/`](../src/archon_horizon) so you (or an agent) can jump straight to the implementation.
-
-> [!TIP]
-> New here? Start with the [main README](../README.md) for the elevator pitch and Quick Start, then dive into the guides below.
-
----
-
-## Table of Contents
-
-- [Guides](#guides)
-- [Command map](#command-map)
-
----
-
-## Guides
-
-| Guide | Covers | Key commands |
-| :--- | :--- | :--- |
-| 🏗️ [Architecture & Core Concepts](./architecture/README.md) | The Horizon loop, fresh-context Ground helper, multi-project workspaces, harness execution seams, and native subagents. | — |
-| 📁 [Workspaces & Projects](./workspaces-and-projects/README.md) | Scaffolding a workspace, embedded vs. out-of-tree Git projects, and pre-dispatch freeze protections. | `horizon init`, `horizon project` |
-| 🔧 [Configuration](./configuration/README.md) | Every `config.yaml` section — workspace defaults, harnesses/models, projects, external libraries, GitHub, and freeze rules. | — |
-| ⚙️ [Orchestration & Roadmap](./orchestration-and-roadmap/README.md) | The multi-round collaboration loop, running tasks, milestones, and structured execution reports. | `horizon run`, `horizon roadmap`, `horizon task` |
-| 💬 [Inboxes & Communication](./inboxes-and-communication/README.md) | Async local inboxes, standing protections (soft freezes), and GitHub CLI shadow sync. | `horizon inbox`, `horizon sync` |
-| 📐 [Blueprints & semantic graphs](./blueprints-and-graph/README.md) | Synchronizing blueprints and Lean into the vendored graph and using the chapter Graphviz view. | `horizon blueprint`, `horizon graph` |
-| 🖥️ [Dashboard & Search](./dashboard-and-search/README.md) | The live web dashboard, static export for GitHub Pages, and offline declaration search. | `horizon dashboard`, `horizon search` |
-| 💻 [CLI Reference](./cli-reference/README.md) | Complete command and flag reference, plus `--json` machine-readable output. | all |
-| 📝 [Changelog](./CHANGELOG.md) | Version release notes and migration instructions. | — |
-
-The corpus-derived [formalization review guidance](./design/formalization-review.md)
-explains the optional focused skills and read-only reviewer roles for source
-fidelity, semantic robustness, proof evidence, graph traceability, API
-composition, provenance, strategy, and run health.
-
----
-
-## Command map
-
-Every command supports `--json` for machine-readable output on `stdout`.
-
-| Command | Purpose |
-| :--- | :--- |
-| `horizon init` | Scaffold a workspace, or refresh managed subagents/skills (`--update`). |
-| `horizon setup` | Check and configure external tools (Claude Code, Lean 4 toolchain, …). |
-| `horizon update` | Upgrade the Archon Horizon package. |
-| `horizon run <target>` | Run autoformalization on a task/project, everything (`*`), or an interactive Horizon session. |
-| `horizon discuss` | Interactive session to talk with the workspace (status, recent runs, guided edits). |
-| `horizon roadmap` | Manage milestones and the overarching roadmap. |
-| `horizon task` | Create and manage formalization tasks. |
-| `horizon project` | Add and manage member Lean projects. |
-| `horizon inbox` | Manage local hints, issues, protections, per-team ownership, read-state, and cross-team messages. |
-| `horizon sync` | Shadow-sync GitHub issues and pull requests via the `gh` CLI. |
-| `horizon blueprint` | Extract and inspect LaTeX blueprints. |
-| `horizon graph` | Synchronize, query, and annotate a project's semantic graph. |
-| `horizon search <query>` | Offline search for lemmas/definitions in Mathlib and local projects. |
-| `horizon dashboard` | Run the live web server or export static HTML (`--static`). |
-| `horizon benchmark` | Rank Lean files by summed `set_option` heartbeat budgets. |
-| `horizon tmp` | Inspect or clean workspace-local session scratch. |
-| `horizon skills` | Manage workspace-local skill files. |
-| `horizon permissions` | Show the workspace's delegation permissions — whether an agent may launch tasks/runs for other teams (default: deny). |
-
-See the [CLI Reference](./cli-reference/README.md) for flags and advanced options.
+| Guide | Contents |
+| --- | --- |
+| [Setup](pipeline-setup.md) | Installation, PostgreSQL, workers, sandboxing, publication and backups |
+| [Architecture](architecture.md) | Runtime boundaries and durable state |
+| [Mission coordination](mission-coordination.md) | Scoped delegation, mission trees, derived queue readiness, repair ownership and shared health |
+| [Skills and reviewers](pipeline-reviewers.md) | Catalog editing, review perspectives, native identities and PR discussions |
+| [Forgejo and Zulip](pipeline-browser-integrations.md) | Dashboard integration and native login |
+| [Roadmap indexing](pipeline-roadmap-index.md) | Graph projections from versioned repository documents |
+| [Milestone preprocessing](pipeline-milestones.md) | Lean contracts, strict review, trusted checks, human approval and explicit proof launch |
+| [Design specification](design/pipeline.md) | Intended pipeline and domain semantics; consult API schemas for implemented fields |
+| [Development](../CONTRIBUTING.md) | Tests, packaging, and contribution conventions |
+| [Changelog](CHANGELOG.md) | Historical release notes |

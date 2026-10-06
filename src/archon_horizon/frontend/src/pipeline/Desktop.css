@@ -1,0 +1,25 @@
+.horizon-desktop .platform-empty {padding: 32px 0; color: var(--text-secondary);}
+.horizon-desktop .platform-graph-target {width: 28rem; max-width: min(100%, 36rem);}
+.horizon-desktop .desktop-command-actions {display: flex; gap: 8px; margin-top: 8px;}
+.horizon-desktop .platform-sidebar-foot {margin-top: auto;}
+.horizon-desktop .desktop-project-dialog {width: 680px; max-width: calc(100vw - 80px);}
+.horizon-desktop .desktop-native-toolbar {display: flex; justify-content: flex-end; align-items: center; gap: 8px; height: 40px; padding: 0 18px; background: white; border-bottom: 1px solid var(--border);}
+.horizon-desktop .desktop-native-frame {display: block; border: 0; width: 100%; height: calc(100vh - 98px); min-height: 400px; background: white;}
+.horizon-desktop .desktop-native-error {margin: 24px;}
+.horizon-desktop .desktop-native-toolbar > strong {margin-right: auto; font-size: 12px; color: var(--text-secondary);}
+.horizon-desktop .desktop-native-connecting {display: flex; align-items: center; gap: 10px; padding: 24px 0; color: var(--text-secondary);}
+.horizon-desktop .desktop-native-error .platform-small-button {margin-left: 12px;}
+.horizon-desktop .desktop-breadcrumb {display: flex; align-items: center; gap: 8px; min-width: 0;}
+.horizon-desktop .desktop-project-context {max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px;}
+.horizon-desktop .run-phase {font-size: 12px; color: var(--text-secondary);}
+.horizon-desktop .run-phase strong {font-weight: 600; color: var(--text-primary);}
+.horizon-desktop .activity-run-subtitle .run-phase {font-size: inherit;}
+.horizon-desktop .activity-run-subtitle .run-phase strong {display: inline; font-size: inherit;}
+.horizon-desktop .desktop-project-runs {margin: 18px 0 24px; border-top: 1px solid var(--border);}
+.horizon-desktop .desktop-project-runs h2 {font-size: 14px; margin: 12px 0;}
+.horizon-desktop .desktop-project-runs .platform-toolbar {justify-content: space-between; margin-bottom: 0;}
+.horizon-desktop .desktop-project-run {display: flex; align-items: center; gap: 16px; width: 100%; padding: 12px 0; text-align: left; color: inherit; background: none; border: 0; border-bottom: 1px solid var(--border); cursor: pointer;}
+.horizon-desktop .desktop-project-run:hover {background: var(--surface-hover, #f7f8fa);}
+.horizon-desktop .desktop-project-run-title {display: grid; gap: 5px; flex: 1; min-width: 0; overflow-wrap: anywhere;}
+.horizon-desktop .desktop-project-run-title > strong {font-size: 13px; font-weight: 600;}
+.horizon-desktop .desktop-project-run-status {font-size: 12px; color: var(--text-secondary);}

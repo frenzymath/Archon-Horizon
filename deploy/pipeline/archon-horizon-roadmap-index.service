@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the accepted Horizon roadmap index
+After=archon-horizon-pipeline-api.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/archon-horizon-pipeline/roadmap-index.env
+ExecStart=%h/.local/share/archon-horizon/venv/bin/python -m archon_horizon.pipeline.roadmap_index --config ${HORIZON_SERVER_CONFIG} --operator ${HORIZON_OPERATOR} --repository-id ${HORIZON_ROADMAP_REPOSITORY_ID} --git-directory ${HORIZON_ROADMAP_GIT_DIRECTORY} --revision ${HORIZON_ROADMAP_REVISION} --apply --skip-unchanged
+TimeoutStartSec=120
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

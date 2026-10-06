@@ -1,0 +1,117 @@
+.horizon-search { min-width: 0; }
+.horizon-search-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid #e4e4e4; }
+.horizon-search-actions { display: flex; align-items: center; gap: 8px; }
+.horizon-search-toolbar {
+  display: grid;
+  gap: 12px;
+  padding: 18px 0 20px;
+  border-bottom: 1px solid #e4e4e4;
+  margin-bottom: 20px;
+}
+.horizon-search-selectors { display: flex; align-items: end; gap: 12px; }
+.horizon-search-toolbar label:not(.platform-search-field) {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #6c6c6c;
+  font-size: 10px;
+  font-weight: 700;
+}
+.horizon-search-toolbar select {
+  height: 36px;
+  min-width: 140px;
+  max-width: 220px;
+  padding: 0 10px;
+  border: 1px solid #e2e2e2;
+  border-radius: 5px;
+  background: #fff;
+  color: #616161;
+  font: inherit;
+}
+.horizon-search-query { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+.horizon-search-toolbar .platform-search-field { width: 100%; height: 42px; }
+.horizon-search-toolbar .platform-search-field input { height: 40px; font-size: 13px; }
+.horizon-search-query .platform-primary { min-width: 104px; justify-content: center; }
+.horizon-search-lib input {
+  height: 36px;
+  width: 150px;
+  padding: 0 10px;
+  border: 1px solid #e2e2e2;
+  border-radius: 5px;
+  background: #fff;
+  color: #2f2f2f;
+  font: inherit;
+}
+.horizon-search-libraries { margin: 8px 0 22px; }
+.horizon-search-library {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #eaeaea;
+}
+.horizon-search-library > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  min-height: 72px;
+  padding: 14px 2px;
+  border: 0;
+  background: transparent;
+  color: #363636;
+  text-align: left;
+  cursor: pointer;
+}
+.horizon-search-library.selected > button:first-child { background: var(--platform-accent-bg); }
+.horizon-search-library > button:first-child > svg { flex-shrink: 0; color: var(--platform-accent-text); }
+.horizon-search-library span { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.horizon-search-library strong { display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.horizon-search-library .horizon-search-builtin {
+  display: inline-block;
+  padding: 2px 5px;
+  border: 1px solid #b9d4c0;
+  border-radius: 4px;
+  background: #edf7ef;
+  color: #32623d;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.horizon-search-library small { color: #888; font-size: 11px; overflow-wrap: anywhere; }
+.horizon-search-library > button:first-child > span:last-of-type {
+  margin-left: auto;
+  color: #7f7f7f;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.horizon-search-results { margin-top: 8px; }
+.horizon-search-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 2px;
+  border-bottom: 1px solid #eaeaea;
+}
+.horizon-search-hit header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
+.horizon-search-hit strong { font-size: 13px; overflow-wrap: anywhere; }
+.horizon-search-hit header span { color: #888; font-size: 11px; }
+.horizon-search-hit code {
+  overflow-wrap: anywhere;
+  color: #4d4d4d;
+  font: 12px/1.55 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.horizon-search-hit p { margin: 0; color: #616161; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.horizon-search-hit small { color: #949494; font-size: 11px; overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .horizon-search-selectors { flex-wrap: wrap; }
+  .horizon-search-toolbar select, .horizon-search-lib input, .horizon-search-toolbar .platform-search-field { width: 100%; max-width: none; }
+  .horizon-search-selectors > label { flex: 1 1 180px; }
+}
+@media (max-width: 560px) {
+  .horizon-search-head { align-items: flex-start; }
+  .horizon-search-actions .platform-small-button { width: auto; }
+  .horizon-search-query { grid-template-columns: minmax(0, 1fr); }
+  .horizon-search-query .platform-primary { width: 100%; }
+}
