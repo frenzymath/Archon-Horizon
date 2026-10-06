@@ -413,6 +413,7 @@ class Scheduler:
                 workspace, workspace.c.id == thread.c.workspace_id).join(
                 run_host, run_host.c.run_id == pending.c.run_id)).where(
             pending.c.status == "pending", pending.c.role.in_(("worker", "maintainer")),
+            pending.c.automation_id.is_not(None),
             thread.c.kind == "primary", thread.c.status == "creating",
             run_host.c.host_id == workspace.c.host_id,
             run_host.c.enabled.is_(True),

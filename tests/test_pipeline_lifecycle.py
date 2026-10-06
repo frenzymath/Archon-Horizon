@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
@@ -83,6 +84,42 @@ def test_manual_maintainer_with_unavailable_context_waits_for_explicit_recovery(
     assert world.claim() is None
     replacement = world.command("recover_context", thread, note="Native state cannot be resumed")
     assert world.claim()["provider_thread_record_id"] == str(replacement["id"])
+
+
+@pytest.mark.parametrize("role", ["maintainer", "worker"])
+def test_manual_prelaunch_context_survives_stale_host(world, role):
+    run = world.run()
+    world.disable_automations(run)
+    assignment = world.assignment(run, role=role)
+    claim = world.claim()
+    world.scheduler.finish(world.conn, world.host_actor, get(world.conn, "execution", claim["execution_id"]),
+                           "failed", {"kind": "transport", "code": "connection_error", "message": "Connection interrupted"})
+    thread = get(world.conn, "provider_thread", claim["provider_thread_record_id"])
+    assert thread["status"] == "creating" and thread["provider_thread_id"] is None
+    assert get(world.conn, "execution", claim["execution_id"])["stop_confirmed_at"] is not None
+    change(world.conn, "host", world.host["id"], heartbeat_at=datetime.now(timezone.utc) - timedelta(days=1))
+    assert not world.scheduler.capacity(world.conn, [world.host["id"]])
+    assert world.scheduler.tick(world.conn)["retired_maintainers"] == 0
+    assert get(world.conn, "assignment", assignment["id"])["status"] == "pending"
+    assert get(world.conn, "provider_thread", thread["id"])["status"] == "creating"
+
+    world.conn.execute(update(tables["assignment"]).where(tables["assignment"].c.id == assignment["id"])
+                       .values(retry_at=None))
+    resumed = world.claim()
+    assert resumed["assignment_id"] == str(assignment["id"])
+    assert resumed["provider_thread_record_id"] == str(thread["id"])
+
+
+def test_automated_prelaunch_context_retires_on_stale_host(world):
+    run = world.run()
+    claim = world.claim()
+    assignment = get(world.conn, "assignment", claim["assignment_id"])
+    assert assignment["automation_id"] is not None
+    world.scheduler.finish(world.conn, world.host_actor, get(world.conn, "execution", claim["execution_id"]),
+                           "failed", {"kind": "transport", "code": "connection_error", "message": "Connection interrupted"})
+    change(world.conn, "host", world.host["id"], heartbeat_at=datetime.now(timezone.utc) - timedelta(days=1))
+    assert world.scheduler.tick(world.conn)["retired_maintainers"] == 1
+    assert get(world.conn, "assignment", assignment["id"])["status"] == "cancelled"
 
 
 def test_draining_finishes_existing_work_but_only_accepts_explicit_repairs(world):
