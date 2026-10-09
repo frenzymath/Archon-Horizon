@@ -27,8 +27,9 @@ const server = http.createServer((req, res) => {
     browser = await chromium.launch({headless: true, args: ['--no-sandbox']});
     page = await browser.newPage({viewport: {width: 1440, height: 1000}});
     page.setDefaultTimeout(15000);
-    const errors = [], forbidden = [];
+    const errors = [], forbidden = [], consoleErrors = [];
     page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => {if (message.type() === 'error') consoleErrors.push(message.text());});
     page.on('request', request => {
       const url = new URL(request.url());
       if (url.origin !== base || !url.pathname.startsWith(prefix)) forbidden.push(request.url());
@@ -72,6 +73,7 @@ const server = http.createServer((req, res) => {
     await page.goto(`${base}${prefix}?project=demo-project&node=sum-step`);
     await page.getByRole('heading', {name: 'Induction step', exact: true}).waitFor();
     assert.deepEqual(errors, []);
+    assert.deepEqual(consoleErrors, []);
     console.log('Dashboard demo browser navigation passed under /Archon-Horizon/demo/.');
   } catch (error) {
     if (page) console.error((await page.locator('body').innerText()).slice(0, 6000));

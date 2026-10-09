@@ -1,6 +1,7 @@
 # Dashboard demo
 
-<a href="../demo/">Open the read-only dashboard</a>.
+[Open the published read-only dashboard](https://frenzymath.github.io/Archon-Horizon/demo/).
+For a local documentation build, <a href="../demo/">open the local demo</a>.
 
 The demo uses the actual React dashboard with a small invented project. Explore
 the project overview, objective checkboxes, node directory, a node's DAG,

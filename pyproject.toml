@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "archon-horizon"
 dynamic = ["version"]
-description = "Distributed orchestration for Lean formalization agents, projects, and review."
+description = "Distributed, objective-led control plane for Lean 4 formalization projects."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -71,6 +71,8 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/frenzymath/Archon-Horizon"
+Documentation = "https://frenzymath.github.io/Archon-Horizon/"
+"Dashboard Demo" = "https://frenzymath.github.io/Archon-Horizon/demo/"
 Repository = "https://github.com/frenzymath/Archon-Horizon"
 Changelog = "https://github.com/frenzymath/Archon-Horizon/blob/main/docs/CHANGELOG.md"
 Issues = "https://github.com/frenzymath/Archon-Horizon/issues"
