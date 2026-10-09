@@ -21,6 +21,7 @@
     "test:references": "esbuild tests/references.test.tsx --bundle --format=cjs --platform=node --loader:.css=empty --outfile=node_modules/.cache/references-tests.cjs && node node_modules/.cache/references-tests.cjs",
     "build:demo": "vite build --config vite.showcase.config.ts",
     "test:demo": "npm run test:demo-transport && node tests/showcase.browser.cjs",
+    "test:docs": "node tests/docs.browser.cjs",
     "test:demo-transport": "esbuild tests/showcaseTransport.test.ts --bundle --format=cjs --platform=node --outfile=node_modules/.cache/showcase-transport-tests.cjs && node node_modules/.cache/showcase-transport-tests.cjs",
     "test:references:browser": "node tests/references.browser.cjs"
   },

@@ -16,6 +16,7 @@ python -m mkdocs build --strict
 npm --prefix src/archon_horizon/frontend run build:demo
 python scripts/assemble_docs_demo.py
 npm --prefix src/archon_horizon/frontend run test:demo
+npm --prefix src/archon_horizon/frontend run test:docs
 python -m http.server 8000 --bind 127.0.0.1 --directory _site
 ```
 
@@ -25,6 +26,12 @@ subpath. The browser check serves the artifact below `/Archon-Horizon/demo/` and
 checks navigation, reload, graph rendering, read-only behavior, and absence of
 API/external network requests. `build:demo` leaves the normal packaged dashboard
 in `frontend/dist/` untouched.
+
+The documentation browser check verifies navigation, persisted light/dark mode,
+and browser errors under the same repository subpath. It substitutes the optional
+highlight.js CDN assets so theme checks do not depend on third-party availability.
+The MkDocs theme's color toggle requires its highlight.js stylesheet elements;
+keep `highlightjs` enabled with the light/dark toggle.
 
 After editing the synthetic example, run
 `python scripts/generate_dashboard_fixture.py`, then repeat the build and browser
