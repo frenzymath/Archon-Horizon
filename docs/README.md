@@ -1,5 +1,8 @@
 # Archon Horizon Documentation
 
+[Read the published site](https://frenzymath.github.io/Archon-Horizon/) or
+[open the read-only dashboard demo](https://frenzymath.github.io/Archon-Horizon/demo/).
+
 | Guide | Contents |
 | --- | --- |
 | [Setup](pipeline-setup.md) | Installation, PostgreSQL, workers, sandboxing, publication and backups |

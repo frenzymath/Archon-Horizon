@@ -1,6 +1,8 @@
 # Archon Horizon
 
 ![Version](https://img.shields.io/badge/version-0.2.0--alpha.2-blue)
+[![Documentation](https://img.shields.io/badge/docs-online-blue)](https://frenzymath.github.io/Archon-Horizon/)
+[![Dashboard demo](https://img.shields.io/badge/dashboard-read--only_demo-blue)](https://frenzymath.github.io/Archon-Horizon/demo/)
 [![Poincaré conjecture paper](https://img.shields.io/badge/arXiv-2610.08329-b31b1b)](https://arxiv.org/html/2610.08329v1)
 
 > [!WARNING]
@@ -153,11 +155,13 @@ for configuration and sharing instructions.
 
 ## Documentation And Demo
 
-The [documentation index](docs/README.md) collects setup, architecture, agent
-workflows, and review guidance. A GitHub Pages site and a read-only dashboard demo
-can be built from this checkout; see the [site guide](docs/documentation-site.md)
-and [demo guide](docs/dashboard-demo.md). The demo uses synthetic data and needs
-no Horizon installation or provider account.
+Read the [published documentation](https://frenzymath.github.io/Archon-Horizon/)
+or [open the read-only dashboard demo](https://frenzymath.github.io/Archon-Horizon/demo/).
+The demo uses synthetic data and needs no Horizon installation or provider account.
+
+The [source documentation index](docs/README.md) collects setup, architecture,
+agent workflows, and review guidance. To build or preview the site locally, see
+the [site guide](docs/documentation-site.md) and [demo guide](docs/dashboard-demo.md).
 
 ## License
 
