@@ -48,6 +48,8 @@ jobs:
         working-directory: src/archon_horizon/frontend
       - name: Check demo under a repository subpath
         run: npm --prefix src/archon_horizon/frontend run test:demo
+      - name: Check documentation navigation and theme
+        run: npm --prefix src/archon_horizon/frontend run test:docs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
