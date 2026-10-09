@@ -1,7 +1,7 @@
 {
   "name": "archon-horizon-dashboard",
   "private": true,
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "type": "module",
   "scripts": {
     "test": "npm run test:navigation && npm run test:blueprint && npm run test:graph && npm run test:activity && npm run test:missions && npm run test:phase && npm run test:references && npm run test:demo-transport",

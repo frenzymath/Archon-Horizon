@@ -1,6 +1,6 @@
 # v0.2.0 Manual Review Implementation
 
-This work implements the operator's notes in the current beta-development
+This work implements the operator's notes in the current alpha-development
 worktree. It preserves operator state and earlier working changes; no production
 database or live formalization run was migrated. The package still declares
 alpha status. Passing these checks does not declare a beta or stable release.

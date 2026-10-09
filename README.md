@@ -1,11 +1,11 @@
 # Archon Horizon
 
-![Version](https://img.shields.io/badge/version-0.2.0--alpha.1-blue)
+![Version](https://img.shields.io/badge/version-0.2.0--alpha.2-blue)
 [![Poincaré conjecture paper](https://img.shields.io/badge/arXiv-2610.08329-b31b1b)](https://arxiv.org/html/2610.08329v1)
 
 > [!WARNING]
 > Archon Horizon v0.2.0 is **alpha software** and substantially changes the
-> architecture from [v0.1.5](https://github.com/frenzymath/Archon-Horizon/tree/5d603f8ee7d66de81eff2863cbb6f29b4440712a).
+> architecture from [v0.1.5](https://github.com/frenzymath/Archon-Horizon/tree/v0.1.5).
 > Use v0.2.0 for new projects only; keep existing projects on their current version.
 
 Archon Horizon coordinates automatic Lean formalization across projects and worker
