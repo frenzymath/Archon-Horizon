@@ -57,7 +57,7 @@ type HostHarness = {
   harness_id: string;
   harness_slug?: string;
   execution_slots: number;
-  max_parallel_subagents: number;
+  max_parallel_subagents: number | null;
   enabled: boolean;
   credential_configured: boolean;
 };
@@ -256,7 +256,7 @@ export function ProjectCreate({
     if (!writable) return;
     const project = await action.save<Project>(
       "/records/project",
-      { title: title.trim(), slug, description },
+      { title: title.trim(), slug, description, workflow: "graph" },
       "POST",
     );
     if (project) onCreated(project);
@@ -449,11 +449,13 @@ function ProjectEditor({
           />
         </label>
         <label className="pl-admin-wide">Workflow
-          <select value={draft.workflow || "legacy"} disabled={project.workflow === "milestones"}
-            onChange={event => setDraft({...draft, workflow: event.target.value as "legacy" | "milestones"})}>
-            <option value="legacy">Existing roadmap workflow</option>
-            <option value="milestones">Reviewed Lean milestones</option>
+          <select value={draft.workflow || "legacy"}
+            onChange={event => setDraft({...draft, workflow: event.target.value as Project["workflow"]})}>
+            <option value="graph">Objective and graph / agent-managed milestones</option>
+            {(!project.workflow || project.workflow === "legacy") && <option value="legacy">Legacy roadmap workflow</option>}
+            <option value="milestones">Legacy reviewed Lean milestones</option>
           </select>
+          <small>Workflow changes require all project runs to be stopped. The graph workflow uses ordinary milestone nodes without baseline gates.</small>
         </label>
       </fieldset>
       <SaveActions
@@ -1113,7 +1115,7 @@ export function Resources({ accountId, admin = false }: AdminProps) {
                         <td>{pool.slug}</td>
                         <td>{pool.kind.replace(/_/g, " ")}</td>
                         <td>
-                          {pool.occupied} / {pool.max_concurrent}
+                          {pool.occupied} / {pool.max_concurrent ?? "Uncapped"}
                         </td>
                         <td>
                           {pool.cooldown_until ? (

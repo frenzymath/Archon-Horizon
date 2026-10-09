@@ -8,7 +8,7 @@ import pytest
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from archon_horizon.pipeline.telemetry import RequestTelemetry, make_tracer_provider
+from archon_horizon.pipeline.operations.telemetry import RequestTelemetry, make_tracer_provider
 
 
 def test_request_trace_uses_route_template_and_excludes_sensitive_input(caplog):

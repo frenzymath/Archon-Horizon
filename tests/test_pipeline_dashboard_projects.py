@@ -1,8 +1,9 @@
 import pytest
 
-from archon_horizon.pipeline import dashboard_projects, models
+from archon_horizon.pipeline.dashboard import dashboard_projects
+from archon_horizon.pipeline import models
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import get
+from archon_horizon.pipeline.persistence.records import get
 from archon_horizon.pipeline.roadmap_index import index_snapshot
 from test_pipeline_service import service_database, world
 
@@ -44,6 +45,46 @@ def test_project_graph_has_real_edges_and_document_detail_is_separate(world):
     assert "markdown" not in objective
     detail = dashboard_projects.objectives(world.conn, world.actor, world.project["id"], world.service.config, objective["id"])
     assert detail["markdown"] == "- [x] [[node:main]]"
+
+
+def test_node_type_and_milestone_filters_combine_before_pagination(world):
+    sources = {
+        "nodes/first.md": "---\nlabel: distinguished-result\ntitle: First result\ntype: theorem\nlabels: [milestone, formally_stated]\n---\nStatement",
+        "nodes/second.md": "---\ntitle: Second result\ntype: theorem\nlabels: [Milestone, informal_stated]\n---\nStatement",
+        "nodes/legacy.md": "---\ntitle: Historical result\ntype: milestone\n---\nStatement",
+        "nodes/helper.md": "---\ntitle: Helper\ntype: lemma\nlabels: [formally_stated]\n---\nStatement",
+        "nodes/plain.md": "---\ntitle: Plain node\n---\nStatement",
+    }
+    index_snapshot(world.conn, world.actor, world.document["source_repository_id"], "b" * 40, sources)
+    def directory(**filters):
+        return dashboard_projects.nodes(world.conn, world.actor, world.project["id"], world.service.config, **filters)
+    types = ["lemma", "milestone", "node", "theorem"]
+    page = directory(milestone=True, node_type="theorem", offset=1, limit=1)
+    assert page["total"] == 2 and [row["title"] for row in page["nodes"]] == ["Second result"]
+    assert page["types"] == types
+    assert directory(milestone=True)["total"] == 3
+    assert directory(milestone=False)["total"] == 2
+    assert directory(milestone=False, node_type="theorem")["total"] == 0
+    assert directory(node_type="node")["nodes"][0]["title"] == "Plain node"
+    filtered = directory(milestone=True, node_type="theorem", label="formally_stated")
+    assert filtered["total"] == 1 and filtered["nodes"][0]["title"] == "First result"
+    assert filtered["types"] == types
+    assert directory(search="distinguished-result", milestone=True)["total"] == 1
+    assert directory(search="%_")["total"] == 0
+    historical = directory(node_type="milestone")["nodes"][0]
+    assert historical["labels"] == ["milestone"]
+    assert historical["metadata"]["labels"] == ["milestone"]
+    detail = dashboard_projects.node_detail(world.conn, world.actor, world.project["id"], "legacy", world.service.config)
+    assert "milestone" in detail["node"]["labels"]
+    graph = dashboard_projects.graph(world.conn, world.actor, world.project["id"], world.service.config)
+    assert len([row for row in graph["nodes"] if "milestone" in row["labels"]]) == 3
+    # Display compatibility must not change the source metadata or its content pin.
+    from sqlalchemy import select
+    from archon_horizon.pipeline.persistence.schema import tables
+    projection = tables["source_projection"]
+    raw = world.conn.execute(select(projection.c.metadata).where(projection.c.repository_id == world.document["source_repository_id"],
+        projection.c.source_path == "nodes/legacy.md")).scalar_one()
+    assert "labels" not in raw
 
 
 def test_project_node_lookup_never_crosses_project_scope(world):
@@ -101,7 +142,7 @@ def test_reparent_mission_rejects_cycles_cross_project_and_preserves_revision_gu
 
 def test_reparent_uses_existing_mission_goal_update_path(world):
     from sqlalchemy import select
-    from archon_horizon.pipeline.schema import tables
+    from archon_horizon.pipeline.persistence.schema import tables
 
     parent = world.service.mission(world.conn, world.actor, models.MissionCreate(project_id=world.project["id"], title="Parent", objective="Global strategy"))
     run = world.run()

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from archon_horizon.pipeline.records import create
+from archon_horizon.pipeline.persistence.records import create
 from test_pipeline_api import api, api_database, mutate
 
 

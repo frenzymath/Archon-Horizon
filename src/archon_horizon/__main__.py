@@ -1,4 +1,8 @@
-"""Run the Horizon operator and agent CLI."""
+"""Run the same CLI as the ``horizon`` and ``horizon-pipeline`` console scripts.
+
+Keeping one implementation avoids command behavior drifting between entrypoints.
+SystemExit below propagates the CLI's return code to shells and service managers.
+"""
 
 from __future__ import annotations
 

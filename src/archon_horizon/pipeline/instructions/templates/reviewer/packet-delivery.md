@@ -1,0 +1,1 @@
+Use the report response's idempotency_key, not its id (outbox UUID). The receipt namespace is reviewer_report even though response.kind is forge_review. status=completed and result_ref_id establish delivery, not semantic acceptance.

@@ -15,8 +15,8 @@ import uvicorn
 
 from archon_horizon.pipeline.api import create_app
 from archon_horizon.pipeline.auth import issue_credential
-from archon_horizon.pipeline.records import get, transaction_lock
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import get, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
 from archon_horizon.pipeline.worker.daemon import HarnessConfig, WorkerDaemon
 from archon_horizon.pipeline.worker.journal import DurableJournal
 from archon_horizon.pipeline.worker.provider import HeadlessAdapter

@@ -5,8 +5,8 @@ import httpx
 import pytest
 from sqlalchemy import func
 
-from archon_horizon.pipeline.connectors import ConnectorManager
-from archon_horizon.pipeline.records import change, create, get
+from archon_horizon.pipeline.integrations.connectors import ConnectorManager
+from archon_horizon.pipeline.persistence.records import change, create, get
 from test_pipeline_api import api, api_database, auth, mutate
 from test_pipeline_forge_change_delivery import Forge
 

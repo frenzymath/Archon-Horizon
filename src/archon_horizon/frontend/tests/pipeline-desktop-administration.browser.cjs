@@ -309,6 +309,13 @@ async function main() {
     await tab
       .getByRole("textbox", { name: "Reviewer instructions" })
       .fill("Preserve this draft after a conflict.");
+    // Clicking the current category also resets its selection; require the same
+    // discard guard as switching categories so a non-first editor is protected.
+    await Promise.all([
+      tab.waitForEvent("dialog").then(dialog => dialog.dismiss()),
+      tab.getByRole("tab", {name: "Reviewers", exact: true}).click(),
+    ]);
+    assert.equal(await tab.getByRole("textbox", {name: "Reviewer instructions"}).inputValue(), "Preserve this draft after a conflict.");
     tab.once("dialog", dialog => void dialog.dismiss());
     await tab.getByRole("combobox", {name:"Reviewer project"}).selectOption("project-2");
     assert.equal(await tab.getByRole("combobox", {name:"Reviewer project"}).inputValue(),"project-1");
@@ -344,7 +351,7 @@ async function main() {
       fullPage: true,
     });
     await tab.getByRole("tab", {name:"Skills",exact:true}).click();
-    await tab.getByText("2 skills / Installed catalog", {exact:true}).waitFor();
+    await tab.getByText("2 skills and prompts / Installed catalog", {exact:true}).waitFor();
     await tab.getByRole("heading", {name:"Selected instruction"}).waitFor();
     assert.equal(instructionReads.length,1);
     await tab.getByRole("button", {name:"lean-check",exact:true}).click();

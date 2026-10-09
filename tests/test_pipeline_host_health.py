@@ -3,8 +3,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from archon_horizon.pipeline.records import get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, auth
 
 

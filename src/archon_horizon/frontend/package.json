@@ -1,15 +1,15 @@
 {
   "name": "archon-horizon-dashboard",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.0-alpha.1",
   "type": "module",
   "scripts": {
-    "test": "npm run test:navigation && npm run test:blueprint && npm run test:graph && npm run test:activity && npm run test:missions && npm run test:phase",
+    "test": "npm run test:navigation && npm run test:blueprint && npm run test:graph && npm run test:activity && npm run test:missions && npm run test:phase && npm run test:references && npm run test:demo-transport",
     "test:navigation": "esbuild tests/navigation.test.ts --bundle --format=cjs --platform=node --outfile=node_modules/.cache/navigation-tests.cjs && node node_modules/.cache/navigation-tests.cjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:pipeline": "npm run test:transport && node tests/pipeline.browser.cjs",
+    "test:pipeline": "npm run test:transport && node tests/pipeline.browser.cjs && npm run test:references:browser",
     "test:transport": "esbuild tests/pipelineTransport.test.ts --bundle --format=cjs --platform=node --outfile=node_modules/.cache/transport-tests.cjs && node node_modules/.cache/transport-tests.cjs",
     "typecheck": "tsc --noEmit",
     "test:blueprint": "esbuild tests/blueprint.test.tsx --bundle --format=cjs --platform=node --loader:.css=empty --outfile=node_modules/.cache/blueprint-tests.cjs && node node_modules/.cache/blueprint-tests.cjs",
@@ -17,7 +17,12 @@
     "test:layout": "esbuild tests/formalizationLayout.test.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/layout-tests.mjs && node node_modules/.cache/layout-tests.mjs",
     "test:activity": "esbuild tests/activity.test.tsx --bundle --format=cjs --platform=node --loader:.css=empty --outfile=node_modules/.cache/activity-tests.cjs && node node_modules/.cache/activity-tests.cjs",
     "test:phase": "esbuild tests/runPhase.test.tsx --bundle --format=cjs --platform=node --outfile=node_modules/.cache/phase-tests.cjs && node node_modules/.cache/phase-tests.cjs",
-    "test:missions": "esbuild tests/missions.test.ts --bundle --format=cjs --platform=node --outfile=node_modules/.cache/missions-tests.cjs && node node_modules/.cache/missions-tests.cjs"
+    "test:missions": "esbuild tests/missions.test.ts --bundle --format=cjs --platform=node --outfile=node_modules/.cache/missions-tests.cjs && node node_modules/.cache/missions-tests.cjs",
+    "test:references": "esbuild tests/references.test.tsx --bundle --format=cjs --platform=node --loader:.css=empty --outfile=node_modules/.cache/references-tests.cjs && node node_modules/.cache/references-tests.cjs",
+    "build:demo": "vite build --config vite.showcase.config.ts",
+    "test:demo": "npm run test:demo-transport && node tests/showcase.browser.cjs",
+    "test:demo-transport": "esbuild tests/showcaseTransport.test.ts --bundle --format=cjs --platform=node --outfile=node_modules/.cache/showcase-transport-tests.cjs && node node_modules/.cache/showcase-transport-tests.cjs",
+    "test:references:browser": "node tests/references.browser.cjs"
   },
   "dependencies": {
     "@citation-js/core": "^0.7.21",

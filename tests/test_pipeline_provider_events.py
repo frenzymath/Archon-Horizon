@@ -6,9 +6,9 @@ import pytest
 from sqlalchemy import func, select
 
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.provider_events import child_state_ref, normalize, project_observation, select_native_event
-from archon_horizon.pipeline.records import create, get, snapshot, change
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.providers.provider_events import child_state_ref, normalize, project_observation, select_native_event
+from archon_horizon.pipeline.persistence.records import create, get, snapshot, change
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 
@@ -153,7 +153,7 @@ def test_rollout_and_known_stdout_totals_share_checkpoint(world):
 
 
 def test_late_counter_revealing_an_earlier_reset_does_not_restore_false_certainty(world):
-    from archon_horizon.pipeline.usage_accounting import uncertain_usage
+    from archon_horizon.pipeline.providers.usage_accounting import uncertain_usage
 
     state, native, at = start(world), str(uuid4()), datetime.now(timezone.utc)
     observe(world, state, counter(native, 100, 10), observed=at + timedelta(seconds=10))
@@ -200,7 +200,7 @@ def test_stdout_native_id_and_rollout_task_name_describe_one_generic_child(world
 
 
 def test_historical_totals_are_preserved_but_not_summed_and_authority_can_cover_them(world):
-    from archon_horizon.pipeline.usage_accounting import trusted_amount, uncertain_usage
+    from archon_horizon.pipeline.providers.usage_accounting import trusted_amount, uncertain_usage
 
     execution, thread, request = state = start(world)
     native = str(uuid4())

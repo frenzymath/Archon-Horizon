@@ -285,7 +285,7 @@ export function DesktopHosts({ accountId, admin, writable }: Props) {
               <span key={limit.id} className="platform-global-quota">
                 <span>{limit.slug}</span>
                 <b>
-                  {limit.occupied} / {limit.max_concurrent}
+                  {limit.occupied} / {limit.max_concurrent ?? "Uncapped"}
                 </b>
               </span>
             ))}
@@ -392,7 +392,9 @@ export function DesktopAgents({
         <button
           role="tab"
           aria-selected={kind === "reviewers"}
+          disabled={reviewerBusy}
           onClick={() => {
+            if (!discardReviewer()) return;
             setKind("reviewers");
             setSelected("");
             setSearch("");

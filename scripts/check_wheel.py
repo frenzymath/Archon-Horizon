@@ -20,6 +20,8 @@ from pathlib import Path
 
 # (description, predicate) — every one of these must match >=1 wheel entry.
 REQUIRED = [
+    ("session prompt templates", lambda n: n == "archon_horizon/pipeline/instructions/templates/core.md"),
+    ("reviewer prompt templates", lambda n: n == "archon_horizon/pipeline/instructions/templates/reviewer/start.md"),
     ("milestone contract guide", lambda n: n == "archon_horizon/pipeline/skills/operations/horizon-graph/references/milestones.md"),
     ("milestone host checker", lambda n: n == "archon_horizon/pipeline/worker/milestone_verify.py"),
     ("pipeline entry skill", lambda n: n == "archon_horizon/pipeline/skills/operations/horizon-pipeline/SKILL.md"),
@@ -80,6 +82,17 @@ def main() -> int:
                       or (root / "src" / name).read_bytes() != zf.read(name))]
 
     failures: list[str] = []
+    # New implementation subpackages must ship in full, even if no hand-picked
+    # data-file check above happens to mention them. Exclude the frontend toolchain.
+    modules = {path.relative_to(root / "src").as_posix()
+               for path in (root / "src" / "archon_horizon").rglob("*.py")
+               if "frontend" not in path.relative_to(root / "src" / "archon_horizon").parts}
+    missing_modules = sorted(modules - set(names))
+    templates = {path.relative_to(root / "src").as_posix()
+                 for path in (root / "src/archon_horizon/pipeline/instructions/templates").rglob("*.md")}
+    missing_modules += sorted(templates - set(names))
+    if missing_modules:
+        failures.append("missing Python modules: " + ", ".join(missing_modules))
     if stale:
         failures.append(f"stale build artifacts ({len(stale)} entries, e.g. {', '.join(stale[:3])}); rebuild from a clean build directory")
     for label, predicate in REQUIRED:

@@ -1,0 +1,50 @@
+site_name: Archon Horizon
+site_description: Objective-led orchestration for Lean formalization projects
+site_url: https://frenzymath.github.io/Archon-Horizon/
+repo_url: https://github.com/frenzymath/Archon-Horizon
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: _site
+theme:
+  name: mkdocs
+  color_mode: auto
+  user_color_mode_toggle: true
+  highlightjs: false
+nav:
+  - Home: README.md
+  - Overview: overview.md
+  - Installation: pipeline-setup.md
+  - Dashboard demo: dashboard-demo.md
+  - Guides:
+      - Architecture: architecture.md
+      - Objective orchestration: design/objective-orchestration.md
+      - Mission coordination: mission-coordination.md
+      - Agent context: agent-context.md
+      - Skills and reviewers: pipeline-reviewers.md
+      - References: references.md
+      - Forgejo and Zulip: pipeline-browser-integrations.md
+      - Roadmap indexing: pipeline-roadmap-index.md
+      - Milestones: pipeline-milestones.md
+      - Legacy recovery: coordination-recovery.md
+  - Development:
+      - Contributing: contributing.md
+      - Documentation and review tools: documentation-site.md
+      - Review follow-up: design/review-follow-up.md
+      - Implementation audit: design/implementation-audit.md
+      - Validation: review/validation.md
+  - Releases: releases.md
+  - Changelog: CHANGELOG.md
+hooks:
+  - scripts/docs_hooks.py
+markdown_extensions:
+  - admonition
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
+validation:
+  nav:
+    omitted_files: info
+  links:
+    anchors: info
+    unrecognized_links: info

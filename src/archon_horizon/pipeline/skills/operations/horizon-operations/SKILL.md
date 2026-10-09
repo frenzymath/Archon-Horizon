@@ -67,3 +67,20 @@ operations discussion using horizon-zulip; avoid repeating unchanged reports.
 
 Stop after answering the question. Reinvestigate when relevant evidence changes
 or a stated recovery condition fails, not on a periodic timer.
+
+## Resource And Recovery Decisions
+
+Inspect host resource observations and admission reasons before dispatching a
+replacement for failed work. Agent slots, native child reservations, provider
+limits and compiler slots are distinct. Memory/cgroup and CPU/I/O pressure pause
+new admissions; active work keeps its context. Unknown measurements remain unknown.
+A repeated provider outage opens a shared circuit; an operator repairs the cause
+and records `reset_circuit`. Session `resume_session` decisions keep attempt history.
+
+Managed caches prune only rebuildable leased outputs. For a settled generated
+checkout, a maintainer may request `retire_workspace` with a reason. The server
+refuses live or suspended owners, unresolved commitments, pinned inputs and
+unpublished work. The host verifies clean Git state and publication of every
+local commit before removing one retired checkout per five-minute cleanup pass.
+Inspect `cleanup_error` when deletion was refused. Preserve all source, native
+contexts and unmanaged directories that have no such verification.

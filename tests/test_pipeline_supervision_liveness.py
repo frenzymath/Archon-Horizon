@@ -3,10 +3,10 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
-from archon_horizon.pipeline.admission import reason, run_usage
-from archon_horizon.pipeline.coordination import summary
-from archon_horizon.pipeline.records import change, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.execution.admission import reason, run_usage
+from archon_horizon.pipeline.execution.coordination import summary
+from archon_horizon.pipeline.persistence.records import change, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 
@@ -57,7 +57,7 @@ def test_supervision_preserves_explicit_total_budget_guards(world, guard):
 
 
 def test_due_supervisor_gets_next_slot_without_overbooking_running_workers(world):
-    run = world.run()
+    run = world.run(orchestrated=True)
     world.disable_automations(run)
     world.assignment(run)
     world.assignment(run)
@@ -85,7 +85,7 @@ def queued(world, run, supervisory, *, ready):
 @pytest.mark.parametrize("supervisory", [True, False])
 def test_blocked_profile_page_does_not_hide_other_profile(world, monkeypatch, supervisory):
     monkeypatch.setattr(world.scheduler, "CLAIM_SCAN_LIMIT", 2)
-    run = world.run()
+    run = world.run(orchestrated=True)
     world.disable_automations(run)
     if not supervisory:
         world.assignment(run, role="maintainer", functions=["orchestrator"])
@@ -99,7 +99,7 @@ def test_blocked_profile_page_does_not_hide_other_profile(world, monkeypatch, su
 @pytest.mark.parametrize("supervisory", [True, False])
 def test_rejected_pages_rotate_and_success_resets_queue_priority(world, monkeypatch, supervisory):
     monkeypatch.setattr(world.scheduler, "CLAIM_SCAN_LIMIT", 2)
-    run = world.run()
+    run = world.run(orchestrated=supervisory)
     world.disable_automations(run)
     blocked = [queued(world, run, supervisory, ready=False) for _ in range(3)]
     ready = queued(world, run, supervisory, ready=True)

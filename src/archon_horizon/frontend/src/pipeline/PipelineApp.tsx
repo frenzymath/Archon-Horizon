@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { Activity, Bot, ChevronRight, GitBranch, GitPullRequest, Home, LayoutGrid, ListTodo, Map as MapIcon, MessagesSquare, Network, RefreshCw, Search, Server, Users, X } from "lucide-react";
+import { Activity, BookOpen, Bot, ChevronRight, GitBranch, GitPullRequest, Home, LayoutGrid, ListTodo, Map as MapIcon, MessagesSquare, Network, RefreshCw, Search, Server, Users, X } from "lucide-react";
 import { version as APP_VERSION } from "../../package.json";
+import { dashboardLocation } from "../utils/navigation";
 import { ApiError, request, type Account, type Project, type Resources, type Run } from "./api";
 import { queryClient, clearPendingCommand, useCommand, usePagedRead, useRead, useUpdates } from "./queries";
 import "./pipeline.css";
@@ -10,6 +11,7 @@ import "../projectDocuments.css";
 import "./Desktop.css";
 
 const Projects = lazy(() => import("./DesktopProjects"));
+const References = lazy(() => import("./DesktopReferences"));
 const RunActivity = lazy(() => import("./DesktopActivity"));
 const Hosts = lazy(() => import("./DesktopAdministration").then(module => ({default: module.DesktopHosts})));
 const Agents = lazy(() => import("./DesktopAdministration").then(module => ({default: module.DesktopAgents})));
@@ -21,6 +23,7 @@ const ProjectSettings = lazy(() => import("./Administration").then(module => ({d
 
 const navigation = [
   {id: "projects", Icon: LayoutGrid, label: "Projects"},
+  {id: "references", Icon: BookOpen, label: "References"},
   {id: "hosts", Icon: Server, label: "Execution hosts"},
   {id: "agents", Icon: Bot, label: "Agents"},
   {id: "search", Icon: Search, label: "Search"},
@@ -29,19 +32,10 @@ const navigation = [
   {id: "activity", Icon: Activity, label: "Activity"},
   {id: "accounts", Icon: Users, label: "Accounts"},
 ];
-const projectViewNames: Record<string, string> = {overview: "Overview", roadmap: "Objectives", graph: "Graph", nodes: "Nodes", node: "Home", "node-dag": "DAG", missions: "Missions"};
+const projectViewNames: Record<string, string> = {overview: "Overview", roadmap: "Objectives", graph: "Graph", nodes: "Nodes", node: "Home", "node-dag": "DAG", missions: "Missions", references: "References"};
 
 function locationState() {
-  const values = new URLSearchParams(location.search);
-  if (!values.has("tab")) {
-    const aliases: Record<string, string> = {work: "activity", changes: "forge", discussions: "zulip", resources: "hosts", settings: "agents"};
-    const previous = aliases[values.get("view") || ""];
-    values.set("tab", previous || "projects");
-    if (previous) values.delete("view");
-  }
-  if (!values.has("session") && values.has("assignment")) values.set("session", values.get("assignment")!);
-  values.delete("assignment");
-  return values;
+  return dashboardLocation(location.search);
 }
 
 export default function PipelineApp() {
@@ -86,6 +80,7 @@ function Shell({account, error, reload}: {account?: Account; error: Error | null
   const projectQuery = useRead<Project>(accountId, "projects", "global", `/projects/${encodeURIComponent(projectId)}`, !!account && !!projectId && !projectItems.some(item => item.id === projectId));
   if (projectQuery.data && !projectItems.some(item => item.id === projectQuery.data!.id)) projectItems.push(projectQuery.data);
   const project = projectItems.find(item => item.id === projectId);
+  const selectedProjectId = projectId || projectItems[0]?.id || "";
   const resources = useRead<Resources>(accountId, "resources", "global", "/resources", !!account && admin);
   // The Activity reader owns this request; observe its cache for command scoping.
   const selectedRun = useRead<Pick<Run, "project_id">>(accountId, "assignments", "global",
@@ -109,8 +104,9 @@ function Shell({account, error, reload}: {account?: Account; error: Error | null
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, []);
-  const selectTab = (next: string) => navigate({tab: next, project: "", view: "", node: "", objective: "", run: "", session: "", q: ""});
-  const projectView = (next: string) => navigate({view: next, node: "", objective: "", q: ""});
+  // Project-scoped catalog and native clients retain the user's chosen project.
+  const selectTab = (next: string) => navigate({tab: next, project: ["references", "forge", "zulip"].includes(next) ? projectId : "", view: "", node: "", objective: "", reference: "", run: "", session: "", q: ""});
+  const projectView = (next: string) => navigate({view: next, node: "", objective: "", reference: "", q: ""});
   const contextualNavigation = inProject ? inNode ? [
     {id: "back", Icon: ChevronRight, label: url.get("objective") ? "Back to roadmap" : "Back to nodes", action: () => navigate({view: url.get("objective") ? "roadmap" : "nodes", node: ""})},
     {id: "node", Icon: Home, label: "Home", action: () => navigate({view: "node"})},
@@ -121,6 +117,7 @@ function Shell({account, error, reload}: {account?: Account; error: Error | null
     {id: "roadmap", Icon: MapIcon, label: "Objectives", action: () => projectView("roadmap")},
     {id: "nodes", Icon: Network, label: "Nodes", action: () => projectView("nodes")},
     {id: "missions", Icon: ListTodo, label: "Missions", action: () => projectView("missions")},
+    {id: "references", Icon: BookOpen, label: "References", action: () => projectView("references")},
   ] : navigation.filter(item => item.id !== "accounts" || admin).map(item => ({...item, action: () => selectTab(item.id)}));
   const heading = navigation.find(item => item.id === tab)?.label;
   const refresh = () => {reload(); void client.invalidateQueries({queryKey: ["pipeline", accountId]});};
@@ -133,18 +130,20 @@ function Shell({account, error, reload}: {account?: Account; error: Error | null
     <header className="platform-topbar"><div className="platform-brand"><strong>Archon Horizon</strong><span className="version-badge">v{APP_VERSION}</span><span className="platform-divider"/><span className="desktop-breadcrumb">{inProject && project && <><button className="platform-text-button desktop-project-context" title={project.title} onClick={() => projectView("overview")}>{project.title}</button><ChevronRight size={13}/></>}<span className="platform-context">{inProject ? projectViewNames[view] || "Project" : heading}</span></span></div><div className="platform-top-actions">{account && <span className="platform-context">{account.username} · {account.role}</span>}<span className={`platform-connection ${connected ? "" : "disconnected"}`} role="status"><i/>{connected ? "Connected" : "Reconnecting"}</span>{account && <button className="platform-text-button" onClick={() => void signOut()}>Sign out</button>}<button className="platform-icon-button" title="Refresh" aria-label="Refresh" onClick={refresh}><RefreshCw size={16}/></button></div></header>
     <div className="platform-body"><aside className="platform-sidebar"><div className="platform-nav-label">{inProject ? inNode ? "Node" : "Project" : "Horizon"}</div>{contextualNavigation.map(({id, Icon, label, action}) => <button key={id} title={label} className={`platform-nav-item ${(inProject ? view === id : tab === id) ? "active" : ""} ${id === "back" ? "platform-nav-back" : ""}`} aria-current={(inProject ? view === id : tab === id) ? "page" : undefined} onClick={action}><Icon size={17} className={id === "back" ? "platform-nav-back-icon" : undefined}/><span>{label}</span></button>)}<div className="platform-sidebar-foot"><span className="platform-online-dot"/>{resources.data ? `${resources.data.hosts.length} hosts` : "Archon Horizon"}</div></aside>
       <main className={`platform-main ${["forge", "zulip"].includes(tab) ? "platform-main-forge" : ""}`}>
-        {!["forge", "zulip"].includes(tab) && !inProject && <div className="platform-main-head"><h1>{heading}</h1></div>}
+        {!["references", "forge", "zulip"].includes(tab) && !inProject && <div className="platform-main-head"><h1>{heading}</h1></div>}
         {failure && <div className="platform-error" role="alert">{failure.message}</div>}
         {commands.error && <div className="platform-error" role="alert">{commands.error}{commands.operation?.status === "uncertain" && <div className="desktop-command-actions"><button className="platform-small-button" onClick={() => void commands.reconcile(commands.operation!.id)}>Check operation</button><button className="platform-small-button" disabled={!commands.retryAllowed} onClick={() => void commands.retry()}>Retry same operation</button></div>}</div>}
         {!account ? <div className="platform-empty">{error ? "The control plane is unavailable." : "Connecting..."}</div> : <Suspense fallback={<div className="platform-empty">Loading...</div>}>
-          {tab === "projects" && <Projects accountId={accountId} projects={projectItems} projectId={projectId} view={view} selection={{node: url.get("node") || undefined, objective: url.get("objective") || undefined}} writable={writable} admin={admin} onNavigate={navigate} onCreate={() => setCreating(true)} onEditProject={() => setEditing(true)}/>}
+          {tab === "projects" && <Projects accountId={accountId} projects={projectItems} projectId={projectId} view={view} selection={{node: url.get("node") || undefined, objective: url.get("objective") || undefined, reference: url.get("reference") || undefined}} writable={writable} admin={admin} onNavigate={navigate} onCreate={() => setCreating(true)} onEditProject={() => setEditing(true)}/>}
           {tab === "projects" && !projectId && projects.hasNextPage && <button className="platform-small-button" onClick={() => void projects.fetchNextPage()}>More projects</button>}
+          {tab === "references" && <><div className="platform-toolbar"><label>Project<select aria-label="References project" value={selectedProjectId} onChange={event => navigate({project: event.target.value, reference: ""})}>{!projectItems.length && <option value="">No projects</option>}{projectItems.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label></div>
+            {selectedProjectId ? <References key={`${accountId}:${selectedProjectId}`} accountId={accountId} projectId={selectedProjectId} referenceId={url.get("reference") || ""} writable={writable} onSelect={reference => navigate({project: selectedProjectId, reference})}/> : <div className="platform-empty">Create or join a project to register references.</div>}</>}
           {tab === "activity" && <RunActivity accountId={accountId} projects={projectItems} projectId={projectId} runId={url.get("run") || ""} sessionId={url.get("session") || ""} writable={writable} command={commands.execute} onNavigate={navigate}/>}
           {tab === "hosts" && <Hosts {...{accountId, admin, writable, projectId}}/>}
           {tab === "agents" && <Agents {...{accountId, admin, writable, projectId}}/>}
           {tab === "accounts" && <Accounts {...{accountId, admin, writable, projectId, account}}/>}
           {tab === "search" && <SearchView {...{accountId, projectId}} projects={projectItems}/>}
-          {(["forge", "zulip"] as const).filter(kind => opened.has(kind) || tab === kind).map(kind => <div key={kind} hidden={tab !== kind}><NativeView {...{accountId}} projectId={projectId || projectItems[0]?.id || ""} kind={kind}/></div>)}
+          {(["forge", "zulip"] as const).filter(kind => opened.has(kind) || tab === kind).map(kind => <div key={kind} hidden={tab !== kind}><NativeView {...{accountId}} projectId={selectedProjectId} projects={projectItems} onProjectChange={project => navigate({project})} kind={kind}/></div>)}
           {creating && <ProjectCreate accountId={accountId} writable={writable} onClose={() => setCreating(false)} onCreated={created => {setCreating(false); void projects.refetch(); navigate({tab: "projects", project: created.id, view: "overview", node: "", objective: ""});}}/>}
           {editing && project && <ProjectEdit title={project.title} onClose={() => setEditing(false)}><ProjectSettings {...{accountId, projectId, writable}}/></ProjectEdit>}
         </Suspense>}

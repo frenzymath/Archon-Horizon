@@ -31,8 +31,10 @@ The current API still requires these records. Final prose does not settle them.
    publication, external-delivery and provider work required by completion.
 4. If the assigned mission's acceptance criteria are fulfilled and its children
    are closed, use `complete_mission` with the current revision. Finishing an
-   assignment does not automatically close its mission. Only a root-authorized
-   maintainer closes the root and drains the run after the phase deliverable.
+   assignment does not automatically close its mission. In objective mode, finishing a session and accepting a mission are distinct:
+   a faithful delegation preserves an integration owner. A maintainer records
+   `accept_phase` with evidence; the scheduler settles deliveries before advancing.
+   Legacy runs retain explicit root closure and draining.
 
 Use `POST /api/v3/obligations/{id}/resolve`, with `expected_revision` and one
 resolution. Look up `agent schema --section obligation_resolve` only when needed:
@@ -58,7 +60,7 @@ their own report to become an eligible approval, which requires their terminatio
 A maintainer may settle historical obligations from terminal assignments using
 existing evidence. Do not restart a provider merely to edit its ledger. Apply
 known finite bookkeeping changes together with current revisions and stop on
-an unexpected response. A child maintainer cannot close siblings or ancestors.
+an unexpected response. Legacy child maintainers cannot close siblings or ancestors. Objective maintenance decisions are authorized within the current objective root.
 
 If real unfinished work waits on an external event, use the
 [checkpoint procedure](../horizon-delegation/references/queue.md) and leave its
@@ -86,3 +88,9 @@ obligations and receipts and return. The host completes the draining run after
 physical execution and external delivery settle; do not wait for your own run
 completion. In preprocessing the ready baseline packet is the phase result;
 human approval and launching formalization are separate actions.
+
+Goal ledger descriptions and comments use Markdown. Use `comment_obligation` for
+an explanation or evidence update without changing disposition. `blocked` work
+stays open; `delegated` names durable owners and does not claim a proof. Supersession
+needs its replacement and reason. Removing required mission criteria needs a
+maintainer decision, even when editing the local plan would be convenient.

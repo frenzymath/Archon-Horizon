@@ -1,5 +1,10 @@
 # Milestone Preprocessing
 
+> This guide describes explicitly retained `workflow: milestones` projects.
+> New projects use agent-led `workflow: graph`: milestones are ordinary labeled
+> nodes, and maintainers accept phase strategy without this strict baseline
+> machinery. See [architecture](architecture.md#phase-workflows).
+
 New projects use `workflow: milestones`. Existing projects remain `legacy` after
 migration; a human administrator can enable milestones while the project has no
 active, paused or draining runs. Enabling protection does not infer acceptance

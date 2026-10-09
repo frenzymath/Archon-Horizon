@@ -232,7 +232,7 @@ class CodexLifecycleObserver:
                     children, totals, at = [], None, 0
                 observation = {"type": "horizon.child_notifications", "children": children} if children else None
                 if isinstance(totals, dict):
-                    from ..provider_events import select_native_event
+                    from ..providers.provider_events import select_native_event
                     observation = select_native_event("codex", {"type": "horizon.usage_snapshot", "usage": totals,
                         "accounting": self._accounting(thread_id, "rollout_total_token_usage")})
                 if observation and at >= self.since:

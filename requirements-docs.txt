@@ -1,0 +1,2 @@
+# The documentation toolchain is separate from runtime/worker dependencies.
+mkdocs==1.6.1

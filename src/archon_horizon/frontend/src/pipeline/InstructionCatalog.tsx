@@ -6,29 +6,31 @@ import "./InstructionCatalog.css";
 
 type Skill = {name: string; description: string; category: string; path: string; resources: string[]};
 type Subagent = {slug: string; description: string; skills: string[]; source_path: string; category: string};
-type Catalog = {revision: string; skills: Skill[]; subagents: Subagent[]; files: string[]};
+type Prompt = {name: string; description: string; category: string; path: string};
+type Catalog = {revision: string; skills: Skill[]; subagents: Subagent[]; prompts?: Prompt[]; files: string[]};
 type Entry = {name: string; description: string; path: string; resources: string[]; category: string; skills?: string[]};
-const categories = {operations: "Horizon operations", lean: "Lean", review: "Review procedures", custom: "Project skills", implementation: "Implementation", research: "Research", validation: "Validation", planning: "Planning", reviewers: "Reviewers"};
+const categories = {operations: "Horizon operations", lean: "Lean", review: "Review procedures", custom: "Project skills", prompts: "Prompt templates", legacy_prompts: "Legacy compatibility prompts", implementation: "Implementation", research: "Research", validation: "Validation", planning: "Planning", reviewers: "Reviewers"};
 
 export default function InstructionCatalog({accountId, mode}: {accountId: string; mode: "skills" | "descriptors"}) {
   const catalog = useRead<Catalog>(accountId, "instructions", "global", "/instruction-catalog");
   const [search, setSearch] = useState("");
   const [selection, setSelection] = useState("");
   const [resource, setResource] = useState("");
+  const [resourceOwner, setResourceOwner] = useState("");
   const [view, setView] = useState<"preview" | "source">("preview");
-  const entries: Entry[] = mode === "skills" ? catalog.data?.skills || [] : (catalog.data?.subagents || []).map(item => ({
+  const entries: Entry[] = mode === "skills" ? [...(catalog.data?.skills || []), ...(catalog.data?.prompts || []).map(item => ({...item, resources: []}))] : (catalog.data?.subagents || []).map(item => ({
     name: item.slug, description: item.description, path: item.source_path, skills: item.skills, resources: [], category: item.category,
   }));
   const filtered = entries.filter(item => `${item.name} ${item.description} ${item.category}`.toLowerCase().includes(search.toLowerCase()));
   const active = filtered.find(item => item.path === selection) || filtered[0];
-  const path = active && (catalog.data?.files.includes(resource) ? resource : active.path);
+  const path = active && (resourceOwner === active.path && catalog.data?.files.includes(resource) ? resource : active.path);
   const file = useRead<{path: string; content: string; instructions?: string; sha256: string}>(accountId, "instructions", "global",
     `/instruction-catalog/file?path=${encodeURIComponent(path || "")}`, !!path);
   const content = file.data?.instructions || file.data?.content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "") || "";
   return <>
     <div className="capability-toolbar">
       <label className="capability-search"><Search size={15} /><input type="search" aria-label="Search installed instructions" placeholder="Search instructions" value={search} onChange={event => setSearch(event.target.value)} /></label>
-      <span className="capability-library-location">{entries.length} {mode === "skills" ? "skills" : "subagent descriptors"} / Installed catalog</span>
+      <span className="capability-library-location">{entries.length} {mode === "skills" ? "skills and prompts" : "subagent descriptors"} / Installed catalog</span>
       <button type="button" className="platform-icon-button" title="Refresh installed catalog" aria-label="Refresh installed catalog" onClick={() => {void catalog.refetch(); if (path) void file.refetch();}}><RefreshCw size={15} /></button>
     </div>
     <ErrorNotice error={catalog.error} stale={!!catalog.data} />
@@ -48,11 +50,11 @@ export default function InstructionCatalog({accountId, mode}: {accountId: string
       </aside>
       <article className="capability-detail">
         {active ? <>
-          <header className="capability-detail-heading"><div><span className="capability-kind">{mode === "skills" ? "Skill" : "Subagent descriptor"}</span><h2>{active.name}</h2></div></header>
+          <header className="capability-detail-heading"><div><span className="capability-kind">{active.path.startsWith("prompts/") ? "Prompt template" : mode === "skills" ? "Skill" : "Subagent descriptor"}</span><h2>{active.name}</h2></div></header>
           <p className="instruction-description">{active.description}</p>
           <div className="capability-file-metadata"><code>{path}</code></div>
           {active.skills && <div className="instruction-related"><span>Relevant skills</span>{active.skills.map(name => <code key={name}>{name}</code>)}</div>}
-          {(!!active.resources.length || path !== active.path) && <label className="instruction-resource">Resource<select aria-label="Instruction resource" value={path} onChange={event => setResource(event.target.value)}>
+          {(!!active.resources.length || path !== active.path) && <label className="instruction-resource">Resource<select aria-label="Instruction resource" value={path} onChange={event => {setResource(event.target.value); setResourceOwner(active.path);}}>
             <option value={active.path}>{mode === "skills" ? "SKILL.md" : "Descriptor"}</option>{active.resources.map(name => <option key={name} value={name}>{name.slice(active.path.lastIndexOf("/") + 1)}</option>)}
             {path !== active.path && !active.resources.includes(path || "") && <option value={path}>{path}</option>}
           </select></label>}
@@ -72,6 +74,7 @@ export default function InstructionCatalog({accountId, mode}: {accountId: string
             setSearch("");
             if (owner) setSelection(owner.path);
             setResource(target);
+            setResourceOwner(owner?.path || active.path);
           }}><RichText>{content}</RichText></div> : <pre className="instruction-source">{file.data.content}</pre> : <div className="capability-empty">{file.error ? "Instruction unavailable" : "Loading instruction..."}</div>}
         </> : <div className="capability-empty">{catalog.isPending ? "Loading catalog..." : "No matching instructions"}</div>}
       </article>

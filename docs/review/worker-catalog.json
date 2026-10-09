@@ -1,0 +1,1749 @@
+{
+  "schema_version": 1,
+  "scope": "pipeline/worker/**/*.py, pipeline/worker_config.py, pipeline/client.py",
+  "method": "Read each complete function body and module-level contract, including nested functions; reviewed lifecycle, boundaries, efficiency, comments and generalization. Source hashes describe the reviewed implementation after repairs. This is scoped source review, not execution proof.",
+  "files": [
+    {
+      "path": "src/archon_horizon/pipeline/client.py",
+      "sha256": "b5a60b498189ed2e3a71177da7b59e00f469237963e42579e2adadbee868e5a0",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "response_error_code",
+          "line": 36,
+          "end_line": 42,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "retryable_operation",
+          "line": 45,
+          "end_line": 46,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "contract_rejection",
+          "line": 49,
+          "end_line": 60,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "invalid_request",
+          "line": 63,
+          "end_line": 80,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.__init__",
+          "line": 84,
+          "end_line": 133,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.connect",
+          "line": 136,
+          "end_line": 159,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.request",
+          "line": 161,
+          "end_line": 234,
+          "status": "reviewed",
+          "findings": [
+            "WRK-006"
+          ]
+        },
+        {
+          "name": "AgentClient._defer_intent_in",
+          "line": 237,
+          "end_line": 242,
+          "status": "reviewed",
+          "findings": [
+            "WRK-006"
+          ]
+        },
+        {
+          "name": "AgentClient._defer_intent",
+          "line": 244,
+          "end_line": 248,
+          "status": "reviewed",
+          "findings": [
+            "WRK-006"
+          ]
+        },
+        {
+          "name": "AgentClient.pending",
+          "line": 250,
+          "end_line": 256,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.control_notices",
+          "line": 258,
+          "end_line": 312,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.replay_pending",
+          "line": 314,
+          "end_line": 343,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.recovery_state",
+          "line": 345,
+          "end_line": 365,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.resolve_intent",
+          "line": 367,
+          "end_line": 401,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "AgentClient.close",
+          "line": 403,
+          "end_line": 405,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/__init__.py",
+      "sha256": "be20bfc5f6b83c6ebe1d849a8acbd76e314a17a4183d41bc1b637f3aa545cbaa",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/activity_replay.py",
+      "sha256": "6cdf23913fe94e7478c361002d2c934edca40fac6f5953a1d501bc8b750f4121",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "replay_once",
+          "line": 25,
+          "end_line": 84,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "line": 87,
+          "end_line": 113,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/build_engine.py",
+      "sha256": "517bb60dc1b8cf638943728d41dfb898e8845115c67bf851f1038f4687edcd96",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "check_storage",
+          "line": 33,
+          "end_line": 50,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CheckProgress.__init__",
+          "line": 54,
+          "end_line": 57,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CheckProgress.phase",
+          "line": 60,
+          "end_line": 66,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CheckProgress.wait_deadline",
+          "line": 68,
+          "end_line": 69,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "resource_lock",
+          "line": 73,
+          "end_line": 109,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "checkout_paths",
+          "line": 112,
+          "end_line": 124,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "source_failure",
+          "line": 127,
+          "end_line": 143,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "diagnostic_summary",
+          "line": 146,
+          "end_line": 153,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "deferred_marker",
+          "line": 156,
+          "end_line": 167,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_digest",
+          "line": 170,
+          "end_line": 179,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "build_environment",
+          "line": 182,
+          "end_line": 203,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "prepare_dependencies",
+          "line": 206,
+          "end_line": 214,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_prepare_dependencies",
+          "line": 217,
+          "end_line": 282,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_prepare_dependencies.git",
+          "line": 244,
+          "end_line": 252,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_reflink_sources",
+          "line": 285,
+          "end_line": 306,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "source_identity",
+          "line": 309,
+          "end_line": 382,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "source_identity.probe",
+          "line": 326,
+          "end_line": 327,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_stop",
+          "line": 385,
+          "end_line": 398,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_command",
+          "line": 401,
+          "end_line": 483,
+          "status": "reviewed",
+          "findings": [
+            "WRK-001"
+          ]
+        },
+        {
+          "name": "_command.consume",
+          "line": 412,
+          "end_line": 427,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "captured_command",
+          "line": 486,
+          "end_line": 489,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "build_slot",
+          "line": 493,
+          "end_line": 500,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_build_command",
+          "line": 503,
+          "end_line": 507,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "run_check",
+          "line": 510,
+          "end_line": 607,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "run_check.interrupted",
+          "line": 546,
+          "end_line": 547,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/cache_retention.py",
+      "sha256": "242f2cf11060e097702aba5ef8117936d46038c28c36e333c28b064a61ef1593",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_recent",
+          "line": 31,
+          "end_line": 37,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "prune_native_outputs",
+          "line": 40,
+          "end_line": 65,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_prune_native",
+          "line": 68,
+          "end_line": 128,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_files",
+          "line": 131,
+          "end_line": 149,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_prune",
+          "line": 152,
+          "end_line": 192,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_maintain",
+          "line": 195,
+          "end_line": 215,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "artifact_cache_lease",
+          "line": 219,
+          "end_line": 237,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/codex_lifecycle.py",
+      "sha256": "7bc64980189558a399ae2bd552f4d73bd15ba0cf66f3ee9449af62a5142c7833",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "terminal_children",
+          "line": 23,
+          "end_line": 87,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver.__init__",
+          "line": 91,
+          "end_line": 121,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver._find",
+          "line": 123,
+          "end_line": 149,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver.annotate",
+          "line": 151,
+          "end_line": 167,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver._accounting",
+          "line": 169,
+          "end_line": 171,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver.poll",
+          "line": 173,
+          "end_line": 179,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver._poll",
+          "line": 181,
+          "end_line": 252,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "CodexLifecycleObserver._save",
+          "line": 254,
+          "end_line": 262,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/contracts.py",
+      "sha256": "35befe65344a08ed06a58887c584e1b35f7db6cc277cac2fc86b027eda629c3b",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "validate_tool_environment",
+          "line": 19,
+          "end_line": 33,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "canonical_json",
+          "line": 36,
+          "end_line": 37,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "require_identifier",
+          "line": 40,
+          "end_line": 45,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "Operation.__post_init__",
+          "line": 57,
+          "end_line": 75,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "Operation.create",
+          "line": 78,
+          "end_line": 81,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "Operation.as_dict",
+          "line": 83,
+          "end_line": 86,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ExecutionGrant.__post_init__",
+          "line": 125,
+          "end_line": 135,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/daemon.py",
+      "sha256": "25bbd84a4640ecd5d46156194cc30b612e48681e0219571886f96696ada5d137",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "HarnessConfig.__post_init__",
+          "line": 56,
+          "end_line": 63,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.__init__",
+          "line": 73,
+          "end_line": 130,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.storage_health",
+          "line": 132,
+          "end_line": 141,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._progress",
+          "line": 143,
+          "end_line": 161,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._retire_progress",
+          "line": 163,
+          "end_line": 165,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._local_failure",
+          "line": 168,
+          "end_line": 187,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._orchestrator_tool_violation",
+          "line": 190,
+          "end_line": 246,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._orchestrator_tool_violation.invocation",
+          "line": 201,
+          "end_line": 225,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._orchestrator_tool_violation.shell",
+          "line": 227,
+          "end_line": 244,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._snapshot",
+          "line": 248,
+          "end_line": 260,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._defer_recovery",
+          "line": 263,
+          "end_line": 267,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._workspace",
+          "line": 269,
+          "end_line": 275,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._emit",
+          "line": 277,
+          "end_line": 280,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._acknowledged",
+          "line": 282,
+          "end_line": 284,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._prepare_workspace",
+          "line": 286,
+          "end_line": 332,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._prepare_workspace.keep_alive",
+          "line": 293,
+          "end_line": 310,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._prepare_workspace.record_process",
+          "line": 312,
+          "end_line": 314,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._validate_harness",
+          "line": 335,
+          "end_line": 365,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._validate_sandbox",
+          "line": 368,
+          "end_line": 390,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._validate_sandbox.mounts",
+          "line": 383,
+          "end_line": 384,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._validate_executable",
+          "line": 392,
+          "end_line": 416,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._podman_executable",
+          "line": 419,
+          "end_line": 423,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._replay_agent_intents",
+          "line": 425,
+          "end_line": 440,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._flush",
+          "line": 442,
+          "end_line": 457,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.preserve_one",
+          "line": 459,
+          "end_line": 484,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.preserve_one.renew_claim",
+          "line": 467,
+          "end_line": 474,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._preserve_claim",
+          "line": 486,
+          "end_line": 519,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._checkpoint_loop",
+          "line": 521,
+          "end_line": 545,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._stop_container",
+          "line": 548,
+          "end_line": 554,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.recover",
+          "line": 556,
+          "end_line": 562,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._recover",
+          "line": 564,
+          "end_line": 593,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._recover_execution",
+          "line": 595,
+          "end_line": 643,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.cleanup_retired_workspaces",
+          "line": 645,
+          "end_line": 663,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.run_once",
+          "line": 665,
+          "end_line": 717,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.execute",
+          "line": 719,
+          "end_line": 746,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._execute",
+          "line": 748,
+          "end_line": 1148,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._execute.renew",
+          "line": 810,
+          "end_line": 829,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._execute.heartbeat_loop",
+          "line": 831,
+          "end_line": 846,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon._execute.observe",
+          "line": 954,
+          "end_line": 971,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.serve",
+          "line": 1150,
+          "end_line": 1270,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.serve.lane",
+          "line": 1164,
+          "end_line": 1184,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.serve.publisher",
+          "line": 1186,
+          "end_line": 1205,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerDaemon.serve.host_health",
+          "line": 1207,
+          "end_line": 1251,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/git_recovery.py",
+      "sha256": "28c829ac6112d3f02cea9fd7f86df229ccef6ad8627d5286bb8a91787dad3eb9",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "PublicationBlocked.__init__",
+          "line": 19,
+          "end_line": 21,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery.__init__",
+          "line": 29,
+          "end_line": 51,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery._snapshot_lock",
+          "line": 54,
+          "end_line": 61,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery._environment",
+          "line": 63,
+          "end_line": 67,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery._git",
+          "line": 69,
+          "end_line": 90,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery._trusted",
+          "line": 92,
+          "end_line": 97,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery._record_commit",
+          "line": 99,
+          "end_line": 118,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery.reconcile",
+          "line": 120,
+          "end_line": 141,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery.record_head",
+          "line": 143,
+          "end_line": 144,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery.checkpoint_dirty",
+          "line": 146,
+          "end_line": 148,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery._checkpoint_dirty",
+          "line": 150,
+          "end_line": 226,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "GitRecovery.preserve_remote",
+          "line": 228,
+          "end_line": 258,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/journal.py",
+      "sha256": "577ad73a3b51bc0e530e689e1986e53800289368eea3688a9d72800423d9798f",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "boot_identity",
+          "line": 18,
+          "end_line": 22,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.__init__",
+          "line": 32,
+          "end_line": 103,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal._transaction",
+          "line": 106,
+          "end_line": 115,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal._checkpoint_wal",
+          "line": 117,
+          "end_line": 119,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.enqueue",
+          "line": 121,
+          "end_line": 150,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.claim",
+          "line": 152,
+          "end_line": 177,
+          "status": "reviewed",
+          "findings": [
+            "WRK-005"
+          ]
+        },
+        {
+          "name": "DurableJournal.settle",
+          "line": 179,
+          "end_line": 189,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.renew_delivery",
+          "line": 191,
+          "end_line": 195,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.records",
+          "line": 197,
+          "end_line": 200,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.operation",
+          "line": 202,
+          "end_line": 205,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.retry_publication",
+          "line": 207,
+          "end_line": 220,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.record_recovery_health",
+          "line": 222,
+          "end_line": 228,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.recovery_health",
+          "line": 230,
+          "end_line": 232,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.compact",
+          "line": 234,
+          "end_line": 243,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.grant_lease",
+          "line": 245,
+          "end_line": 261,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.claim_attempt",
+          "line": 263,
+          "end_line": 274,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.pending_claim",
+          "line": 276,
+          "end_line": 279,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.abandon_claim",
+          "line": 281,
+          "end_line": 289,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.resolve_claim",
+          "line": 291,
+          "end_line": 305,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.assert_lease",
+          "line": 307,
+          "end_line": 314,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.checkpoint",
+          "line": 316,
+          "end_line": 324,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.fence",
+          "line": 326,
+          "end_line": 331,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.executions",
+          "line": 333,
+          "end_line": 336,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.begin_request",
+          "line": 338,
+          "end_line": 349,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.finish_request",
+          "line": 351,
+          "end_line": 357,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.request",
+          "line": 359,
+          "end_line": 365,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal._diagnostic_usage",
+          "line": 367,
+          "end_line": 393,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.diagnostic_capacity",
+          "line": 395,
+          "end_line": 399,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.reserve_diagnostics",
+          "line": 401,
+          "end_line": 408,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.release_diagnostics",
+          "line": 410,
+          "end_line": 412,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.prune_diagnostics",
+          "line": 414,
+          "end_line": 453,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "DurableJournal.close",
+          "line": 455,
+          "end_line": 457,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/lean_build.py",
+      "sha256": "6843379a1944efcf37c3aaebf76384afb2ef48f443e233d6ccb5c6c6759c2747",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "LeanBuildPolicy.__post_init__",
+          "line": 42,
+          "end_line": 58,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanBuildPolicy.environment",
+          "line": 60,
+          "end_line": 70,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "check",
+          "line": 73,
+          "end_line": 100,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "check.interrupted",
+          "line": 79,
+          "end_line": 80,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_measure",
+          "line": 104,
+          "end_line": 109,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_check",
+          "line": 112,
+          "end_line": 171,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "line": 174,
+          "end_line": 195,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/lean_verify.py",
+      "sha256": "8894e288600971be9614ef52c8ddfb88ab4beb3715cb68b15f9f43ff53249afa",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "digest",
+          "line": 21,
+          "end_line": 23,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "git",
+          "line": 71,
+          "end_line": 72,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "clean_commit",
+          "line": 76,
+          "end_line": 79,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "audit_imports",
+          "line": 83,
+          "end_line": 96,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "audit",
+          "line": 100,
+          "end_line": 139,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "library_tree",
+          "line": 143,
+          "end_line": 155,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "verify_library",
+          "line": 159,
+          "end_line": 190,
+          "status": "reviewed",
+          "findings": [
+            "WRK-002"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/milestone_jobs.py",
+      "sha256": "95cb5edf1de1ebb018d83e506aa302653332fa6409778899afa0d25354c26240",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/milestone_verify.py",
+      "sha256": "69d1a841cbc7ec6a5c3d699f088fc5672a893957dde254c81e35bf0b86fff4b6",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "sources_at",
+          "line": 21,
+          "end_line": 39,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "verify",
+          "line": 42,
+          "end_line": 153,
+          "status": "reviewed",
+          "findings": [
+            "WRK-003"
+          ]
+        },
+        {
+          "name": "verify.contract_surface",
+          "line": 66,
+          "end_line": 71,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "line": 156,
+          "end_line": 189,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/provider.py",
+      "sha256": "637f636f6881f083ea341ca34aede963fb7ec09f7edf899b33a4d4b57fbd027a",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "process_identity",
+          "line": 20,
+          "end_line": 25,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_stop_owned_session",
+          "line": 32,
+          "end_line": 64,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "terminate_owned_process",
+          "line": 67,
+          "end_line": 84,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "HeadlessAdapter.validate",
+          "line": 99,
+          "end_line": 125,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "HeadlessAdapter.command",
+          "line": 127,
+          "end_line": 183,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "provider_failure",
+          "line": 198,
+          "end_line": 218,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ProcessSupervisor.__init__",
+          "line": 222,
+          "end_line": 229,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ProcessSupervisor.run",
+          "line": 231,
+          "end_line": 393,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/resource_health.py",
+      "sha256": "48d2c3a2f947db0aab2a0e5723bb2d73b38a4a29104ef9758f4851e990e04796",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_read",
+          "line": 21,
+          "end_line": 25,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_psi",
+          "line": 28,
+          "end_line": 33,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "observe",
+          "line": 36,
+          "end_line": 79,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/sandbox.py",
+      "sha256": "5f1add52631976c5712af304b01007a05eedd409490f81db29dbc639618d4860",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "SandboxPolicy.__post_init__",
+          "line": 29,
+          "end_line": 38,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_overlaps",
+          "line": 41,
+          "end_line": 42,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "podman_command",
+          "line": 45,
+          "end_line": 118,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/skills.py",
+      "sha256": "01ccf7798cd4ded76f087ba3374fc9e9dbb72f8f623e9b5b856ed6ebf1dd8ff3",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_path",
+          "line": 21,
+          "end_line": 27,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "materialize_bundle",
+          "line": 30,
+          "end_line": 93,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_verify",
+          "line": 96,
+          "end_line": 121,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/storage_guard.py",
+      "sha256": "4cf3b76aacafda466de7d21ff39937939cfde95fd80e4372e1b4b222f5e24c28",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "StorageRoot.status",
+          "line": 26,
+          "end_line": 27,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "StorageRoot.as_dict",
+          "line": 29,
+          "end_line": 41,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_existing_ancestor",
+          "line": 44,
+          "end_line": 48,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "inspect_storage",
+          "line": 51,
+          "end_line": 89,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/transport.py",
+      "sha256": "72da177f4d9c167be444aee481a15606b20009aee031780c4e1dcb7e416a194d",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "WorkerTransport.__init__",
+          "line": 21,
+          "end_line": 37,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport._post",
+          "line": 39,
+          "end_line": 44,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.claim",
+          "line": 46,
+          "end_line": 50,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.goal",
+          "line": 52,
+          "end_line": 56,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport._get_json",
+          "line": 58,
+          "end_line": 71,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.skill_bundle",
+          "line": 73,
+          "end_line": 74,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.reviewer_accounts",
+          "line": 76,
+          "end_line": 85,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.heartbeat",
+          "line": 87,
+          "end_line": 95,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.host_heartbeat",
+          "line": 97,
+          "end_line": 99,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport._retry_after",
+          "line": 102,
+          "end_line": 113,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.replay_one",
+          "line": 115,
+          "end_line": 145,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerTransport.close",
+          "line": 147,
+          "end_line": 149,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/verification_jobs.py",
+      "sha256": "5005d480f7df131b41ef8406cebf2fcb3c2b5434fe8373a5e8e5e7f954934fc4",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "checkout",
+          "line": 21,
+          "end_line": 34,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ensure_commit",
+          "line": 37,
+          "end_line": 52,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "stop_process",
+          "line": 55,
+          "end_line": 63,
+          "status": "reviewed",
+          "findings": [
+            "WRK-004"
+          ]
+        },
+        {
+          "name": "execute",
+          "line": 66,
+          "end_line": 120,
+          "status": "reviewed",
+          "findings": [
+            "WRK-004",
+            "WRK-007"
+          ]
+        },
+        {
+          "name": "execute.renew",
+          "line": 74,
+          "end_line": 78,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "serve",
+          "line": 123,
+          "end_line": 151,
+          "status": "reviewed",
+          "findings": [
+            "WRK-004",
+            "WRK-007"
+          ]
+        },
+        {
+          "name": "main",
+          "line": 154,
+          "end_line": 167,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/workspace_retention.py",
+      "sha256": "071899e613a81e7d76ed4ae8b5c66157487d1b2f8c5178a0c400b8952d184b4e",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "cleanup",
+          "line": 10,
+          "end_line": 85,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "cleanup.git",
+          "line": 28,
+          "end_line": 30,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/workspaces.py",
+      "sha256": "cd7b1fcc7ad2d38a37e1974716b2197207c70d1cf9c2946bf730899e82eae1a8",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "prepare_workspace",
+          "line": 19,
+          "end_line": 156,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "prepare_workspace.git",
+          "line": 54,
+          "end_line": 96,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker_config.py",
+      "sha256": "8e06580f11561c73a9191950544f6d75681d89ca70a261a653357207a5f70b45",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "LeanBuildConfig.valid_policy",
+          "line": 43,
+          "end_line": 45,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LocalHarness.tool_environment",
+          "line": 69,
+          "end_line": 70,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LocalHarness.absolute",
+          "line": 74,
+          "end_line": 77,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerConfig.api_origin",
+          "line": 129,
+          "end_line": 139,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerConfig.absolute",
+          "line": 143,
+          "end_line": 146,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "WorkerConfig.unique_and_scoped",
+          "line": 149,
+          "end_line": 178,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "private_text",
+          "line": 181,
+          "end_line": 198,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "open_journal",
+          "line": 201,
+          "end_line": 208,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "load_worker",
+          "line": 211,
+          "end_line": 256,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    }
+  ]
+}

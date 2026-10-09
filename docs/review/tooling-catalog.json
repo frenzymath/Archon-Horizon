@@ -1,0 +1,930 @@
+{
+  "schema_version": 1,
+  "scope": "Every scripts/*.py developer and distribution utility.",
+  "method": "Read complete function bodies and module-level contracts. AST lists named and nested functions, lambdas, and top-level declarations. Hashes bind the source review to exact files. This is source review, not test coverage or proof of correctness.",
+  "files": [
+    {
+      "path": "scripts/assemble_docs_demo.py",
+      "sha256": "d613eaa781036989ed9e8f8138464663f8a5699124df3f02238b12348d4f37ea",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "ROOT",
+          "kind": "Assign",
+          "line": 9,
+          "column": 1,
+          "end_line": 9,
+          "end_column": 46,
+          "status": "reviewed"
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 12,
+          "column": 1,
+          "end_line": 25,
+          "end_column": 13,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 12,
+          "column": 1,
+          "end_line": 25,
+          "end_column": 13,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "scripts/check_sdist.py",
+      "sha256": "64bb02f3ac0b3127608440eaeb6d5c442b315730ab638517c1a91d2fdd395415",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "REQUIRED",
+          "kind": "Assign",
+          "line": 11,
+          "column": 1,
+          "end_line": 44,
+          "end_column": 2,
+          "status": "reviewed"
+        },
+        {
+          "name": "LOCAL_DIRECTORIES",
+          "kind": "Assign",
+          "line": 45,
+          "column": 1,
+          "end_line": 50,
+          "end_column": 2,
+          "status": "reviewed"
+        },
+        {
+          "name": "check_archive",
+          "kind": "FunctionDef",
+          "line": 53,
+          "column": 1,
+          "end_line": 95,
+          "end_column": 20,
+          "status": "reviewed"
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 98,
+          "column": 1,
+          "end_line": 111,
+          "end_column": 23,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "check_archive",
+          "kind": "FunctionDef",
+          "line": 53,
+          "column": 1,
+          "end_line": 95,
+          "end_column": 20,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 98,
+          "column": 1,
+          "end_line": 111,
+          "end_column": 23,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "scripts/check_wheel.py",
+      "sha256": "641894c081006c28330d7af77b6deb02d1729be6d79df2b832fcf8d449ef24aa",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "REQUIRED",
+          "kind": "Assign",
+          "line": 22,
+          "column": 1,
+          "end_line": 43,
+          "end_column": 2,
+          "status": "reviewed"
+        },
+        {
+          "name": "FORBIDDEN",
+          "kind": "Assign",
+          "line": 46,
+          "column": 1,
+          "end_line": 67,
+          "end_column": 2,
+          "status": "reviewed"
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 70,
+          "column": 1,
+          "end_line": 113,
+          "end_column": 13,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "<lambda@23:34>",
+          "kind": "Lambda",
+          "line": 23,
+          "column": 34,
+          "end_line": 23,
+          "end_column": 105,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@24:35>",
+          "kind": "Lambda",
+          "line": 24,
+          "column": 35,
+          "end_line": 24,
+          "end_column": 116,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@25:34>",
+          "kind": "Lambda",
+          "line": 25,
+          "column": 34,
+          "end_line": 25,
+          "end_column": 131,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@26:32>",
+          "kind": "Lambda",
+          "line": 26,
+          "column": 32,
+          "end_line": 26,
+          "end_column": 99,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@27:30>",
+          "kind": "Lambda",
+          "line": 27,
+          "column": 30,
+          "end_line": 27,
+          "end_column": 114,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@28:33>",
+          "kind": "Lambda",
+          "line": 28,
+          "column": 33,
+          "end_line": 28,
+          "end_column": 111,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@29:35>",
+          "kind": "Lambda",
+          "line": 29,
+          "column": 35,
+          "end_line": 29,
+          "end_column": 136,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@30:29>",
+          "kind": "Lambda",
+          "line": 30,
+          "column": 29,
+          "end_line": 30,
+          "end_column": 106,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@31:29>",
+          "kind": "Lambda",
+          "line": 31,
+          "column": 29,
+          "end_line": 31,
+          "end_column": 104,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@32:27>",
+          "kind": "Lambda",
+          "line": 32,
+          "column": 27,
+          "end_line": 32,
+          "end_column": 107,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@33:29>",
+          "kind": "Lambda",
+          "line": 33,
+          "column": 29,
+          "end_line": 33,
+          "end_column": 108,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@34:31>",
+          "kind": "Lambda",
+          "line": 34,
+          "column": 31,
+          "end_line": 34,
+          "end_column": 109,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@35:29>",
+          "kind": "Lambda",
+          "line": 35,
+          "column": 29,
+          "end_line": 35,
+          "end_column": 105,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@36:36>",
+          "kind": "Lambda",
+          "line": 36,
+          "column": 36,
+          "end_line": 36,
+          "end_column": 116,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@37:34>",
+          "kind": "Lambda",
+          "line": 37,
+          "column": 34,
+          "end_line": 37,
+          "end_column": 138,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@38:36>",
+          "kind": "Lambda",
+          "line": 38,
+          "column": 36,
+          "end_line": 38,
+          "end_column": 94,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@39:32>",
+          "kind": "Lambda",
+          "line": 39,
+          "column": 32,
+          "end_line": 39,
+          "end_column": 87,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@40:31>",
+          "kind": "Lambda",
+          "line": 40,
+          "column": 31,
+          "end_line": 40,
+          "end_column": 87,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@41:24>",
+          "kind": "Lambda",
+          "line": 41,
+          "column": 24,
+          "end_line": 41,
+          "end_column": 74,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@42:29>",
+          "kind": "Lambda",
+          "line": 42,
+          "column": 29,
+          "end_line": 42,
+          "end_column": 95,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@47:25>",
+          "kind": "Lambda",
+          "line": 47,
+          "column": 25,
+          "end_line": 54,
+          "end_column": 6,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@55:40>",
+          "kind": "Lambda",
+          "line": 55,
+          "column": 40,
+          "end_line": 56,
+          "end_column": 75,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@57:31>",
+          "kind": "Lambda",
+          "line": 57,
+          "column": 31,
+          "end_line": 57,
+          "end_column": 61,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@58:26>",
+          "kind": "Lambda",
+          "line": 58,
+          "column": 26,
+          "end_line": 58,
+          "end_column": 80,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@59:35>",
+          "kind": "Lambda",
+          "line": 59,
+          "column": 35,
+          "end_line": 59,
+          "end_column": 125,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@60:15>",
+          "kind": "Lambda",
+          "line": 60,
+          "column": 15,
+          "end_line": 60,
+          "end_column": 88,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@61:24>",
+          "kind": "Lambda",
+          "line": 61,
+          "column": 24,
+          "end_line": 61,
+          "end_column": 72,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@62:25>",
+          "kind": "Lambda",
+          "line": 62,
+          "column": 25,
+          "end_line": 62,
+          "end_column": 58,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@63:29>",
+          "kind": "Lambda",
+          "line": 63,
+          "column": 29,
+          "end_line": 65,
+          "end_column": 38,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "<lambda@66:16>",
+          "kind": "Lambda",
+          "line": 66,
+          "column": 16,
+          "end_line": 66,
+          "end_column": 67,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 70,
+          "column": 1,
+          "end_line": 113,
+          "end_column": 13,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "scripts/docs_hooks.py",
+      "sha256": "0d742e8b9386b1c7ff845cfcc3a19dc11305ab3bc8295dd936cb3f882257782a",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "ROOT",
+          "kind": "Assign",
+          "line": 11,
+          "column": 1,
+          "end_line": 11,
+          "end_column": 46,
+          "status": "reviewed"
+        },
+        {
+          "name": "GENERATED",
+          "kind": "Assign",
+          "line": 12,
+          "column": 1,
+          "end_line": 12,
+          "end_column": 79,
+          "status": "reviewed"
+        },
+        {
+          "name": "on_files",
+          "kind": "FunctionDef",
+          "line": 15,
+          "column": 1,
+          "end_line": 19,
+          "end_column": 17,
+          "status": "reviewed"
+        },
+        {
+          "name": "on_page_markdown",
+          "kind": "FunctionDef",
+          "line": 22,
+          "column": 1,
+          "end_line": 45,
+          "end_column": 57,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "on_files",
+          "kind": "FunctionDef",
+          "line": 15,
+          "column": 1,
+          "end_line": 19,
+          "end_column": 17,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "on_page_markdown",
+          "kind": "FunctionDef",
+          "line": 22,
+          "column": 1,
+          "end_line": 45,
+          "end_column": 57,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "on_page_markdown.replace",
+          "kind": "FunctionDef",
+          "line": 28,
+          "column": 5,
+          "end_line": 43,
+          "end_column": 53,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "scripts/generate_dashboard_fixture.py",
+      "sha256": "a1063f8d0a8e72549fc5694d0b41d4b83a634bff715d0afbfe23b22e406b33e5",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "ROOT",
+          "kind": "Assign",
+          "line": 15,
+          "column": 1,
+          "end_line": 15,
+          "end_column": 46,
+          "status": "reviewed"
+        },
+        {
+          "name": "DEFAULT_OUTPUT",
+          "kind": "Assign",
+          "line": 16,
+          "column": 1,
+          "end_line": 16,
+          "end_column": 80,
+          "status": "reviewed"
+        },
+        {
+          "name": "STAMP",
+          "kind": "Assign",
+          "line": 17,
+          "column": 1,
+          "end_line": 17,
+          "end_column": 31,
+          "status": "reviewed"
+        },
+        {
+          "name": "fixture",
+          "kind": "FunctionDef",
+          "line": 20,
+          "column": 1,
+          "end_line": 84,
+          "end_column": 233,
+          "status": "reviewed"
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 87,
+          "column": 1,
+          "end_line": 99,
+          "end_column": 13,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "fixture",
+          "kind": "FunctionDef",
+          "line": 20,
+          "column": 1,
+          "end_line": 84,
+          "end_column": 233,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 87,
+          "column": 1,
+          "end_line": 99,
+          "end_column": 13,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "scripts/review_inventory.py",
+      "sha256": "84e6269f189ce425047df463c8cb7d77773dacd6a689945eba4f7906643edcba",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "ROOT",
+          "kind": "Assign",
+          "line": 19,
+          "column": 1,
+          "end_line": 19,
+          "end_column": 46,
+          "status": "reviewed"
+        },
+        {
+          "name": "EXCLUDED",
+          "kind": "Assign",
+          "line": 20,
+          "column": 1,
+          "end_line": 20,
+          "end_column": 77,
+          "status": "reviewed"
+        },
+        {
+          "name": "BRANCHES",
+          "kind": "Assign",
+          "line": 21,
+          "column": 1,
+          "end_line": 21,
+          "end_column": 85,
+          "status": "reviewed"
+        },
+        {
+          "name": "metrics",
+          "kind": "FunctionDef",
+          "line": 24,
+          "column": 1,
+          "end_line": 44,
+          "end_column": 29,
+          "status": "reviewed"
+        },
+        {
+          "name": "functions",
+          "kind": "FunctionDef",
+          "line": 47,
+          "column": 1,
+          "end_line": 60,
+          "end_column": 33,
+          "status": "reviewed"
+        },
+        {
+          "name": "scan",
+          "kind": "FunctionDef",
+          "line": 63,
+          "column": 1,
+          "end_line": 112,
+          "end_column": 28,
+          "status": "reviewed"
+        },
+        {
+          "name": "markdown_report",
+          "kind": "FunctionDef",
+          "line": 115,
+          "column": 1,
+          "end_line": 138,
+          "end_column": 28,
+          "status": "reviewed"
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 141,
+          "column": 1,
+          "end_line": 169,
+          "end_column": 54,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "metrics",
+          "kind": "FunctionDef",
+          "line": 24,
+          "column": 1,
+          "end_line": 44,
+          "end_column": 29,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "metrics.visit",
+          "kind": "FunctionDef",
+          "line": 32,
+          "column": 5,
+          "end_line": 41,
+          "end_column": 32,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "functions",
+          "kind": "FunctionDef",
+          "line": 47,
+          "column": 1,
+          "end_line": 60,
+          "end_column": 33,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "functions.descend",
+          "kind": "FunctionDef",
+          "line": 49,
+          "column": 5,
+          "end_line": 58,
+          "end_column": 49,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "scan",
+          "kind": "FunctionDef",
+          "line": 63,
+          "column": 1,
+          "end_line": 112,
+          "end_column": 28,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "markdown_report",
+          "kind": "FunctionDef",
+          "line": 115,
+          "column": 1,
+          "end_line": 138,
+          "end_column": 28,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 141,
+          "column": 1,
+          "end_line": 169,
+          "end_column": 54,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "scripts/version.py",
+      "sha256": "782a5e8c21925e45f7c2c3bd1b89bbe3637257d7f7b96ca77c2f636a4bafdbc5",
+      "module_review": "reviewed",
+      "symbols": [
+        {
+          "name": "VERSION_PATTERN",
+          "kind": "Assign",
+          "line": 12,
+          "column": 1,
+          "end_line": 12,
+          "end_column": 77,
+          "status": "reviewed"
+        },
+        {
+          "name": "SOURCE_PATTERN",
+          "kind": "Assign",
+          "line": 13,
+          "column": 1,
+          "end_line": 13,
+          "end_column": 62,
+          "status": "reviewed"
+        },
+        {
+          "name": "BADGE_PATTERN",
+          "kind": "Assign",
+          "line": 16,
+          "column": 1,
+          "end_line": 16,
+          "end_column": 91,
+          "status": "reviewed"
+        },
+        {
+          "name": "_source_version",
+          "kind": "FunctionDef",
+          "line": 19,
+          "column": 1,
+          "end_line": 24,
+          "end_column": 26,
+          "status": "reviewed"
+        },
+        {
+          "name": "_json_versions",
+          "kind": "FunctionDef",
+          "line": 27,
+          "column": 1,
+          "end_line": 36,
+          "end_column": 6,
+          "status": "reviewed"
+        },
+        {
+          "name": "_read_versions",
+          "kind": "FunctionDef",
+          "line": 39,
+          "column": 1,
+          "end_line": 47,
+          "end_column": 20,
+          "status": "reviewed"
+        },
+        {
+          "name": "check",
+          "kind": "FunctionDef",
+          "line": 50,
+          "column": 1,
+          "end_line": 60,
+          "end_column": 17,
+          "status": "reviewed"
+        },
+        {
+          "name": "_replace_once",
+          "kind": "FunctionDef",
+          "line": 63,
+          "column": 1,
+          "end_line": 69,
+          "end_column": 19,
+          "status": "reviewed"
+        },
+        {
+          "name": "set_version",
+          "kind": "FunctionDef",
+          "line": 72,
+          "column": 1,
+          "end_line": 100,
+          "end_column": 42,
+          "status": "reviewed"
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 103,
+          "column": 1,
+          "end_line": 121,
+          "end_column": 13,
+          "status": "reviewed"
+        }
+      ],
+      "functions": [
+        {
+          "name": "_source_version",
+          "kind": "FunctionDef",
+          "line": 19,
+          "column": 1,
+          "end_line": 24,
+          "end_column": 26,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_json_versions",
+          "kind": "FunctionDef",
+          "line": 27,
+          "column": 1,
+          "end_line": 36,
+          "end_column": 6,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_read_versions",
+          "kind": "FunctionDef",
+          "line": 39,
+          "column": 1,
+          "end_line": 47,
+          "end_column": 20,
+          "status": "reviewed",
+          "findings": [
+            "F-prerelease-version-sync"
+          ]
+        },
+        {
+          "name": "check",
+          "kind": "FunctionDef",
+          "line": 50,
+          "column": 1,
+          "end_line": 60,
+          "end_column": 17,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_replace_once",
+          "kind": "FunctionDef",
+          "line": 63,
+          "column": 1,
+          "end_line": 69,
+          "end_column": 19,
+          "status": "reviewed",
+          "findings": [
+            "F-prerelease-version-sync"
+          ]
+        },
+        {
+          "name": "set_version",
+          "kind": "FunctionDef",
+          "line": 72,
+          "column": 1,
+          "end_line": 100,
+          "end_column": 42,
+          "status": "reviewed",
+          "findings": [
+            "F-prerelease-version-sync"
+          ]
+        },
+        {
+          "name": "main",
+          "kind": "FunctionDef",
+          "line": 103,
+          "column": 1,
+          "end_line": 121,
+          "end_column": 13,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    }
+  ]
+}

@@ -5,9 +5,10 @@ from uuid import uuid4
 
 from sqlalchemy import insert, update
 
-from archon_horizon.pipeline import models, readmodels
-from archon_horizon.pipeline.records import create
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline import models
+from archon_horizon.pipeline.dashboard import readmodels
+from archon_horizon.pipeline.persistence.records import create
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 
@@ -49,7 +50,7 @@ def test_roadmap_uses_adopted_snapshot_not_newest_project_snapshot(world):
         return create(world.conn, "roadmap_snapshot", project_id=world.project["id"], roadmap_document_id=world.document["id"],
                       source_commit_oid=commit * 40, graph_manifest_artifact_id=artifact["id"], status="provisional")
     adopted = baseline("a")
-    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(mission_id=world.mission["id"],
+    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(orchestration="legacy", mission_id=world.mission["id"],
         phase={"kind": "formalization", "roadmap_snapshot_id": adopted["id"]}, host_ids=[world.host["id"]]))
     baseline("b")
     result = readmodels.roadmap(world.conn, world.actor, world.project["id"], None, 30, run["id"])

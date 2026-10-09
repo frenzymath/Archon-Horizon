@@ -99,7 +99,35 @@ type Attempt = {
   id: string; number: number; status: string; host_id?: string; profile_id?: string;
   model?: string; effort?: string; started_at?: string; finished_at?: string; error?: string;
 };
-type Report = { id: string; revision: number; kind: string; label?: string; markdown: string; created_at: string };
+type LedgerItem = { id: string; number: number; description: string; status: string;
+  resolution?: { note?: string; evidence?: { kind: string; id?: string }[]; assignment_ids?: string[]; replacement_obligation_ids?: string[] };
+  comments?: { markdown: string; created_at: string }[] };
+type GoalLedger = { mission: string; acceptance_criteria: string[]; items: LedgerItem[] };
+type Report = { ledger?: GoalLedger; id: string; revision: number; kind: string; label?: string; markdown: string; created_at: string };
+export function GoalLedgerView({ ledger, projectId, runId, sessions = [] }: { ledger: GoalLedger; projectId: string; runId?: string; sessions?: ActivitySession[] }) {
+  const outstanding = ledger.items.filter(item => item.status === "open");
+  const settled = ledger.items.filter(item => item.status !== "open");
+  const markdown = (document: string) => <Suspense fallback={<p>{document}</p>}><ActivityMarkdown document={document} projectId={projectId} showMetadata={false} /></Suspense>;
+  const items = (rows: LedgerItem[]) => <ol className="activity-goal-items">{rows.map(item => <li key={item.id}>
+    <div><strong>#{item.number}</strong> <span>{item.resolution?.assignment_ids?.length ? "Delegated" : item.status === "done" ? "Completed" : item.status === "superseded" ? "Superseded" : item.status === "open" ? "Outstanding" : "Accounted for"}</span></div>
+    {markdown(item.description)}
+    {item.resolution?.note && markdown(item.resolution.note)}
+    {!!item.resolution?.evidence?.length && <ul>{item.resolution.evidence.map((ref, index) => <li key={index}>{ref.id ? <a href={`/api/v3/records/${encodeURIComponent(ref.kind)}/${encodeURIComponent(ref.id)}`}>{ref.kind} evidence</a> : ref.kind}</li>)}</ul>}
+    {!!item.resolution?.assignment_ids?.length && <ul aria-label="Responsible sessions">{item.resolution.assignment_ids.map((id, index) => {
+      const owner = sessions.find(session => session.id === id);
+      return <li key={id}><a href={`?tab=activity${runId ? `&run=${encodeURIComponent(runId)}` : ""}&session=${encodeURIComponent(id)}`}>
+        {owner ? `${sessionLabel(owner)}: ${owner.title}` : `Delegated session ${index + 1}`}</a></li>;
+    })}</ul>}
+    {!!item.comments?.length && <details><summary>Comments ({item.comments.length})</summary>{item.comments.map((comment, index) => <div key={index}><time dateTime={comment.created_at}>{timestamp(comment.created_at)}</time>{markdown(comment.markdown)}</div>)}</details>}
+  </li>)}</ol>;
+  return <section className="activity-goal-ledger" aria-label="Goal ledger">
+    <h3>Mission</h3>{markdown(ledger.mission)}
+    {!!ledger.acceptance_criteria.length && <details open><summary>Acceptance criteria</summary><ul>{ledger.acceptance_criteria.map((criterion, index) => <li key={index}>{markdown(criterion)}</li>)}</ul></details>}
+    <h3>Outstanding ({outstanding.length})</h3>{outstanding.length ? items(outstanding) : <p>No outstanding ledger items. Mission acceptance is recorded separately.</p>}
+    {!!settled.length && <details><summary>Settled history ({settled.length})</summary>{items(settled)}</details>}
+  </section>;
+}
+
 export type ActivityEvent = {
   id: string; kind: string; title: string; created_at: string;
   sort_at?: string;
@@ -666,10 +694,12 @@ function SessionView({ sessionId, run, refresh, onMutation }: {
     } finally { setBusy(false); }
   };
   const resume = async () => {
+    const note = window.prompt("What was repaired or why should this session resume?");
+    if (!note?.trim()) return;
     setBusy(true);
     requestRef.current = new AbortController();
     try {
-      await platformRequest(`${activityPath}/sessions/${encodeURIComponent(sessionId)}/resume`, { method: "POST", body: "{}", signal: requestRef.current.signal });
+      await platformRequest(`${activityPath}/sessions/${encodeURIComponent(sessionId)}/resume`, { method: "POST", body: JSON.stringify({ note }), signal: requestRef.current.signal });
       setActionError("");
       onMutation();
     } catch (e) {
@@ -741,7 +771,7 @@ function SessionView({ sessionId, run, refresh, onMutation }: {
       {(error || (view === "report" && reportPage.error) || (view === "events" && recent.error)) && <ToolButton label="Retry session data" onClick={onMutation}><RefreshCw size={15} /></ToolButton>}
       {view === "report" && (selectedReport ? <>
         <div className="activity-report-toolbar"><label><span>Revision</span><select aria-label="Report revision" value={selectedReport.id} onChange={(event) => setRevision(event.target.value)}>{reports.map((report) => <option key={report.id} value={report.id}>{report.label || `Revision ${report.revision} - ${report.kind}`}</option>)}</select></label><time dateTime={selectedReport.created_at}>{timestamp(selectedReport.created_at)}</time></div>
-        <Suspense fallback={<div className="activity-empty">Loading report...</div>}><ActivityMarkdown document={selectedReport.markdown} projectId={run.project_id} repository={workspaceRepository(data.context?.workspace) || workspaceRepository(run.context?.workspace)} showMetadata={false} className="activity-report" /></Suspense>
+        {selectedReport.ledger ? <GoalLedgerView ledger={selectedReport.ledger} projectId={run.project_id} runId={run.id} sessions={run.sessions} /> : <Suspense fallback={<div className="activity-empty">Loading report...</div>}><ActivityMarkdown document={selectedReport.markdown} projectId={run.project_id} repository={workspaceRepository(data.context?.workspace) || workspaceRepository(run.context?.workspace)} showMetadata={false} className="activity-report" /></Suspense>}
       </> : <div className="activity-empty"><FileText size={23} /><span>{reportPage.loading ? "Loading report..." : reportPage.error ? "Report unavailable." : "No report published yet."}</span></div>)}
       {view === "events" && <>{!recent.data && !events.length ? <div className="activity-empty">{recent.error ? "Events unavailable." : "Loading events..."}</div> : <EventTimeline events={events} projectId={run.project_id} />}{cursor != null && <button type="button" className="platform-small-button activity-more" disabled={busy} onClick={() => void loadOlder()}>{busy ? "Loading..." : "Earlier events"}<ChevronDown size={14} /></button>}</>}
       {view === "attempts" && (detail?.attempts?.length ? <><p className="activity-panel-note">Each execution is one process run for this session. A later execution retries the same session; it is not a delegated session.</p><ol className="activity-attempts">{[...detail.attempts].sort((a, b) => b.number - a.number).map((attempt) => <li key={attempt.id}>
@@ -763,19 +793,19 @@ function RunView({ runId, sessionId, refresh, onSelectSession, onBack, onMutatio
   const metrics = useResource<ActivityRun>(summary ? `${activityPath}/runs/${encodeURIComponent(runId)}?view=metrics` : null, refresh);
   const queue = useResource<{admissions: Record<string, Admission>}>(summary ? `${activityPath}/runs/${encodeURIComponent(runId)}?view=queue` : null, refresh);
   const [olderSessions, setOlderSessions] = useState<ActivitySession[]>([]);
-  const [olderSessionCursor, setOlderSessionCursor] = useState<string | null>(null);
+  // undefined means pagination has not started; null means it is exhausted.
+  // Reusing the initial cursor after a null final cursor repeats old pages.
+  const [olderSessionCursor, setOlderSessionCursor] = useState<string | null | undefined>(undefined);
   const [olderSessionsLoading, setOlderSessionsLoading] = useState(false);
   const [olderSessionsError, setOlderSessionsError] = useState("");
   const sessionsRequestRef = useRef<AbortController | null>(null);
   useEffect(() => {
     sessionsRequestRef.current?.abort();
     setOlderSessions([]);
-    setOlderSessionCursor(null);
+    setOlderSessionCursor(undefined);
+    setOlderSessionsLoading(false);
     setOlderSessionsError("");
   }, [runId, refresh]);
-  useEffect(() => {
-    if (!olderSessions.length) setOlderSessionCursor(summary?.sessions_next_before ?? null);
-  }, [summary?.sessions_next_before, olderSessions.length]);
   const loadedSessions = useMemo(() => {
     const values = new Map<string, ActivitySession>();
     for (const session of summary?.sessions ?? []) values.set(session.id, session);
@@ -841,7 +871,7 @@ function RunView({ runId, sessionId, refresh, onSelectSession, onBack, onMutatio
   useEffect(() => {
     setShowAllSessions(Boolean(sessionId) && selectedRowIndex >= 5);
   }, [sessionId, selectedRowIndex, treeFilter]);
-  const nextSessionCursor = olderSessionCursor ?? summary?.sessions_next_before ?? null;
+  const nextSessionCursor = olderSessionCursor === undefined ? summary?.sessions_next_before ?? null : olderSessionCursor;
   const loadOlderSessions = async () => {
     if (!nextSessionCursor || olderSessionsLoading) return;
     sessionsRequestRef.current?.abort();

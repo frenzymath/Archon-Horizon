@@ -9,6 +9,11 @@ import tarfile
 
 
 REQUIRED = {
+    "mkdocs.yml", "requirements-docs.txt", "scripts/generate_dashboard_fixture.py",
+    "scripts/review_inventory.py", "scripts/docs_hooks.py", "scripts/assemble_docs_demo.py",
+    "src/archon_horizon/frontend/vite.showcase.config.ts",
+    "src/archon_horizon/frontend/showcase/index.html",
+    "src/archon_horizon/frontend/src/showcase/fixture.json",
     "docs/pipeline-milestones.md",
     "tests/test_pipeline_milestones.py",
     "tests/test_pipeline_milestone_api.py",
@@ -79,7 +84,14 @@ def check_archive(archive: Path, root: Path) -> list[str]:
                 content = source.extractfile(member)
                 if not local.is_file() or content is None or content.read() != local.read_bytes():
                     failures.append(f"stale or unexpected source: {name}")
-    failures.extend(f"missing: {name}" for name in sorted(REQUIRED - names))
+    # Package discovery changes must not silently omit a newly introduced area
+    # from source releases. Frontend sources have their own required-input checks.
+    modules = {path.relative_to(root).as_posix()
+               for path in (root / "src" / "archon_horizon").rglob("*.py")
+               if "frontend" not in path.relative_to(root / "src" / "archon_horizon").parts}
+    modules.update(path.relative_to(root).as_posix()
+                   for path in (root / "src/archon_horizon/pipeline/instructions/templates").rglob("*.md"))
+    failures.extend(f"missing: {name}" for name in sorted((REQUIRED | modules) - names))
     return failures
 
 

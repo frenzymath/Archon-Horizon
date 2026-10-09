@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from archon_horizon.pipeline.records import change, create
+from archon_horizon.pipeline.persistence.records import change, create
 from test_pipeline_api import api, api_database, auth, mutate
 from test_pipeline_milestones import report
 

@@ -4,6 +4,8 @@ let sequence = 0;
 const pending = new Map<number, { resolve: (svg: string) => void; reject: (error: Error) => void }>();
 const inFlight = new Map<string, Promise<string>>();
 const cache = new Map<string, string>();
+// Bound retained SVG strings per browser tab. 200 is a display-cache heuristic,
+// not a graph-size or correctness limit; eviction only repeats a layout.
 const CACHE_MAX = 200;
 
 function remember(dot: string, svg: string): string {

@@ -64,7 +64,7 @@ def validate_implementations(metadata, markdown, repository_ids):
 
 def target_context(conn, project_id, repository_id=None, run_id=None):
     from sqlalchemy import select
-    from .schema import tables
+    from .persistence.schema import tables
     repository, run, mission = (tables[name] for name in ("repository", "run", "mission"))
     targets = [dict(row) for row in conn.execute(select(repository.c.id, repository.c.slug, repository.c.purpose)
         .where(repository.c.project_id == project_id, repository.c.archived_at.is_(None),
@@ -116,7 +116,7 @@ def progress_view(metadata, context):
 def main():
     import argparse
     from pathlib import Path
-    from .documents import parse_document
+    from .projects.documents import parse_document
     parser = argparse.ArgumentParser(description="Compute the content digest for a node implementation claim")
     parser.add_argument("file", type=Path, nargs="?")
     parser.add_argument("--repository-id", type=UUID)

@@ -204,6 +204,17 @@ def build_environment(host_root: str | Path, env: Mapping[str, str]) -> dict[str
 
 
 def prepare_dependencies(root: Path, env: Mapping[str, str], deadline: float, progress: CheckProgress | None = None) -> None:
+    """Bound host-wide checkout/copy traffic independently of compiler slots."""
+    slots = int(env.get("HORIZON_BUILD_PREPARATION_SLOTS", "1"))
+    if not 1 <= slots <= 64:
+        raise ValueError("HORIZON_BUILD_PREPARATION_SLOTS must be between 1 and 64")
+    cache_root = Path(env["HORIZON_LEAN_CACHE_ROOT"]) if env.get("HORIZON_LEAN_CACHE_ROOT") else Path(env["LAKE_CACHE_DIR"]).parent
+    paths = [cache_root / "preparation-slots" / f"{i}.lock" for i in range(slots)]
+    with resource_lock(paths, deadline, progress or CheckProgress(60), any_slot=True):
+        _prepare_dependencies(root, env, deadline, progress)
+
+
+def _prepare_dependencies(root: Path, env: Mapping[str, str], deadline: float, progress: CheckProgress | None = None) -> None:
     """Share Git objects for pinned dependencies without sharing writable trees.
 
     On reflink-capable filesystems, identical source files also share disk blocks.
@@ -416,8 +427,11 @@ def _command(argv: list[str], root: Path, env: Mapping[str, str], deadline: floa
                 sys.stderr.write("\n[Further build output omitted; bounded diagnostic tail retained.]\n")
     try:
         check_storage(root, env)
+        # Diagnostics without a dedicated stdout sink use one merged pipe.
+        # A second undrained PIPE would let verbose stderr block the compiler.
+        stderr = subprocess.PIPE if stdout_sink is not None else subprocess.STDOUT if capture else output
         process = subprocess.Popen(argv, cwd=root, env=env, stdout=output,
-                                   stderr=subprocess.PIPE if stdout_sink is not None else output, process_group=0)
+                                   stderr=stderr, process_group=0)
         if capture:
             # Both streams share one pipe. Drain it continuously without a growing
             # tempfile, so compiler diagnostics cannot themselves fill the disk.
@@ -475,14 +489,21 @@ def captured_command(argv: list[str], root: Path, env: Mapping[str, str], deadli
     return subprocess.CompletedProcess(argv, code, bytes(output), "\n".join(diagnostics).encode())
 
 
-def _build_command(argv: list[str], root: Path, env: Mapping[str, str], deadline: float,
-                   progress: CheckProgress,
-                   diagnostics: list[str] | None = None) -> int:
+@contextmanager
+def build_slot(env: Mapping[str, str], deadline: float, progress: CheckProgress):
+    """Share compiler admission with trusted audits and ordinary Lean checks."""
     slots = int(env.get("HORIZON_BUILD_SLOTS", "2"))
     if not 1 <= slots <= 64:
         raise ValueError("HORIZON_BUILD_SLOTS must be between 1 and 64")
     paths = [Path(env["HORIZON_LEAN_CACHE_ROOT"]) / "slots" / f"{i}.lock" for i in range(slots)]
     with resource_lock(paths, deadline, progress, any_slot=True), progress.phase("build"):
+        yield
+
+
+def _build_command(argv: list[str], root: Path, env: Mapping[str, str], deadline: float,
+                   progress: CheckProgress,
+                   diagnostics: list[str] | None = None) -> int:
+    with build_slot(env, deadline, progress):
         return _command(argv, root, env, deadline, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
 
 

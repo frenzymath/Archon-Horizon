@@ -289,3 +289,11 @@
 .activity-subagents summary { cursor: pointer; overflow-wrap: anywhere; }
 .activity-subagents summary .activity-status { margin-left: 12px; }
 .activity-subagents details > small { display: block; margin-top: 8px; }
+
+.activity-goal-ledger { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.activity-goal-ledger h3 { margin: 20px 0 8px; font-size: 15px; }
+.activity-goal-ledger summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
+.activity-goal-items { padding-left: 24px; }
+.activity-goal-items > li { padding: 12px 8px; border-bottom: 1px solid var(--border, #e2e4ea); }
+.activity-goal-items > li > div:first-child { display: flex; gap: 12px; color: var(--text-secondary, #545967); }
+.activity-goal-items time { color: var(--text-muted, #717582); font-size: 11px; }

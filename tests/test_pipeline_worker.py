@@ -237,7 +237,7 @@ def test_git_commit_before_journal_gap_reflog_and_remote_preservation(repository
 
 
 def test_preserved_commit_is_available_as_broker_pull_request_head(repository, journal, tmp_path):
-    from archon_horizon.pipeline.connectors import ForgejoClient
+    from archon_horizon.pipeline.integrations.connectors import ForgejoClient
 
     recovery = GitRecovery(repository, "repo-1", "execution-1", 1, journal)
     oid = git(repository, "rev-parse", "HEAD")
@@ -469,6 +469,70 @@ def test_codex_workspace_write_grants_only_assignment_intent_directory(tmp_path,
             adapter.command(agent_state_path=state, externally_isolated=external)
 
 
+@pytest.mark.parametrize("thread_id", [None, "thread-123"])
+def test_default_codex_delegation_is_enabled_without_a_horizon_thread_cap(thread_id):
+    command = HeadlessAdapter("codex_exec", "/bin/codex").command(provider_thread_id=thread_id)
+    assert "agents.enabled=true" in command
+    assert "features.multi_agent=true" in command
+    assert "features.multi_agent_v2=true" in command
+    assert 'web_search="live"' in command
+    assert not any(arg.startswith("agents.max_threads=") for arg in command)
+
+
+@pytest.mark.parametrize("thread_id", [None, "thread-123"])
+def test_uncapped_claude_keeps_native_tools_and_explicit_disabling_removes_delegation(thread_id):
+    from dataclasses import replace
+
+    claude = HeadlessAdapter("claude_exec", "/bin/claude", sandbox_mode="externally_isolated")
+    command = claude.command(externally_isolated=True, provider_thread_id=thread_id)
+    assert command[command.index("--tools") + 1] == "default"
+    assert not {"--setting-sources", "--strict-mcp-config", "--mcp-config", "--bare", "--safe-mode"} & set(command)
+    assert command[command.index("--autocompact") + 1] == "auto"
+    disabled = replace(claude, max_parallel_subagents=0).command(externally_isolated=True)
+    assert disabled[disabled.index("--tools") + 1] == "default"
+    assert set(disabled[disabled.index("--disallowedTools") + 1].split(",")) == {"Agent", "Task"}
+    with pytest.raises(ValueError, match="unsupported Claude tool"):
+        replace(claude, max_parallel_subagents=0, tool_names=("Agent",)).command(externally_isolated=True)
+
+
+@pytest.mark.parametrize("thread_id", [None, "thread-123"])
+def test_native_feature_overrides_remain_explicit_on_start_and_resume(thread_id):
+    codex = HeadlessAdapter("codex_exec", "/bin/codex", codex_multi_agent_v2=False, codex_web_search="cached")
+    command = codex.command(provider_thread_id=thread_id)
+    assert "features.multi_agent_v2=false" in command and 'web_search="cached"' in command
+    claude = HeadlessAdapter("claude_exec", "/bin/claude", sandbox_mode="externally_isolated",
+                             claude_native_configuration=False)
+    command = claude.command(provider_thread_id=thread_id, externally_isolated=True)
+    assert command[command.index("--setting-sources") + 1] == ""
+    assert "--strict-mcp-config" in command
+    assert json.loads(command[command.index("--mcp-config") + 1]) == {"mcpServers": {}}
+
+
+def test_claude_tool_selection_accepts_native_catalog_extensions_and_helpers_can_finish():
+    claude = HeadlessAdapter("claude_exec", "/bin/claude", sandbox_mode="externally_isolated",
+        tool_names=("NotebookEdit", "Skill", "TaskCreate", "ToolSearch"))
+    command = claude.command(externally_isolated=True)
+    assert command[command.index("--tools") + 1] == "NotebookEdit,Skill,TaskCreate,ToolSearch"
+    assert claude.runtime_environment() == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"}
+    assert HeadlessAdapter("codex_exec", "/bin/codex").runtime_environment() == {}
+
+
+@pytest.mark.parametrize("settings", [{"codex_multi_agent_v2": 1}, {"claude_native_configuration": "true"},
+                                      {"codex_web_search": "unknown"}])
+def test_native_feature_settings_reject_malformed_values(settings):
+    with pytest.raises(ValueError):
+        HeadlessAdapter("codex_exec", "/bin/codex", **settings).command()
+
+
+@pytest.mark.parametrize("limit", [-1, True, 1.5, "2"])
+def test_malformed_subagent_limits_are_rejected_by_worker_contracts(tmp_path, limit):
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        HeadlessAdapter("codex_exec", "/bin/codex", max_parallel_subagents=limit).command()
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        ExecutionGrant("execution", "assignment", 1, 60, "harness", "workspace",
+                       str(tmp_path), "repo", "Goal", max_parallel_subagents=limit)
+
+
 def test_headless_settings_are_enforced_or_rejected():
     from dataclasses import replace
 
@@ -479,10 +543,11 @@ def test_headless_settings_are_enforced_or_rejected():
     assert "agents.max_threads=3" in command
     assert "agents.enabled=true" in command
     assert "features.multi_agent=true" in command
-    assert "features.multi_agent_v2=false" in command
+    assert "features.multi_agent_v2=true" in command
     assert "--dangerously-bypass-approvals-and-sandbox" not in command
     assert "agents.enabled=false" in replace(codex, max_parallel_subagents=0).command()
     assert "features.multi_agent=false" in replace(codex, max_parallel_subagents=0).command()
+    assert "features.multi_agent_v2=false" in replace(codex, max_parallel_subagents=0).command()
     for changes in ({"tool_names": ("Bash",)}, {"auto_compaction": False},
                     {"approval_mode": "automatic_review"}, {"approval_mode": "preauthorized"}):
         with pytest.raises(ValueError):
@@ -545,13 +610,18 @@ def test_worker_execution_budget_is_positive_and_separate_from_request_budget(jo
 
 def test_supervisor_stops_on_lease_expiry_and_distinguishes_cancel(journal, repository):
     supervisor = ProcessSupervisor(journal, poll_seconds=0.01)
-    command = [sys.executable, "-c", "import time; time.sleep(30)"]
-    journal.grant_lease("execution-1", 1, 0.15)
+    command = [sys.executable, "-c", 'import time; print(\'{"type":"ready"}\', flush=True); time.sleep(30)']
+    journal.grant_lease("execution-1", 1, 60)
+    # Expire after native startup, so slow journal fsync cannot expire the lease
+    # before the process whose termination this test needs to observe exists.
+    def expire_after_start(event):
+        if event.get("type") == "ready":
+            journal.grant_lease("execution-1", 1, 0.001)
     result = supervisor.run(command, prompt="", request_id="request-expired", execution_id="execution-1", epoch=1,
-                            workspace=repository, env={"PATH": os.defpath})
+                            workspace=repository, env={"PATH": os.defpath}, on_event=expire_after_start)
     assert result.status == "lost"
     assert result.reason == "lease_expired"
-    journal.grant_lease("execution-2", 1, 10)
+    journal.grant_lease("execution-2", 1, 60)
     cancel = threading.Event()
     cancel.set()
     result = supervisor.run(command, prompt="", request_id="request-cancel", execution_id="execution-2", epoch=1,
@@ -847,6 +917,19 @@ def test_worker_rejects_harness_model_drift_before_launch(tmp_path):
     assert config.adapter.model == "different-model"
 
 
+def test_worker_applies_pinned_native_feature_choices_without_mutating_local_defaults(tmp_path):
+    config = HarnessConfig(HeadlessAdapter("codex_exec", "/codex"), tmp_path / "provider",
+                           tmp_path / "scratch", unrestricted=True)
+    grant = ExecutionGrant("execution", "assignment", 1, 60, "harness", "workspace", str(tmp_path), "repo", "Goal",
+        harness_configuration={"adapter": "codex_exec", "model_options": {}, "settings": {
+            "codex_multi_agent_v2": False, "codex_web_search": "disabled", "claude_native_configuration": False}})
+    resolved = WorkerDaemon._validate_harness(grant, config)
+    assert "features.multi_agent_v2=false" in resolved.command()
+    assert 'web_search="disabled"' in resolved.command()
+    assert resolved.claude_native_configuration is False
+    assert config.adapter.codex_multi_agent_v2 is True and config.adapter.codex_web_search == "live"
+
+
 def test_worker_verifies_sandbox_attestation_and_actual_binary_version(journal, repository, tmp_path):
     from dataclasses import replace
     from archon_horizon.pipeline.worker.sandbox import SandboxMount
@@ -909,7 +992,8 @@ def test_daemon_runs_verified_provider_from_explicit_tool_path(journal, reposito
         transport.close()
 
 
-def test_daemon_keeps_host_podman_environment_separate_from_image_tools(journal, repository, tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["codex_exec", "claude_exec"])
+def test_daemon_keeps_host_podman_environment_separate_from_image_tools(journal, repository, tmp_path, monkeypatch, provider):
     host_bin = tmp_path / "host-bin"
     host_bin.mkdir()
     host_home = tmp_path / "host-home"
@@ -917,6 +1001,9 @@ def test_daemon_keeps_host_podman_environment_separate_from_image_tools(journal,
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     binary = host_bin / "podman"
+    events = [{"type": "system", "subtype": "init", "session_id": "thread-123"},
+              {"type": "result", "subtype": "success", "result": "Done"}] if provider == "claude_exec" else [
+              {"type": "thread.started", "thread_id": "thread-123"}, {"type": "turn.completed"}]
     binary.write_text("#!" + sys.executable + "\nimport json,os,sys\nfrom pathlib import Path\n"
                       "if sys.argv[1] == 'rm': sys.exit(0)\n"
                       "entries=[sys.argv[i+1] for i,v in enumerate(sys.argv) if v=='--env']\n"
@@ -924,13 +1011,14 @@ def test_daemon_keeps_host_podman_environment_separate_from_image_tools(journal,
                       "assert 'XDG_CACHE_HOME=/image-cache' in entries\n"
                       "assert 'HOME=/provider-home' in entries\n"
                       "assert 'HORIZON_REVIEWER_ACCOUNTS_FILE' in entries\n"
+                      f"assert ('CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS' in entries) is {provider == 'claude_exec'!r}\n"
+                      f"assert os.environ.get('CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS') == {('0' if provider == 'claude_exec' else None)!r}\n"
                       "assert Path(os.environ['HOME']).name=='host-home'\n"
                       "assert Path(os.environ['XDG_RUNTIME_DIR']).name=='runtime'\n"
                       "assert os.environ['PATH'].split(':')[0]==str(Path(sys.argv[0]).parent)\n"
                       "assert 'OPENAI_API_KEY' not in os.environ\n"
                       "assert not any('execution-secret' in value for value in sys.argv)\n"
-                      "print(json.dumps({'type':'thread.started','thread_id':'thread-123'}))\n"
-                      "print(json.dumps({'type':'turn.completed'}))\n")
+                      f"for event in {events!r}: print(json.dumps(event))\n")
     binary.chmod(0o700)
     monkeypatch.setenv("PATH", str(host_bin) + ":" + os.defpath)
     monkeypatch.setenv("HOME", str(host_home))
@@ -947,7 +1035,7 @@ def test_daemon_keeps_host_podman_environment_separate_from_image_tools(journal,
             return httpx.Response(200, json={"lease_seconds": 60, "continue": False})
         return httpx.Response(200, json={"acknowledged": True})
     transport = WorkerTransport("http://testserver", "host-secret", client=httpx.Client(transport=httpx.MockTransport(respond)))
-    config = HarnessConfig(HeadlessAdapter("codex_exec", "/image-tools/codex", approval_mode="preauthorized",
+    config = HarnessConfig(HeadlessAdapter(provider, "/image-tools/provider", approval_mode="preauthorized",
                                            sandbox_mode="externally_isolated"),
                            tmp_path / "provider", tmp_path / "scratch", sandbox=SandboxPolicy("image@sha256:" + "a" * 64),
                            environment={"PATH": "/image-tools", "XDG_CACHE_HOME": "/image-cache"})

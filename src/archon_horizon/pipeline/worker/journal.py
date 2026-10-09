@@ -155,7 +155,7 @@ class DurableJournal:
         with self._transaction() as db:
             db.execute("UPDATE operations SET state='recovery',error='offline replay horizon exceeded',"
                        "claim_token=NULL,claim_until=NULL WHERE state IN ('pending','inflight') AND destination='api' AND created_at<? "
-                       "AND json_extract(envelope,'$.kind') NOT IN ('publication_discovered','publication_verified','publication_failed','execution_finished')",
+                       "AND json_extract(envelope,'$.kind') NOT IN ('publication_discovered','publication_verified','publication_failed','execution_finished','workspace_prepared')",
                        (now - self.max_offline_seconds,))
             row = db.execute("SELECT * FROM operations o WHERE destination=? AND ((state='pending' AND retry_at<=?) "
                              "OR (state='inflight' AND claim_until<=?)) "

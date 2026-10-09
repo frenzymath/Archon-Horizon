@@ -1,21 +1,20 @@
+# Python bytecode, test caches, virtual environments, and package builds.
 __pycache__/
-dev/
-ignored-folder/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .venv/
 .venv-horizon/
-.horizon-workers
 dist/
 build/
 *.egg-info/
 
-# frontend
+# Frontend dependencies. dist/ above also covers the bundled dashboard build.
 node_modules/
-frontend/dist/
+
 # Local operator state and generated worker bundles.
+.horizon-workers
 .archon-horizon/
 .horizon/
 .horizon-agent-library/
@@ -23,7 +22,9 @@ frontend/dist/
 /lean-cache/
 /config.yaml
 
-# local scratch / probes
+# Local development notes, scratch, and provider probes.
+dev/
+ignored-folder/
 .claude/
 .codex/
 /.mcp.json
@@ -33,9 +34,16 @@ subagent_test/
 /codex_error.log
 /codex_test.jsonl
 
-# local manuscript drafts
+# Local manuscript drafts and generated documentation.
 /arxiv-paper/
-.env
 _site/
-*.lock
 *.tmp
+
+# Private environment files; keep reusable examples eligible for version control.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Dependency lockfiles (uv.lock, package-lock.json, etc.) belong in version control.

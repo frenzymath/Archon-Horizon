@@ -6,17 +6,17 @@ import subprocess
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
-from .documents import parse_document
+from .projects.documents import parse_document
 from .auth import require_project
-from .catalog import CatalogUpdate, create_catalog, update_catalog
-from .conditions import reject_cycle
+from .projects.catalog import CatalogUpdate, create_catalog, update_catalog
+from .missions.conditions import reject_cycle
 from .errors import DomainError
-from .records import get
-from .schema import tables
+from .persistence.records import get
+from .persistence.schema import tables
 
 
 def read_git_snapshot(repository: Path, revision: str = "HEAD"):
-    """Read regular Markdown blobs at one commit, with explicit memory bounds."""
+    """Read selected roadmap and Lean build-source blobs at one bounded commit."""
     def git(*args):
         return subprocess.run(["git", "-C", str(repository), *args], check=True,
             capture_output=True, timeout=30).stdout
@@ -45,16 +45,19 @@ def read_git_snapshot(repository: Path, revision: str = "HEAD"):
 
 
 def index_snapshot(conn, actor, repository_id, commit, sources):
-    from .milestone_sources import source_manifest
+    from .projects.milestone_sources import source_manifest
     from .graph_progress import validate_implementations
     repository = get(conn, "repository", repository_id, lock=True)
     require_project(conn, actor, repository["project_id"], "maintainer")
     if repository["purpose"] != "knowledge":
         raise DomainError("invalid_roadmap_repository", "Roadmap source must be a knowledge repository", 422)
-    try:
-        source_manifest(sources)
-    except ValueError as error:
-        raise DomainError("invalid_milestones", str(error), 422) from error
+    # Graph nodes carry agent-authored planning metadata. Only the explicit
+    # legacy milestone workflow interprets that metadata as compiler contracts.
+    if get(conn, "project", repository["project_id"])["workflow"] == "milestones":
+        try:
+            source_manifest(sources)
+        except ValueError as error:
+            raise DomainError("invalid_milestones", str(error), 422) from error
     target_table = tables["repository"]
     target_ids = set(conn.execute(select(target_table.c.id).where(
         target_table.c.project_id == repository["project_id"], target_table.c.purpose.in_(["workspace", "library"]),
@@ -137,8 +140,8 @@ def main():
 
     from .auth import Actor
     from .config import load_config
-    from .database import Database
-    from .records import json_value, transaction_lock
+    from .persistence.database import Database
+    from .persistence.records import json_value, transaction_lock
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)

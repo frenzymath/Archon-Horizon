@@ -10,6 +10,16 @@ service configuration and catalog updates.
 
 ## [Unreleased]
 
+- Graph milestones use a star shape, including historical `type: milestone`
+  nodes. The Nodes directory combines milestone, type, progress, and text filters
+  with accurate pagination; custom node types are discovered from project sources.
+
+- References now store PDFs, original TeX, archives, and companion documents in
+  durable project artifacts. The dashboard supports upload, preview, download,
+  and archive; dispatched agents can list, upload, and retrieve files with
+  checksum verification and durable transfer recovery. Apply migration
+  `0031_reference_files` before restarting an existing control plane.
+
 ### Pipeline redesign
 
 - `horizon`, `horizon-pipeline`, and `python -m archon_horizon` now enter the

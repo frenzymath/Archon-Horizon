@@ -1,5 +1,12 @@
 # Archon Horizon pipeline
 
+> Historical domain design reference. The implemented default objective workflow
+> is described in [architecture](../architecture.md) and
+> [objective orchestration](objective-orchestration.md). Legacy automations and
+> strict milestone-baseline policy below are compatibility behavior, not new-run
+> defaults. The [code-derived specification](implementation-audit.md) records
+> independently observed implementation behavior.
+
 This document describes the intended control plane for automatic Lean
 formalization. A mission expresses intent. The control plane tracks ownership,
 progress, reliability, and publication without prescribing one proof strategy.
@@ -1387,7 +1394,7 @@ host_harness [composite key + updated_at, revision]
   provider_home: AbsolutePath
   credential_ref: SecretRef
   execution_slots: Count                  # >= 1; provider/account capacity on this host
-  max_parallel_subagents: Count           # per execution, constrained by provider/account limits
+  max_parallel_subagents: Optional<Count> = null  # null: no Horizon cap; 0: disabled; positive: bounded reservation
   enabled: Boolean = true
 
 workspace [Record + Mutable]
@@ -1403,7 +1410,7 @@ workspace [Record + Mutable]
 resource_limit [Record + Mutable]
   kind: provider_account | build_pool
   slug: Slug                              # unique within kind
-  max_concurrent: Count                   # >= 1
+  max_concurrent: Count?                  # >= 1; null for an automatic provider outage guard
   cooldown_until: Instant?
   failure_count: Count = 0
 
@@ -1459,8 +1466,11 @@ AdapterSettings = {
   schema_version: 1,
   approval_mode: deny | automatic_review | preauthorized,
   sandbox_mode: read_only | workspace_write | externally_isolated,
-  tool_names: List<Text>,                 # registered, allowed tool names
-  auto_compaction: Boolean
+  tool_names: List<Text>,                 # optional native tool selection; read-only Claude is restricted
+  auto_compaction: Boolean,
+  codex_multi_agent_v2: Boolean = true,
+  codex_web_search: live | cached | disabled = live,
+  claude_native_configuration: Boolean = true
 }
 ```
 

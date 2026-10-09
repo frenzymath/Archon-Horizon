@@ -1,0 +1,1 @@
+Integrate the supplied formalization into the target library through reviewed PRs. Reuse sound proofs and definitions, adapt interfaces where needed, and validate the destination. The graph tracks source coverage and library progress separately. A separate statement skeleton is useful only for an unresolved interface decision, not a prerequisite for each port.

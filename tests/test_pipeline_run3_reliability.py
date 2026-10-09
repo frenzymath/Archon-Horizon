@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 from sqlalchemy import update
 
-from archon_horizon.pipeline import watchdog
-from archon_horizon.pipeline.records import get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.operations import watchdog
+from archon_horizon.pipeline.persistence.records import get
+from archon_horizon.pipeline.persistence.schema import tables
 from archon_horizon.pipeline.worker.provider import process_identity
 from test_pipeline_service import service_database, world
 

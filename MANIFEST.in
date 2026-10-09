@@ -1,7 +1,9 @@
 # Keep source releases usable for development and rebuilding the dashboard.
 include AGENTS.md CLAUDE.md CONTRIBUTING.md NOTICE THIRD_PARTY_NOTICES.md install.sh uv.lock
 include .githooks/commit-msg
-recursive-include docs *.md
+include mkdocs.yml requirements-docs.txt
+recursive-include docs *.md *.json
+recursive-include docs/assets *.png
 recursive-include deploy/pipeline *.json *.yaml *.service *.timer
 include deploy/pipeline/browser-integrations.Caddyfile
 recursive-include scripts *.py
@@ -11,6 +13,9 @@ include src/archon_horizon/frontend/package.json
 include src/archon_horizon/frontend/package-lock.json
 include src/archon_horizon/frontend/tsconfig.json
 include src/archon_horizon/frontend/vite.config.ts
+include src/archon_horizon/frontend/vite.showcase.config.ts
+include src/archon_horizon/frontend/showcase/index.html
+include src/archon_horizon/frontend/src/showcase/fixture.json
 recursive-include src/archon_horizon/frontend/src *.ts *.tsx *.css
 recursive-include src/archon_horizon/frontend/tests *.ts *.tsx *.cjs
 

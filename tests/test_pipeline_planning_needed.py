@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy import insert, select, update
 
-from archon_horizon.pipeline.coordination import usable_slots
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.execution.coordination import usable_slots
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 from test_pipeline_continuity import checkpoint_for_later, other_run_host
 

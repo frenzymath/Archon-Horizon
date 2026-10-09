@@ -20,6 +20,8 @@ const project = {
   title: "Geometry formalization",
   slug: "geometry",
   description: "Formalize convexity along geodesics.",
+  // This fixture exercises the retained strict milestone approval interface.
+  workflow: "milestones",
 };
 const run = {
   id: "run-12",
@@ -98,7 +100,7 @@ const nodes = [
     kind: "claim",
     title: "Convexity theorem",
     status: "open",
-    labels: ["informal_stated"],
+    labels: ["milestone", "informal_stated"],
     children: ["n2"],
     markdown: "Convexity along the geodesic.",
     created_at: now,
@@ -107,7 +109,7 @@ const nodes = [
   {
     id: "n2",
     label: "derivative-bound",
-    kind: "claim",
+    kind: "lemma",
     title: "Derivative bound",
     status: "open",
     labels: ["formally_stated"],
@@ -222,6 +224,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (route === "/projects") return json(res, page([project]));
+    if (route === "/references") {
+      assert.equal(url.searchParams.get("project_id"), project.id);
+      return json(res, page([]));
+    }
     if (route === "/projects/project-1") return json(res, project);
     if (route === "/runs/run-12") return json(res, run);
     if (route === "/projects/project-1/dashboard/overview")
@@ -231,8 +237,15 @@ const server = http.createServer(async (req, res) => {
         {id: "workspace-repo", slug: "workspace", purpose: "workspace"},
         {id: "library-repo", slug: "library", purpose: "library"},
       ]});
-    if (route === "/projects/project-1/dashboard/nodes")
-      return json(res, { nodes, total: nodes.length });
+    if (route === "/projects/project-1/dashboard/nodes") {
+      const search = (url.searchParams.get("search") || "").toLowerCase(),
+        type = url.searchParams.get("node_type"), label = url.searchParams.get("label"), milestone = url.searchParams.get("milestone");
+      const filtered = nodes.filter(node => `${node.title} ${node.label}`.toLowerCase().includes(search)
+        && (!type || node.kind === type) && (!label || node.labels.includes(label))
+        && (!milestone || node.labels.includes("milestone") === (milestone === "true")));
+      const offset = Number(url.searchParams.get("offset") || 0), limit = Number(url.searchParams.get("limit") || 50);
+      return json(res, {nodes: filtered.slice(offset, offset + limit), total: filtered.length, types: [...new Set(nodes.map(node => node.kind))].sort()});
+    }
     if (route === "/projects/project-1/dashboard/nodes/resolve")
       return json(res, { nodes });
     if (route.startsWith("/projects/project-1/dashboard/nodes/"))
@@ -388,6 +401,10 @@ const server = http.createServer(async (req, res) => {
             revision: 1,
             kind: "context",
             markdown: "The derivative bound is established.",
+            ledger: {mission: "The derivative bound is established.", acceptance_criteria: ["Deliver **source-bound** evidence."], items: [
+              {id: "open-ledger", number: 1, description: "Verify the **endpoint**.", status: "open", comments: [{markdown: "Check the **boundary case**.", created_at: now}]},
+              {id: "delegated-ledger", number: 2, description: "Prove the helper.", status: "handled", resolution: {assignment_ids: [queued.id]}},
+            ]},
             created_at: now,
           },
         ],
@@ -553,6 +570,14 @@ const server = http.createServer(async (req, res) => {
       path: path.join(artifacts, "projects-desktop.png"),
       fullPage: true,
     });
+    await tab.getByRole("button", { name: "References", exact: true }).click();
+    await tab.getByLabel("References project", { exact: true }).waitFor();
+    await tab.getByText("No references registered", { exact: true }).waitFor();
+    assert.equal(await tab.getByLabel("References project").inputValue(), project.id);
+    await tab.getByRole("button", { name: "Forge", exact: true }).click();
+    await tab.getByLabel("Forge project", { exact: true }).waitFor();
+    await tab.frameLocator('iframe[title="Forge"]').getByRole("heading", { name: "Forge repository" }).waitFor();
+    await tab.getByRole("button", { name: "Projects", exact: true }).click();
     await tab.getByRole("button", { name: new RegExp(project.title) }).click();
     await tab
       .getByRole("heading", { name: project.title, exact: true })
@@ -593,6 +618,20 @@ const server = http.createServer(async (req, res) => {
     await milestones.locator('.milestone-host input').first().check();
     assert.ok(await milestones.getByRole("button", {name: "Launch run", exact: true}).isEnabled());
     await tab.getByRole("button", { name: "Nodes", exact: true }).click();
+    await tab.getByLabel("Milestone filter").selectOption("true");
+    await tab.getByText("1 nodes", {exact: true}).waitFor();
+    await tab.getByRole("button", {name: /Convexity theorem/}).waitFor();
+    assert.equal(await tab.getByRole("button", {name: /Derivative bound/}).count(), 0);
+    await tab.getByLabel("Node type", {exact: true}).selectOption("lemma");
+    await tab.getByText("No matching nodes", {exact: true}).waitFor();
+    await tab.getByLabel("Milestone filter").selectOption("false");
+    await tab.getByRole("button", {name: /Derivative bound/}).waitFor();
+    await tab.getByLabel("Node label", {exact: true}).selectOption("formally_stated");
+    await tab.getByText("1 nodes", {exact: true}).waitFor();
+    await tab.getByLabel("Search nodes", {exact: true}).fill("unmatched");
+    await tab.getByText("No matching nodes", {exact: true}).waitFor();
+    await tab.getByRole("button", {name: "Clear filters", exact: true}).click();
+    await tab.getByText("2 nodes", {exact: true}).waitFor();
     await tab.getByLabel("Graph target repository").selectOption("library-repo");
     const targetRequest = tab.waitForRequest(request => request.url().includes("/dashboard/nodes") && request.url().includes("target_repository_id=workspace-repo"));
     await tab.getByLabel("Graph target repository").selectOption("workspace-repo");
@@ -607,6 +646,12 @@ const server = http.createServer(async (req, res) => {
       (await tab.locator("svg g.node").count()) >= 2,
       "Node DAG is blank",
     );
+    const milestoneNode = tab.locator('svg g.node[data-node-id="n1"]');
+    assert.equal(await milestoneNode.locator("ellipse").count(), 0);
+    assert.equal(await milestoneNode.locator("polygon").count(), 1);
+    await milestoneNode.press("Enter");
+    assert.equal(await milestoneNode.getAttribute("aria-pressed"), "true");
+    assert.equal(await tab.locator(".formalization-dag-milestone-symbol").count(), 1);
     await tab.screenshot({
       path: path.join(artifacts, "node-dag-desktop.png"),
       fullPage: true,
@@ -853,6 +898,7 @@ const server = http.createServer(async (req, res) => {
       .waitFor();
     dropCommandAck = true;
     const beforeCommands = commandCount;
+    tab.once("dialog", dialog => dialog.accept("The provider connection has recovered."));
     await tab
       .getByRole("button", { name: "Resume session", exact: true })
       .click();
@@ -874,6 +920,7 @@ const server = http.createServer(async (req, res) => {
       .waitFor();
     await tab.route("**/api/v3/commands", (route) => route.abort("failed"));
     const beforeDroppedRequest = commandCount;
+    tab.once("dialog", dialog => dialog.accept("The provider connection has recovered."));
     await tab
       .getByRole("button", { name: "Resume session", exact: true })
       .click();
@@ -928,6 +975,15 @@ const server = http.createServer(async (req, res) => {
       await progressive.locator(".activity-subagents summary").first().waitFor();
       await progressive.getByRole("tab", {name: /Reports/}).click();
       await progressive.getByText("The derivative bound is established.", {exact: true}).waitFor();
+      const ledger = progressive.getByRole("region", {name: "Goal ledger"});
+      await ledger.locator("strong").filter({hasText: "endpoint"}).waitFor();
+      assert.equal(await ledger.getByText("Delegated", {exact: true}).isVisible(), false);
+      await ledger.getByText("Settled history (1)", {exact: true}).click();
+      await ledger.getByText("Delegated", {exact: true}).waitFor();
+      assert.match(await ledger.getByRole("link", {name: /Delegated session|#501/}).getAttribute("href"), /session=assignment-501/);
+      assert.equal(await ledger.getByText("Check the", {exact: false}).isVisible(), false);
+      await ledger.getByText("Comments (1)", {exact: true}).click();
+      await ledger.locator("strong").filter({hasText: "boundary case"}).waitFor();
     } finally {
       releaseDetails();
       await progressive.close();

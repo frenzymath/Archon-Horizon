@@ -17,6 +17,8 @@ class SandboxMount:
 
 @dataclass(frozen=True)
 class SandboxPolicy:
+    """Pin the image and resource policy used by a rootless provider container."""
+
     image_digest: str
     network: str = "outbound"
     memory_limit_bytes: int | None = None
@@ -25,6 +27,8 @@ class SandboxPolicy:
     extra_mounts: tuple[SandboxMount, ...] = ()
 
     def __post_init__(self) -> None:
+        # A mutable image tag could silently change the enrolled execution
+        # environment. Require a content digest to identify the selected image.
         if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", self.image_digest):
             raise ValueError("sandbox image must be pinned by SHA-256 digest")
         if self.network not in {"outbound", "none"}:
@@ -45,7 +49,13 @@ def podman_command(policy: SandboxPolicy, *, workspace: Path, provider_home: Pat
                    skill_bundle: Path | None = None, podman_executable: str = "podman",
                    environment_values: dict[str, str] | None = None,
                    workspace_read_only: bool = False) -> list[str]:
-    """Build an argv only; never install, launch, or silently weaken isolation."""
+    """Build a Podman argv without launching or weakening the requested isolation.
+
+    Mounts expose only selected workspace, provider, scratch and policy paths.
+    Protected worker/control state is excluded, with one read-only exception for
+    the daemon's verified instruction bundle. ``outbound`` selects slirp4netns;
+    it is not a destination allowlist.
+    """
     uid = os.getuid() if uid is None else uid
     gid = os.getgid() if gid is None else gid
     validate_tool_environment(environment_values or {})
@@ -65,6 +75,9 @@ def podman_command(policy: SandboxPolicy, *, workspace: Path, provider_home: Pat
         mounts.append(SandboxMount(skill_bundle, "/horizon-skills", True))
     targets: list[PurePosixPath] = []
     sources: list[Path] = []
+    # Keep the image filesystem read-only and drop capabilities/privilege gains.
+    # keep-id maps file ownership to the calling user. Both temporary directories
+    # bind host scratch rather than using implicit container tmpfs storage.
     args = [podman_executable, "run", "--rm", "--interactive", "--name", name,
             "--label", "org.archon-horizon.managed=true", "--read-only",
             "--read-only-tmpfs=false", "--userns=keep-id", "--user", f"{uid}:{gid}",
@@ -78,6 +91,8 @@ def podman_command(policy: SandboxPolicy, *, workspace: Path, provider_home: Pat
     if policy.cpu_limit is not None:
         args.extend(["--cpus", str(policy.cpu_limit)])
     for key in environment_names:
+        # Execution credentials are supplied separately; a host/enrollment key
+        # must not be forwarded into the provider's container environment.
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or key in {"HORIZON_HOST_TOKEN", "HORIZON_ENROLLMENT_TOKEN"}:
             raise ValueError("unsafe sandbox environment name")
         explicit = (environment_values or {}).get(key)

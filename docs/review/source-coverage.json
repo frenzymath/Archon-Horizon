@@ -1,0 +1,1565 @@
+{
+  "schema_version": 1,
+  "method": "Reconcile independent source-review catalogs against current file bytes and Python AST definition lines; this verification does not perform a new body review or establish correctness.",
+  "summary": {
+    "source_files": 219,
+    "python_files": 166,
+    "python_named_functions": 1210,
+    "typescript_files": 51,
+    "typescript_function_bodies": 1130,
+    "shell_files": 2,
+    "unreviewed_named_python_functions": 0,
+    "stale_file_hashes": 0
+  },
+  "catalogs": [
+    "backend-catalog.json",
+    "core-catalog.json",
+    "domain-catalog.json",
+    "frontend-catalog.json",
+    "installation-catalog.json",
+    "tooling-catalog.json",
+    "worker-catalog.json"
+  ],
+  "excluded": [
+    "Test fixtures and test bodies",
+    "Generated build output",
+    "Third-party dependencies",
+    "Non-executable prose and data assets"
+  ],
+  "files": [
+    {
+      "path": ".githooks/commit-msg",
+      "sha256": "8220cec2c546b40c707051a48f958b042d193d4ce5411ad972daafc3132368ba",
+      "catalogs": [
+        "installation-catalog.json"
+      ]
+    },
+    {
+      "path": "install.sh",
+      "sha256": "263adefd5ab4963b380c9b1e02e7bef2214d3c63c2f17811dcd159ac66186a5c",
+      "catalogs": [
+        "installation-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/assemble_docs_demo.py",
+      "sha256": "d613eaa781036989ed9e8f8138464663f8a5699124df3f02238b12348d4f37ea",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/check_sdist.py",
+      "sha256": "64bb02f3ac0b3127608440eaeb6d5c442b315730ab638517c1a91d2fdd395415",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/check_wheel.py",
+      "sha256": "641894c081006c28330d7af77b6deb02d1729be6d79df2b832fcf8d449ef24aa",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/docs_hooks.py",
+      "sha256": "0d742e8b9386b1c7ff845cfcc3a19dc11305ab3bc8295dd936cb3f882257782a",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/generate_dashboard_fixture.py",
+      "sha256": "a1063f8d0a8e72549fc5694d0b41d4b83a634bff715d0afbfe23b22e406b33e5",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/review_inventory.py",
+      "sha256": "84e6269f189ce425047df463c8cb7d77773dacd6a689945eba4f7906643edcba",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "scripts/version.py",
+      "sha256": "782a5e8c21925e45f7c2c3bd1b89bbe3637257d7f7b96ca77c2f636a4bafdbc5",
+      "catalogs": [
+        "tooling-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/__init__.py",
+      "sha256": "6f30e52621c5c2b30338b996186fe131034b2fabadb0358ab3ca0e1687e723c2",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/__main__.py",
+      "sha256": "7306964a57f4b54966e35c4f9e747e05fff6de8b170605797316bd05233c5dfb",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/ActivityDocumentReference.tsx",
+      "sha256": "0ed2cd7c80b7ddee4da75aa92d2c182bc835b94c241101c0419006817527c7b1",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/ActivityTab.tsx",
+      "sha256": "4d76bfd0502c28651deff884941e9d45eba6d962ed93e62b8d5d90e76b6cd7f5",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/Bibliography.tsx",
+      "sha256": "d9700637c26122958074584004dd8e360e66c14bde86d36d3d01706e5e9f2357",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/BlueprintMarkdown.tsx",
+      "sha256": "44e73d27e5bfee74707e8233b5962cb7356a3a9679dd2571b647496b3d3afed9",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/DocumentView.tsx",
+      "sha256": "40165d3fbd8d7e04f72f88d625f420a355162f60f3a9e18dba1bfa7accf2e3d3",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/FormalizationDAG.tsx",
+      "sha256": "21e5f6d85d2bc948a417cf903adba537058cd715ba48341d7bfb3aaabf876016",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/MarkdownPre.tsx",
+      "sha256": "ab8cb68269f571763682a35d66e1e1824b67a4f7f0b24d8434415c023ce8024e",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/MathTitle.tsx",
+      "sha256": "ccac044273ede4c14f59f1b994c433d1f1d4ccfb39b31c50d36c5d3cbeb469fe",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/MathTitleFormula.tsx",
+      "sha256": "b7e3da8fa476e1ecb53b588db4badd6a34291436f40944a1206df006e6c98b80",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/RecordDates.tsx",
+      "sha256": "015d3b9dbae10436fe02b5229f08e16cf13e3fc53f020931284c5b67d3443362",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/RoadmapMarkdown.tsx",
+      "sha256": "3e8308530be12e3298ff285f0b056737e6fe5d2ee237b1ab46acb45b416cfb88",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/SessionActivityTags.tsx",
+      "sha256": "91029bc3bd09f1cd53561d656efbb88d99eb8c518f9dc2982fdfecaef8f415f7",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/components/TagList.tsx",
+      "sha256": "80cd37938ba9a4105f2cbaf37186f5bc69050be60d5fea2ec8c521e336550779",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/formalizationGraph.ts",
+      "sha256": "ce3c2153f33cca295cb5862398e729d44651c378bb533e211b13ae6b3087ecdf",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/main.tsx",
+      "sha256": "22dd87070d72beb48ba8f546b6e10ec56f92548725341d66dab8a8b0afdca9c0",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/Administration.tsx",
+      "sha256": "42166a0587de838cf81899baec188ebf23c6bdd006ccb188ca2f1caecc0f9a20",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopActivity.tsx",
+      "sha256": "10ed98a76f719f5d063de67e09fa52f6d72d604a8b3e7263771cd08e5d716317",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopAdministration.tsx",
+      "sha256": "1df2cc69794cfffaa9984cc73410b3df5252583f8d6e65f49adf2cd9c2e2c185",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopMissions.tsx",
+      "sha256": "2ad281ee894c4034fd32edb20137abe408cd3695da6d82484150bc9e5f206b0e",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopNative.tsx",
+      "sha256": "e2479c9394f13eaaf9c965c6085bf9d17b5ea9cbb120c90cebb844b714847f44",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopProjects.tsx",
+      "sha256": "adde6cd2c86ff500f05929f65347785f71d8e9c84ac02f1bea5bd7c1d04a181a",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopReferences.tsx",
+      "sha256": "b2132193eb953987fb423b247eb975162b4ff5d05b30d51fe963d5f7f6348d29",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/DesktopSearch.tsx",
+      "sha256": "34869fead268c05aa21c39a39b1a9e69259decc630c931c09c7da6cd03597dc9",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/InstructionCatalog.tsx",
+      "sha256": "971664e9b9ce2287ce800b158181d1635b2855cfa67558d5a52afc920aeded5a",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/Milestones.tsx",
+      "sha256": "76fd0f7a29c7ea36fa27f766857eaabe0780ed5a9bf76b67cffe828634b1bef7",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/PipelineApp.tsx",
+      "sha256": "7c5e725ce49f984d2c1fa6f62f43791f193d2dc3d264b7ad74c48b63d60b76be",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/RunPhase.tsx",
+      "sha256": "75f94f67a22779fb5d0bc7362eeba84631d1241d0977d041f1f478f66007e675",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/api.ts",
+      "sha256": "dc512938655ab49fc91a767df3d74f1e3deb24907433cd03ea2a16c3952deb04",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/queries.tsx",
+      "sha256": "34c570fc89856a54a5a11eec1783e97b7ae3be1869d08609ea9cd1cd9f11bd44",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/referenceCatalog.ts",
+      "sha256": "a2e18e85efaf7cdc0ad278e142c9f2ae8f487c1c13b38d1b5a390c8d31a80bfb",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/pipeline/shared.tsx",
+      "sha256": "9913cdb2ee4f01a4abc591915367d08795667f0b8ea93e682ac65be96e377392",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/showcase/main.tsx",
+      "sha256": "230bcd941a3acb40094f87cde3d6ae2adc7499ef7db54ded67807cff4b4b799d",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/showcase/transport.ts",
+      "sha256": "4bf68a4854b0007cc26767438096f0a3d39832e21d720179bf22d15c35292a8d",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/types/citation-js.d.ts",
+      "sha256": "22056f041d945404c1f9c3d22503edf2f7159e2ee4fa1d26e07e1769b4ef3367",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/activityPresentation.ts",
+      "sha256": "7c71ca13327a3714893fff5180f277bb42738fe04b71c52c43bcf97257782697",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/bibliography.ts",
+      "sha256": "a9cf1abd3450881578d63f78d599f831348e654fcb15b9c8b0e7d251617b13e0",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/blueprintSyntax.ts",
+      "sha256": "01a4d92ea0b312c6b369a19cf65788cdd422c06c34b56a9b2ab43a882b829969",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/capabilityLinks.ts",
+      "sha256": "e6dd04e4e80ab7ea0dc07fd861bdddb595c842a75b0bba61af531b444874bf34",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/document.ts",
+      "sha256": "1cd0a5c72b40d37ff3fbbb2f1d30ff990165e55d0c759bc1def87b8c092d4c4f",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/horizonReferences.ts",
+      "sha256": "e2a46985bd43fc96afb2c14ab05e0f0e4d6b3ee57d23ac0258c62e12d279f690",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/leanHighlight.ts",
+      "sha256": "f8d2b715c0d00a8c6f4428f9ad2e4a87560e3d59b204bd9440cbae945796ef35",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/mathTitle.ts",
+      "sha256": "4324fb6678ddc7564d4bd1bc0d4269e29564f537fedbd0a630c89f52bf17c464",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/missionTree.ts",
+      "sha256": "0cc6e8abb25e02b7a1b090e1a80f9579f39330d0dbe8810b7a5d87834423e0bd",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/navigation.ts",
+      "sha256": "0e06119361c5da20ef24be3c7d09fc6c9c38e37654a2694ae568667d33c151ca",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/sorryScanner.ts",
+      "sha256": "2521bb9afa456569ef6f74f3b5c10109f02b02d8fcf7922d7e4dfb745699993a",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/utils/sourceLinks.ts",
+      "sha256": "2acf16078be73143c09780b2a50cab0388fdc42cac6ddbd82ba6c289fef3db88",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/vite-env.d.ts",
+      "sha256": "7604a9c9b34081af9f9813eba87dd38d55043a75a82f99d5caf93ab828e2c4e3",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/vizInstance.ts",
+      "sha256": "261615fe83be6b8651e16b124acbfa9476707a4d3057b4dfe4d0c3e9fbd003c2",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/src/vizWorker.ts",
+      "sha256": "ada039c2af0658ff51d10bb073fc88786d908f5f210b4742eb852e07e9e53f05",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/vite.config.ts",
+      "sha256": "9713c8aff54f565e1a95690b84112aca1d38d91d2d9a9cb0f81487f82e583883",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/frontend/vite.showcase.config.ts",
+      "sha256": "e21797b644da3e0e5021f94a8384d2b513de708ead1aeccb37f601df229850e9",
+      "catalogs": [
+        "frontend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/__init__.py",
+      "sha256": "9d43c14345b18795baa2cc6b3f3e42145a7414b24e27445aba028e46cb3c4bd0",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/_resources.py",
+      "sha256": "86c06459353047be1ed1d2ca926e4ce46d864584ef7319616a2a24735cf3739b",
+      "catalogs": [
+        "backend-catalog.json",
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/api.py",
+      "sha256": "694a411031b7cad6b8948544aaed31e2431e3c96b5e823e4db86b64c4ed96c87",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/auth.py",
+      "sha256": "be90c0f02ca98274a8e7b63ea0a32704ca11906c7698631d98a68a6ed3f980b1",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/cli.py",
+      "sha256": "9c21551b0274fdc8617dc539771b9e0cdf1dfb4ac9352bb74b71ecbbf7f52461",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/client.py",
+      "sha256": "b5a60b498189ed2e3a71177da7b59e00f469237963e42579e2adadbee868e5a0",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/command_args.py",
+      "sha256": "bcdd44dc7c88420098cea849ca479094a4e54fd6c8b7f9e4f30f5eae5d4c8510",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/commands.py",
+      "sha256": "4cbae981cf8ba3aa15259c9b0af04a3a560383ac14c8b64673e982af1ee9d8dc",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/config.py",
+      "sha256": "96a64f9b5ea546b446f85b9c80b47b7167d20ec4a4781679ededabf608f3e80c",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/__init__.py",
+      "sha256": "a04a78eb8b98809f8d128b816196476ce494217f365589e64d052f850264eefb",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/activity_display.py",
+      "sha256": "91bb54ac24957b555d30cbbe5754630263f75710a0d0647cdc78fd35a3026d9e",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/activity_readmodel.py",
+      "sha256": "15b5274bd7619d09756bfc0234cdcd5a611716c7d0fa459a1a0743584adca371",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/dashboard_activity.py",
+      "sha256": "8781eaffbbc7a2f177eb80b5ce5105fc00b3770cb4415078b7796b87fe95de07",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/dashboard_conditions.py",
+      "sha256": "655e813ccc365562b876c87e14d1dee6a52e58d455748d79753b45c551dd4534",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/dashboard_projects.py",
+      "sha256": "af46f72f443c9abdbdb5b1958a8681e9446ea84c419c695e0681c74fcefe35ae",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/readmodels.py",
+      "sha256": "a17d1e3d62bc8cc653d6ad4e5902248872ed00eb2fccb46aff4bb684985b11e9",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/record_queries.py",
+      "sha256": "064882e0ed2ef7cfbe222b1fc9693d8c0055575f87f63a0fef65e347cbfdafab",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/errors.py",
+      "sha256": "a28d7cc1f361ee2c65b173e5b5a2bfa5a38bbd55b57fefe75bd2a61bb943cb8f",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/__init__.py",
+      "sha256": "45ddec8646e7589d92a30b99fb63081f0502dc6918069ec31e44ac56e1622c56",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/admission.py",
+      "sha256": "34c0a3e9be6783e09d0ea906a4408ddae57e4d3dbb9d7696fab796a0762d8f2e",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/context_briefing.py",
+      "sha256": "923f02bc5fd322e18c03e0e317c76e5e2df8fbc08a7562d946806e1925e37a3b",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/coordination.py",
+      "sha256": "cf41013958e8827d40f53b54ed12e8bb650de56f38018c73355f0c4c5d31e8a0",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/coordination_memory.py",
+      "sha256": "bc58066711d8a38bcb66de5cbe7ee05933853d5633b58a9c433b47258a7590c9",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/intent_reconciliation.py",
+      "sha256": "9225e330b87cba05906712f6e55d3b07aa76bc40b446c2dfeda2d2d190dab11e",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/legacy_automation.py",
+      "sha256": "24c4266a88f93f28293dceff0b6e251b134d66254c8ec659fde592abc07a0300",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/notifications.py",
+      "sha256": "fe55f8d48b4f4823fa896e88d8ae14ce8d1756f8e9f0051978ec25d512db55aa",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/objectives.py",
+      "sha256": "ad10a25fe9ecb1f828100d3ff4ba7237f418ea2bd74a52a93629f26a7d5919d8",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/queue_policies.py",
+      "sha256": "1a04235725a7038ca30dc424d00e5b7f7980a8cd661cfd337f1148a85afba3f0",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/refill.py",
+      "sha256": "c67ff1f04957465940dfcdeb022f2dff42c96b3a6407c9a10bb3f88065b50f14",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/root_maintenance.py",
+      "sha256": "03b3f91cf00054f5ca920fd7b63d0fd623ea01edac9f41e587d4f205dd7e2062",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/scheduler.py",
+      "sha256": "2fadf2ea24c73c336535b4e49507dd9379a72cd71a80a0467ff40a1f72c4fe21",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/worker_events.py",
+      "sha256": "9eda67a51878db7563c27c0f2ebe727b0ef7d24a986a9d47a5208e2d1a1a6b19",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/execution/workspace_setup.py",
+      "sha256": "5d8597c71308c5cd701d0be840cad53cd88a058ccb76339807670337bb13e804",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/graph_progress.py",
+      "sha256": "32cecc8084406576f8114a06d45c1db4b6540ed66d142f0a65744c2ce104cd10",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/__init__.py",
+      "sha256": "507100e7d1fa19aadea97f3ff484e821fafddfad09dcd0cd676e54f3ccd0e826",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/bundles.py",
+      "sha256": "81b9926554109022a0e682dc287cb3630da66b5c502bbf94a78e281760f6e77d",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/instruction_catalog.py",
+      "sha256": "8e375b8a79721b221fd65be52cc0e56da51cf09ffa94c7477ba15d0a7f57293f",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/prompts.py",
+      "sha256": "fff560053eab95fabbe30e6428994121a646aded1a7aebd1a30553e95ea88c46",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/subagent_guidance.py",
+      "sha256": "0ca94bdb0141858244e7607edf3be8d48f4a4147ec9e5e4c44d4766a88dee91c",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/templates.py",
+      "sha256": "9d3d13898d468e64a5aa8a0705104cd191ab02cd082ba22cd550d91d32dd27cb",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/__init__.py",
+      "sha256": "6275bae351ce6039c63208bded0a67dbe5dc608e68cd84f6301680dbf32ccf79",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/browser_integrations.py",
+      "sha256": "d9c235b6210c1d20d5d3e4a167ef2ba9565aa925e5b4c77b37db1069bde2eae8",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/communications.py",
+      "sha256": "a8cff44ebb0b4dff103168e08be588ad34a3a1b35094aa67fc3596dd46537ad4",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/connectors.py",
+      "sha256": "2f0453c002f9863df32429d72faf281a3326d87c01156c7beae44ea3b70679c0",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/forge_change_transport.py",
+      "sha256": "01d4a8a1b1d84f8c8ceed84ac34ad510a0551f32548f8feb07e39563b6487d0e",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/forge_changes.py",
+      "sha256": "b9c0a9f31840bf493baa743c5f1d507026fa3807e478e948922185d0048fd7a0",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/forge_inspection.py",
+      "sha256": "d7559667f7229a4cc771dc84f06ac6eb594b4cbb2332785cf3b8fb8bf876510c",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/integration_views.py",
+      "sha256": "9949135dbafa8336833a87c687f2a9e532fb927cf3ef62644cce509fcbac68fe",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/operation_receipts.py",
+      "sha256": "8491314c5396d1a31084de87903749e8a90a61d9ae67d55f095349a9ceb9db3b",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/__init__.py",
+      "sha256": "4a2d1de6933878c6c4268c2ba3a757a8bcfcb95508661b0f578c22a0712b0125",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/env.py",
+      "sha256": "ca304052811b7f6786cefa05db76efcc4fe856631bb89eab361560a7543af328",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/__init__.py",
+      "sha256": "5384bfdb2df380b6557cc7a71d16891415bccaa87699406e236f752c6415389f",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0001_pipeline.py",
+      "sha256": "46dea75c6715b553f67fdbe0ec0a5ac00b81438b9cd9bf02191c35c35470df95",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0002_immutable_fields.py",
+      "sha256": "b77c0dfc26beadb480b82f4b2e7798fcc4a574d8fa3988dd714d8736ad2d4d87",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0003_resolution_checks.py",
+      "sha256": "8fc079d4495439df675d1a1a7f76a5730b3d475ae75bed0272309be799ee96af",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0004_inline_command_response.py",
+      "sha256": "a5926ce4ba5c40b801f7063b0cc261416a10c7b21d4d7f9cd164e2758b661b94",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0005_forge_outbox.py",
+      "sha256": "7d78829ddfd155c7b2869b6ffe51c9b9379bfef3aa5e499a9e30016520a780b3",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0006_sparse_references.py",
+      "sha256": "861b685c3c6981ee15cd2345778fcb0554acc173044e05e136d6d3d8eaeac67c",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0007_idempotency_scope.py",
+      "sha256": "25c6e9661538d81e20e8b6f8b7047a6ff7d79f319fa0570e54d6eea64a70c967",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0008_forge_creation.py",
+      "sha256": "85051df9a08f1d8fbf26047c6b3ea7c6924001f01a4a60ca335ba88b5ff67aa7",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0009_native_background.py",
+      "sha256": "cb67a9cbff262b7f08754cbc080fd6bd0f507714671577f0e0b29ca5e3ae5793",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0010_child_capacity.py",
+      "sha256": "a6755ca049b115488621545f891aca8948baa0b4bd8b652183031fb4d8cf32d0",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0011_maintainer_identity.py",
+      "sha256": "393b0eb933c293b766c943bf3e6d30c536fceb947c32bc3f75f57795534ccb7d",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0012_reference_identity.py",
+      "sha256": "fd590506999e1af7711fcd5680da35d3b58fbef2c0ceb283ae4c97b9e258b457",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0013_reviewer_assignment.py",
+      "sha256": "dce82d58484eb3133c04d205d54200f8e39541daf9a7337af4cf3137352e9315",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0014_stop_confirmation.py",
+      "sha256": "de209cd4bfac24bef3c1246cdc2d9c6fbc1162bdb2df953914ef9dc756a15258",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0015_forge_change.py",
+      "sha256": "9a458b32bd8c60888301ec0493af8a060b88250aa2795f8ed128993910622d1d",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0016_source_projection.py",
+      "sha256": "2d68c038e3f170d26bd0d73fb92653608eac339cc32f058a5d24c34c77828c38",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0017_host_health.py",
+      "sha256": "f0c07f2de4c6273f35841f8debcaff7caf47f94e1116a9490a7279a8aae0f515",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0018_subagent_description.py",
+      "sha256": "0feab31329a83d3df5fb2ab81cd4b6d69403693706c14e71e991b87cddc07544",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0019_assignment_checkpoint.py",
+      "sha256": "9e0da5a068033d206176f2abd4aaa13e58c7cffae2c0f622709353a4c9f4f985",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0020_milestone_contracts.py",
+      "sha256": "793466d2d17c5f26ed13fa3005cb68b384a1030763ba0c46de031fc816a34a93",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0021_usage_observations.py",
+      "sha256": "928d3716b643decf2d0f65dd83c4a8601c35c117259b59f7458b041b7ca602e6",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0022_parallel_automation_batches.py",
+      "sha256": "f86d51a3bfe0a853ee7ad3348d9e84c0579e9707b7c25b19caa0fee230b6a80a",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0023_run_coordination.py",
+      "sha256": "38c9a0d639c86ab393b45e4b85045300a45a0d36f00d00c1e4372ff37524d442",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0024_mission_contracts.py",
+      "sha256": "d66b1f1466c62065d730bc026bd3db016e00f37fe9992464a9c3633b6fcbe804",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0025_review_work_keys.py",
+      "sha256": "7b0192f755e1e82cb88b11450075d54c22ebe658eb917144c8d9c498e55d37f8",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0026_orchestrator_health.py",
+      "sha256": "fd73b5a2f752f109b067db34e641fba7caacbfa3030ff7cc02fe03b23acd78ad",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0027_review_retry_recovery.py",
+      "sha256": "2de84e2b6a120f523ea2717f36d1332488ed9b8f08539a9d8df1a725601b5295",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0028_objective_queues.py",
+      "sha256": "8b639b0a3960aebe20dfd72df149659d69470997128027178c1c661fd4d35e43",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0029_agent_planning.py",
+      "sha256": "b0cf80247af50aa8c9b69d09d5f15a4fc3a4ecb2127abeee8cca7b7038aa0759",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/missions/__init__.py",
+      "sha256": "02dbd4f353b37fc2e42d14156a1c75d154fb217f4cb0a2beef07cae17bcf1cd9",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/missions/conditions.py",
+      "sha256": "a827c711d26e91f1492edae7951c60505518c68e5bb974511a0819cea12be61e",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/missions/mission_tree.py",
+      "sha256": "6a52267bc863034c534c9ce8c50052de5ecc900261026e0702067ae587a1a59e",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/missions/service.py",
+      "sha256": "746daec7058290b6f56f1513c514ccf9047d960c32172a7ce6152c56c522e59c",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/models.py",
+      "sha256": "b7aed81643a5d5f63a5b28f4ab2ef547e650283513ac66b8f6b4353600a7d9f3",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/__init__.py",
+      "sha256": "2b4cba8620e52340947abd493474ceac54b0ae0711b49e9b826c101d89a9f66a",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/diagnostics.py",
+      "sha256": "4b91551f3776c93cc83babb780bd64375552bd761bb331d46b44a2371e1d2820",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/health_control.py",
+      "sha256": "af44dbb9fde475826c2171b9d278c6cc636dd667b45490af3ef8beed7f298182",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/storage.py",
+      "sha256": "0af0722798e766069a545712f96d680ade9022582d04f6bd8188d46cb6fbe011",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/telemetry.py",
+      "sha256": "08fee074c94836f0ba68c414fedfa1ab0dbab3de49653e3751a545226290796c",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/watchdog.py",
+      "sha256": "aff2916c39a91a1265070a06ab4a048a4a7253c4034a3a7709432e62daf80e0f",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/workspace_retention.py",
+      "sha256": "f1278a64a0fe98ffed151cebac523091b5e3d0930d13fe624f967c6814b8d043",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/persistence/__init__.py",
+      "sha256": "a239ac6eef0a38341fa57e46affabf925085a21232cdcca1509d8e4f8bcc5726",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/persistence/artifacts.py",
+      "sha256": "b9dbe58c3d7ced9fff7bdd79b2afe6d7c721c16a906290dc9d7c2f42aa69ba89",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/persistence/database.py",
+      "sha256": "4c6530643443862e86d26b5ea238d57740992a6752e23d76893f96b1e947a338",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/persistence/records.py",
+      "sha256": "a933154eabc82ff4c322eb8519c24e44144184fc6d102ee8127ba9ea985728fc",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/persistence/schema.py",
+      "sha256": "5934695e5b9eadac176e58cc4ee742aa2e41e1ed3cc348f1fe3ac2d49402e83c",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/__init__.py",
+      "sha256": "3212dc6798eb81d09b18aeef509367155ba3d900be32f8527e17f878f3552dac",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/bootstrap.py",
+      "sha256": "923501fd61c330d03caaa778d615d606e0767ec7f401e86ba7b98ece82b37f75",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/catalog.py",
+      "sha256": "b02c2609b0c8ee3cc60e1d88c4955b7f67ed55449e06b10665b07884b7486bee",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/content.py",
+      "sha256": "0c8afe18d07e9339479f4e07b106b6795350a50180d01b7ff07ecd728c1820f3",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/documents.py",
+      "sha256": "db93d9e7a1cbb1f4255d801b3199d7433d499e491fedb5c1fcd78680df746230",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/lean_checks.py",
+      "sha256": "88102342e105adf9343ad256e552ba53b975b82a164603e6308c58930c5a5cdf",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/milestone_jobs.py",
+      "sha256": "71a250ed5cd1d013ee919105b0ef998b6d354aea7e0eaa81286acb96d59d3291",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/milestone_sources.py",
+      "sha256": "1655c78c8fc47f0bf957d0ac1e215c1710effa7e8b58d96cefcc4ff037776b3e",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/milestones.py",
+      "sha256": "365f0ff331b0a8b8592b07e0420f59cdefbd72974f15b3dd4fb57f4f49866fd7",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/reference_cache.py",
+      "sha256": "fca4d86b9fbb3c5392584bd7aaf4320fb93c1d62f4c7f16d12c9c5798692574d",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/reference_identifiers.py",
+      "sha256": "36a78310169664d815dfaf19c5cd21acde691cf827d085c458e81ab41bcca614",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/references.py",
+      "sha256": "92936dfa1d1e349ffb3bab34b86a3d165bf3c1e1d9bb9a0ee1cd7b119b4ba597",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/search.py",
+      "sha256": "0d0755a86b9d3cd8c79209fac387d953522700f289e5baa616e457f3b06833d9",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/verification_jobs.py",
+      "sha256": "654fd19c95e0749d8085c055006e9f6e4edcbb242bec4ddcb5e57eaa706eabe2",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/__init__.py",
+      "sha256": "ca71082120a4851e966712e830a923fd2d22da6b0143604505e13b7d10607920",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/harness_events.py",
+      "sha256": "e2a40352510439b1a164b820a3eb73cfa8e16315581225115341fda9707664f5",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/harness_parsers.py",
+      "sha256": "f8c40dba44c3e707d8db6a2e872ce2550431ed3d550969884ee28fa36c8e2f97",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/provider_events.py",
+      "sha256": "cbffdcce09957b4f9d94f31e4dc3b019e3cd28fdab0c13b6c4316b6333780d56",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/usage_accounting.py",
+      "sha256": "296301fa8944555689853dfa3d9115911541bcdea4edf89888e2f1eaa43277f8",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/__init__.py",
+      "sha256": "06780050737d2bfc36c28ea1f40a121aacee4401352ee2b95d9499949f7a6b40",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/accounts.py",
+      "sha256": "02425b033495e3374bcf6a9407d2b6c098db6d6841830164a2a71a4302b8a77f",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/backlog.py",
+      "sha256": "ba19fde140fd641ac7f98ac48321829ae5ad39388d5966d80c1664a1e2c033ac",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/contracts.py",
+      "sha256": "321cedc11b0e1720ffe7de8cdfb3ffaaec7c9f229f2fff170b2f7112f368161d",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/decisions.py",
+      "sha256": "ee76b523a85d4338d72784e7a884154bc42012d8134a1c7cb44429f3f4634b31",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/demand.py",
+      "sha256": "0b804df4a82672a4a3956c56717f10fb5d02999a6015ce1fa87f2b594247226a",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/guidance.py",
+      "sha256": "5f2670353551245963b174d243228f3d9a0ef2180c27374c5c7c98880aa45292",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/invocations.py",
+      "sha256": "077815cb27a34d04503fdfd33cf74a0cbc804816f03e13aeb99b7052db9c36ad",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/labels.py",
+      "sha256": "cba730bdfb104eedbd3ac1af9fc5ac556f2675a24a6f42af3dcf4fb736412677",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/packets.py",
+      "sha256": "84dd9383090fd47bbc740a350cf1f3d7962cc6e6707f06dcee97e7bea0c124ec",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/roadmap_index.py",
+      "sha256": "4e7e6f7f2e57dbeadba8dbc90e19addaef23045ddd04e68034c43059ada76edd",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/schema_discovery.py",
+      "sha256": "a9167766cd75d6804a4275001d48b0fcb10e538765d7a30c8099625c7d664e95",
+      "catalogs": [
+        "core-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/skills/lean/lean-performance/scripts/compare_measurements.py",
+      "sha256": "f15a503f75038e255dbbe61c4b94250494fbffc98dc5ae37cff3fb16c4d4901a",
+      "catalogs": [
+        "domain-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/__init__.py",
+      "sha256": "be20bfc5f6b83c6ebe1d849a8acbd76e314a17a4183d41bc1b637f3aa545cbaa",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/activity_replay.py",
+      "sha256": "6cdf23913fe94e7478c361002d2c934edca40fac6f5953a1d501bc8b750f4121",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/build_engine.py",
+      "sha256": "517bb60dc1b8cf638943728d41dfb898e8845115c67bf851f1038f4687edcd96",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/cache_retention.py",
+      "sha256": "242f2cf11060e097702aba5ef8117936d46038c28c36e333c28b064a61ef1593",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/codex_lifecycle.py",
+      "sha256": "7bc64980189558a399ae2bd552f4d73bd15ba0cf66f3ee9449af62a5142c7833",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/contracts.py",
+      "sha256": "35befe65344a08ed06a58887c584e1b35f7db6cc277cac2fc86b027eda629c3b",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/daemon.py",
+      "sha256": "25bbd84a4640ecd5d46156194cc30b612e48681e0219571886f96696ada5d137",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/git_recovery.py",
+      "sha256": "28c829ac6112d3f02cea9fd7f86df229ccef6ad8627d5286bb8a91787dad3eb9",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/journal.py",
+      "sha256": "577ad73a3b51bc0e530e689e1986e53800289368eea3688a9d72800423d9798f",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/lean_build.py",
+      "sha256": "6843379a1944efcf37c3aaebf76384afb2ef48f443e233d6ccb5c6c6759c2747",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/lean_verify.py",
+      "sha256": "8894e288600971be9614ef52c8ddfb88ab4beb3715cb68b15f9f43ff53249afa",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/milestone_jobs.py",
+      "sha256": "95cb5edf1de1ebb018d83e506aa302653332fa6409778899afa0d25354c26240",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/milestone_verify.py",
+      "sha256": "69d1a841cbc7ec6a5c3d699f088fc5672a893957dde254c81e35bf0b86fff4b6",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/provider.py",
+      "sha256": "637f636f6881f083ea341ca34aede963fb7ec09f7edf899b33a4d4b57fbd027a",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/resource_health.py",
+      "sha256": "48d2c3a2f947db0aab2a0e5723bb2d73b38a4a29104ef9758f4851e990e04796",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/sandbox.py",
+      "sha256": "5f1add52631976c5712af304b01007a05eedd409490f81db29dbc639618d4860",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/skills.py",
+      "sha256": "01ccf7798cd4ded76f087ba3374fc9e9dbb72f8f623e9b5b856ed6ebf1dd8ff3",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/storage_guard.py",
+      "sha256": "4cf3b76aacafda466de7d21ff39937939cfde95fd80e4372e1b4b222f5e24c28",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/transport.py",
+      "sha256": "72da177f4d9c167be444aee481a15606b20009aee031780c4e1dcb7e416a194d",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/verification_jobs.py",
+      "sha256": "5005d480f7df131b41ef8406cebf2fcb3c2b5434fe8373a5e8e5e7f954934fc4",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/workspace_retention.py",
+      "sha256": "071899e613a81e7d76ed4ae8b5c66157487d1b2f8c5178a0c400b8952d184b4e",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker/workspaces.py",
+      "sha256": "cd7b1fcc7ad2d38a37e1974716b2197207c70d1cf9c2946bf730899e82eae1a8",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/worker_config.py",
+      "sha256": "8e06580f11561c73a9191950544f6d75681d89ca70a261a653357207a5f70b45",
+      "catalogs": [
+        "worker-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/__init__.py",
+      "sha256": "8a3f2b1cec7220ad062117d9410ce067b8ee5841b1a17bd353b92fbc3098c916",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/index.py",
+      "sha256": "9f1c124a1d571ecb2b165fd459762e50c0f8521fe10628d41f6a5710e359fdf2",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/mcp_server.py",
+      "sha256": "e9973049c145ea9e55b56b765cf2d14757311a3958e67f4e2ba3169a78a162cf",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/workspace.py",
+      "sha256": "f20a22198cd3a01aaefddeef9f73c5aa6a0a4f5dfe9fac0e715d36fed9839dad",
+      "catalogs": [
+        "backend-catalog.json"
+      ]
+    }
+  ]
+}

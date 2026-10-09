@@ -15,7 +15,12 @@ from archon_horizon.pipeline.worker import cache_retention
 def artifact(root, name, *, age=0):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"artifact" * 512)
+    # Retention counts physical allocation. GPFS may report zero blocks until
+    # writes are durable; materialize the fixture before measuring its budget.
+    with path.open('wb') as output:
+        output.write(b"artifact" * 512)
+        output.flush()
+        os.fsync(output.fileno())
     os.utime(path, (time.time() - age, time.time() - age))
     return path
 

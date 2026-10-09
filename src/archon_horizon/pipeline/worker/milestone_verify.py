@@ -1,4 +1,8 @@
-"""Check a clean roadmap checkout on a trusted build host and publish its receipt."""
+"""Compatibility verifier for explicitly retained milestone-workflow projects.
+
+New graph workflows do not call this parser or require milestone receipts.
+General Lean/library audits live in lean_verify and have no planning policy.
+"""
 
 import argparse
 import json
@@ -8,54 +12,10 @@ import subprocess
 import tempfile
 import time
 
-from ..milestone_sources import source_manifest, milestone_table, digest
+from ..projects.milestone_sources import source_manifest, milestone_table, digest
 from . import build_engine
 from .lean_build import LeanBuildPolicy, check
-
-FOUNDATIONS = {'propext', 'Classical.choice', 'Quot.sound'}
-
-AUDIT = r'''
-open Lean Elab Command in
-run_cmd do
-  let targets : Array String := __TARGETS__
-  let definitionModules : Array String := __DEFINITIONS__
-  let forbiddenModules : Array String := __FORBIDDEN__
-  let env <- getEnv
-  for mod in env.header.moduleNames do
-    if forbiddenModules.contains mod.toString then
-      throwError "Definition modules import a milestone contract: {mod}"
-  let mut targetRows := []
-  let mut typeRows := []
-  let mut moduleRows := []
-  let mut directAdmissions : Array String := #[]
-  for text in targets do
-    let name := text.toName
-    let info <- getConstInfo name
-    unless info matches .thmInfo _ do
-      throwError "Milestone targets must be theorems: {name}"
-    let axs <- collectAxioms name
-    if ((info.value? true).getD (.sort .zero)).getUsedConstants.contains ``sorryAx then
-      directAdmissions := directAdmissions.push text
-    targetRows := (text, toJson (axs.map Name.toString)) :: targetRows
-    let mut typeAxioms : Array Name := #[]
-    for used in info.type.getUsedConstants do
-      typeAxioms := typeAxioms ++ (<- collectAxioms used)
-    typeRows := (text, toJson (typeAxioms.map Name.toString)) :: typeRows
-    moduleRows := (text, toJson ((<- findModuleOf? name).map Name.toString |>.getD "")) :: moduleRows
-  let mut definitionRows := []
-  for (name, _) in env.constants.toList do
-    let mod := (<- findModuleOf? name).map Name.toString |>.getD ""
-    if definitionModules.contains mod then
-      definitionRows := (name.toString, toJson ((<- collectAxioms name).map Name.toString)) :: definitionRows
-  let result := Json.mkObj [("targets", Json.mkObj targetRows), ("types", Json.mkObj typeRows),
-    ("definitions", Json.mkObj definitionRows), ("declaration_modules", Json.mkObj moduleRows),
-    ("direct_admissions", toJson directAdmissions)]
-  liftIO <| IO.println ("HORIZON_MILESTONE_AUDIT=" ++ result.compress)
-'''
-
-
-def git(root, *args):
-    return subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True, timeout=30).stdout.decode().strip()
+from .lean_verify import (FOUNDATIONS, audit, audit_imports, clean_commit, git, library_tree, verify_library)
 
 
 def sources_at(root, revision):
@@ -79,48 +39,6 @@ def sources_at(root, revision):
     return result
 
 
-def clean_commit(root):
-    if git(root, 'status', '--porcelain', '--untracked-files=normal'):
-        raise ValueError('Milestone checks require a clean committed checkout')
-    return git(root, 'rev-parse', 'HEAD')
-
-
-def audit(root, locators, definitions, policy, *, modules=None, forbidden_modules=()):
-    targets = sorted({name for item in locators for name in item['declarations']})
-    imports = sorted(set(modules) if modules is not None else
-                     set(item['module'] for item in locators) | set(definitions))
-    result = check(root, imports, policy)
-    if not result['ok'] or not result.get('snapshot_verified'):
-        raise ValueError('Lean milestone build did not pass: ' + json.dumps(result))
-    policy.root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='milestone-audit-', dir=policy.root) as scratch:
-        probe = Path(scratch) / 'Audit.lean'
-        array = lambda values: '#[' + ', '.join(json.dumps(value) for value in values) + ']'
-        probe.write_text('import Lean\n' + ''.join(f'import {module}\n' for module in imports) +
-            AUDIT.replace('__TARGETS__', array(targets)).replace('__DEFINITIONS__', array(definitions))
-            .replace('__FORBIDDEN__', array(forbidden_modules)))
-        deadline = time.monotonic() + policy.timeout_seconds
-        with build_engine.resource_lock(build_engine.checkout_paths(root), deadline,
-                build_engine.CheckProgress(policy.queue_timeout_seconds)):
-            completed = build_engine.captured_command(['lake', 'env', 'lean', str(probe)], root, os.environ, deadline)
-        if completed.returncode:
-            raise ValueError('Lean milestone audit failed: ' + completed.stdout.decode(errors='replace')[-6000:])
-        rows = [line.split('=', 1)[1] for line in completed.stdout.decode().splitlines()
-                if line.startswith('HORIZON_MILESTONE_AUDIT=')]
-        if len(rows) != 1:
-            raise ValueError('Lean did not produce one complete structured audit')
-        checked = json.loads(rows[0])
-    if set(checked['targets']) != set(targets):
-        raise ValueError('Lean audit omitted target declarations')
-    for axioms in [*checked['definitions'].values(), *checked['types'].values()]:
-        if set(axioms) - FOUNDATIONS:
-            raise ValueError('Admitted or nonstandard axioms in milestone definitions or statement types')
-    for axioms in checked['targets'].values():
-        if set(axioms) - FOUNDATIONS - {'sorryAx'}:
-            raise ValueError('Milestone theorem uses a nonstandard axiom')
-    return checked
-
-
 def verify(root, base, policy, *, solution_root=None, comparator_config=None):
     root = root.resolve(strict=True)
     commit = clean_commit(root)
@@ -128,12 +46,12 @@ def verify(root, base, policy, *, solution_root=None, comparator_config=None):
     git(root, 'merge-base', '--is-ancestor', base, commit)
     sources = sources_at(root, commit)
     manifest, before = source_manifest(sources), source_manifest(sources_at(root, base))
-    identities = {(n['milestone']['objective'], n['milestone']['id']): n['milestone']
+    identities = {(n['milestone']['objective'], n['milestone'].get('namespace', 'formalization'), n['milestone']['id']): n['milestone']
                   for n in manifest['nodes'].values() if n['milestone']}
     for node in before['nodes'].values():
         old = node['milestone']
         if old:
-            current = identities.get((old['objective'], old['id']))
+            current = identities.get((old['objective'], old.get('namespace', 'formalization'), old['id']))
             if not current or old['retired'] and not current['retired']:
                 raise ValueError('Keep retired milestone identities; do not delete or reuse their IDs')
     if not manifest['objectives']:
@@ -202,7 +120,7 @@ def verify(root, base, policy, *, solution_root=None, comparator_config=None):
                 if (solution_root / path).read_text() != content:
                     raise ValueError('Comparator challenge differs from the pinned roadmap source')
         from pydantic import TypeAdapter
-        from ..milestone_sources import LeanName
+        from ..projects.milestone_sources import LeanName
         module = TypeAdapter(LeanName).validate_python(config['solution_module'])
         challenge = TypeAdapter(LeanName).validate_python(config['challenge_module'])
         if challenge == module:

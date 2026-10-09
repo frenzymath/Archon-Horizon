@@ -11,10 +11,10 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from archon_horizon.pipeline.connectors import ConnectorFailure, ConnectorManager, ForgejoClient
-from archon_horizon.pipeline.forge_change_transport import _verify_changes, change_files
-from archon_horizon.pipeline.records import create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ConnectorManager, ForgejoClient
+from archon_horizon.pipeline.integrations.forge_change_transport import _verify_changes, change_files
+from archon_horizon.pipeline.persistence.records import create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, mutate
 
 

@@ -5,19 +5,16 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select, update
 
-from archon_horizon.pipeline.coordination_memory import (
-    awaiting_evidence, episode_status, fingerprint, follow_up_status, frontier, memory, reconcile,
-    recovery_due, state,
-)
+from archon_horizon.pipeline.execution.coordination_memory import awaiting_evidence, episode_status, fingerprint, follow_up_status, frontier, memory, reconcile, recovery_due, state
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 
 def test_coordination_queries_compile_for_postgres():
     from sqlalchemy.dialects import postgresql
-    from archon_horizon.pipeline.review_backlog import current_objection
+    from archon_horizon.pipeline.review.backlog import current_objection
 
     class EmptyResult:
         def mappings(self):
@@ -103,7 +100,7 @@ def test_recovery_persists_one_decision_and_reopens_on_changed_evidence(world):
     change(world.conn, "obligation", audit["id"], status="done",
            resolution={"kind": "completed", "note": "Reordered the existing repair; inspect its result", "evidence": []})
     change(world.conn, "assignment", owner["id"], status="completed", finished_at=now)
-    from archon_horizon.pipeline.scheduler import Scheduler
+    from archon_horizon.pipeline.execution.scheduler import Scheduler
     restarted = Scheduler(world.service)
     assert reconcile(restarted, world.conn, world.actor, now + timedelta(minutes=10)) == 0
     assert awaiting_evidence(world.conn, run["id"])

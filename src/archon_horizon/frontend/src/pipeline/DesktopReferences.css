@@ -1,0 +1,34 @@
+.desktop-reference-dialog { width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.desktop-reference-dialog::backdrop { background: rgb(21 28 40 / 35%); }
+.desktop-reference-list { border-top: 1px solid var(--border, #e2e4ea); }
+.desktop-reference-row { width: 100%; text-align: left; }
+.desktop-reference-row .platform-claim-copy { min-width: 0; }
+.desktop-reference-row strong, .desktop-reference-row small { overflow-wrap: anywhere; }
+.desktop-reference-metadata { margin-top: 18px; }
+.desktop-reference-metadata h2 { font-size: 20px; line-height: 1.4; overflow-wrap: anywhere; }
+.desktop-reference-metadata h3 { margin: 18px 0 8px; font-size: 14px; }
+.desktop-reference-metadata dl { display: grid; grid-template-columns: minmax(100px, 140px) minmax(0, 1fr); gap: 8px 14px; }
+.desktop-reference-metadata-row { display: contents; }
+.desktop-reference-metadata dt { color: var(--text-muted, #717582); }
+.desktop-reference-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.desktop-reference-metadata ul { padding-left: 22px; }
+.desktop-reference-metadata a { overflow-wrap: anywhere; }
+.desktop-reference-metadata a svg { margin-left: 5px; vertical-align: middle; }
+.desktop-reference-abstract { white-space: pre-wrap; line-height: 1.6; }
+.desktop-reference-bibtex { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border, #e2e4ea); }
+.desktop-reference-bibtex pre { max-height: 340px; overflow: auto; padding: 14px; background: var(--bg-secondary, #f6f8fa); border-radius: 4px; font-size: 12px; }
+.desktop-reference-editor fieldset { display: flex; flex-direction: column; gap: 14px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.desktop-reference-editor label { display: flex; flex-direction: column; gap: 6px; }
+.desktop-reference-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.desktop-reference-editor .desktop-reference-checkbox { flex-direction: row; align-items: center; }
+.desktop-reference-checkbox input { width: auto; }
+.desktop-reference-editor .platform-muted { margin: 0; line-height: 1.5; }
+@media (max-width: 640px) {
+  .desktop-reference-fields { grid-template-columns: 1fr; }
+  .desktop-reference-metadata dl { grid-template-columns: 100px minmax(0, 1fr); }
+  .desktop-reference-row { flex-wrap: wrap; }
+}
+.desktop-reference-files { border-top: 1px solid var(--platform-border, #ddd); margin-top: 1.2rem; padding-top: .8rem; }
+.desktop-reference-file { display: flex; flex-direction: column; gap: .4rem; padding: .8rem 0; border-bottom: 1px solid var(--platform-border, #ddd); }
+.desktop-reference-files pre { max-height: 28rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.desktop-reference-pdf { width: 100%; height: 32rem; border: 1px solid var(--platform-border, #ddd); }

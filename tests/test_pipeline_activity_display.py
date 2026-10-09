@@ -7,13 +7,13 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from archon_horizon.pipeline.activity_display import display_event, select_provider_event, safe_text, skills_referenced
-from archon_horizon.pipeline.readmodels import assignment_activity
-from archon_horizon.pipeline.records import create
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.dashboard.activity_display import display_event, select_provider_event, safe_text, skills_referenced
+from archon_horizon.pipeline.dashboard.readmodels import assignment_activity
+from archon_horizon.pipeline.persistence.records import create
+from archon_horizon.pipeline.persistence.schema import tables
 from archon_horizon.pipeline.worker.activity_replay import replay_once
 from archon_horizon.pipeline.worker.journal import DurableJournal
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle
 from test_pipeline_provider_events import start
 from test_pipeline_service import service_database, world  # noqa: F401
 

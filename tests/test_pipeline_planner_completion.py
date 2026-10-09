@@ -4,7 +4,7 @@ import pytest
 
 from archon_horizon.pipeline import models
 from archon_horizon.pipeline.auth import authenticate
-from archon_horizon.pipeline.records import change, create, get
+from archon_horizon.pipeline.persistence.records import change, create, get
 from test_pipeline_service import service_database, world  # noqa: F401
 
 

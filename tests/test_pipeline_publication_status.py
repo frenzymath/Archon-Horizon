@@ -4,12 +4,13 @@ from uuid import uuid4
 
 import pytest
 
-from archon_horizon.pipeline import cli, readmodels
+from archon_horizon.pipeline import cli
+from archon_horizon.pipeline.dashboard import readmodels
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import create, get
+from archon_horizon.pipeline.persistence.records import create, get
 from archon_horizon.pipeline.worker.contracts import Operation
 from archon_horizon.pipeline.worker.journal import DurableJournal
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle
 from test_pipeline_service import service_database, world
 
 

@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "scope": "Repository shell entrypoints: install.sh and .githooks/commit-msg",
+  "reviewed_at": "2026-10-08",
+  "method": "Read complete source, including all top-level execution, helper bodies and comments. Assess necessity, contracts, failures, efficiency and operator effects. Run non-mutating shell syntax checks and isolated hook regressions against temporary message files. Installer, real commits and live configuration were not executed.",
+  "hash_contract": "SHA-256 covers exact file bytes or the UTF-8 source lines line through end_line inclusive with original newline bytes.",
+  "validation": [
+    {
+      "command": "bash -n install.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "sh -n .githooks/commit-msg",
+      "exit_code": 0
+    },
+    {
+      "command": ".venv/bin/python -B -m pytest -q tests/test_commit_message_hook.py",
+      "exit_code": 0,
+      "passed": 6,
+      "scope": "Temporary message files and injected awk/mv/mktemp failures; no real commits or hook configuration."
+    }
+  ],
+  "findings": {
+    "S01": {
+      "status": "fixed",
+      "summary": "The old hook ignored filtering failures and truncated the original through unconditional output redirection. One checked AWK pass now writes adjacent scratch, traps cleanup and atomically replaces only on success. Helper failures leave the original intact and permit the commit. Integration owner approved the narrow repair during source freeze.",
+      "tests": [
+        "test_hook_filters_documented_attribution_and_keeps_interior_blank_lines",
+        "test_hook_preserves_original_and_cleans_scratch_when_a_helper_fails",
+        "test_hook_can_remove_all_attribution_without_treating_empty_output_as_failure",
+        "test_hook_ignores_missing_message_paths"
+      ]
+    },
+    "S02": {
+      "status": "fixed",
+      "summary": "Removed the stale CONTRIBUTING.md reference from hook enablement comments; the exact opt-in git config command remains beside the hook."
+    }
+  },
+  "files": [
+    {
+      "path": "install.sh",
+      "sha256": "263adefd5ab4963b380c9b1e02e7bef2214d3c63c2f17811dcd159ac66186a5c",
+      "interpreter": "bash",
+      "module_review": "reviewed",
+      "assessment": "Explicit source installer downloads the selected GitHub branch, builds missing dashboard assets and installs the control-plane extra. It does not initialize PostgreSQL, configure services or enroll workers. Fail-fast shell options, pip/npm preflights and EXIT cleanup are appropriate; source build is network/dependency work only when invoked by an operator.",
+      "functions": [
+        {
+          "name": "red",
+          "line": 17,
+          "end_line": 17,
+          "sha256": "a51c60fb1c1784e60319d9cb1d8f63830ae73e83a3aa7ca4e74324fea86f0ffc",
+          "status": "reviewed",
+          "assessment": "Tiny printf helper produces one colored error line; caller text is supplied through a fixed format string.",
+          "findings": []
+        },
+        {
+          "name": "purple",
+          "line": 18,
+          "end_line": 18,
+          "sha256": "b90e4459d822220dbaf27d8108c286daaf98e2cd5f087c507ee3f73ebecd0fd6",
+          "status": "reviewed",
+          "assessment": "Tiny printf helper produces one colored status line; caller text is supplied through a fixed format string.",
+          "findings": []
+        },
+        {
+          "name": "cleanup",
+          "line": 28,
+          "end_line": 28,
+          "sha256": "773fb18d888a2439a307e22de124d6370b79459f3bfc5d5da964e669d5a4144c",
+          "status": "reviewed",
+          "assessment": "Delete only the quoted unique installer scratch directory at process exit; no unrelated operator state enters the cleanup path.",
+          "findings": []
+        }
+      ],
+      "top_level_blocks": [
+        {
+          "name": "selection_and_preflight",
+          "line": 11,
+          "end_line": 23,
+          "sha256": "982f1006115f74f84497b5b8fe8b77b407455c668ad6a3f510dc3e4449b7fa18",
+          "status": "reviewed",
+          "assessment": "Explicit ARCHON_HORIZON_ORG/REPO/BRANCH overrides are quoted; pip presence is checked before network/build work, and unavailable pip reports a useful install URL.",
+          "findings": []
+        },
+        {
+          "name": "scratch_lifetime",
+          "line": 25,
+          "end_line": 31,
+          "sha256": "9f6fb5797ed7e8d8425c49b62339da751acc0a24b22955e9e8bcb8fa460be1d5",
+          "status": "reviewed",
+          "assessment": "Honor TMPDIR or dedicated disk-backed development scratch, create one unique checkout directory and register cleanup before changing directory. Temp paths are expected to be absolute, as conventional TMPDIR configuration supplies.",
+          "findings": []
+        },
+        {
+          "name": "download_and_extract",
+          "line": 33,
+          "end_line": 37,
+          "sha256": "5db51130baafa7daa8b796ffd645607ba37abb03033ce8c69772495956659702",
+          "status": "reviewed",
+          "assessment": "Use curl failure propagation and branch source archive extraction into the owned scratch tree; selected fork/branch source is executed later only by explicit installer invocation.",
+          "findings": []
+        },
+        {
+          "name": "dashboard_build",
+          "line": 39,
+          "end_line": 47,
+          "sha256": "4ce11941785000cf230cd7af5ac82f773b3003345847a61e1bb0b86af2c51cba",
+          "status": "reviewed",
+          "assessment": "Source archives exclude generated dashboard assets, so npm ci and dashboard build precede wheel installation. npm errors abort; there is no redundant build or persistent checkout.",
+          "findings": []
+        },
+        {
+          "name": "package_install_and_operator_guidance",
+          "line": 49,
+          "end_line": 53,
+          "sha256": "816084ca0c3b669b93f9211cdb7ceec4e2c6b4b7eb6fff1f1b5b451f2bcf86dd",
+          "status": "reviewed",
+          "assessment": "Install control-plane dependencies and print the explicit subsequent configuration/init command. Setup credentials or database migration are not invented by the installer.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": ".githooks/commit-msg",
+      "sha256": "8220cec2c546b40c707051a48f958b042d193d4ce5411ad972daafc3132368ba",
+      "interpreter": "POSIX sh",
+      "module_review": "reviewed",
+      "assessment": "Opt-in local hook strips explicitly listed assistant attribution and trailing blank lines from a Git-supplied commit-message file. O(n) filtering and buffering are proportionate for small commit messages. Checked transform, adjacent scratch and atomic replacement preserve the original on helper failure.",
+      "functions": [],
+      "top_level_blocks": [
+        {
+          "name": "purpose_and_enablement",
+          "line": 1,
+          "end_line": 10,
+          "sha256": "21a41409cada7ffb816b6251e62a3a8bd848c8652ed905a099a3cff41a0e364f",
+          "status": "repaired",
+          "assessment": "Patterns and the exact opt-in core.hooksPath command are documented without a stale external setup reference.",
+          "findings": [
+            "S02"
+          ]
+        },
+        {
+          "name": "message_and_scratch",
+          "line": 12,
+          "end_line": 19,
+          "sha256": "e56d2a4a4710d7ddc0c5a962b172316000bc0ece8de9302598caf05f407153fe",
+          "status": "repaired",
+          "assessment": "Missing/nonfile path and mktemp failure exit without blocking a commit. Scratch lives beside the Git message, shares its filesystem for atomic replacement and is cleaned by an exit trap.",
+          "findings": [
+            "S01"
+          ]
+        },
+        {
+          "name": "filtering",
+          "line": 21,
+          "end_line": 35,
+          "sha256": "4664012bc050f07dbea347cdbadbe24577b52c43bf3b4c7a2d36de02f72b2014",
+          "status": "repaired",
+          "assessment": "One checked AWK pass applies the original case-insensitive attribution patterns, preserves interior blank lines and trims trailing ones. Input redirection handles message paths safely; transform failure never opens the original for writing.",
+          "findings": [
+            "S01"
+          ]
+        },
+        {
+          "name": "writeback_and_cleanup",
+          "line": 37,
+          "end_line": 38,
+          "sha256": "6546e5d039b5b0299bec8444fe48bf448011457eb1383b1ad06f2228a1bb2e20",
+          "status": "repaired",
+          "assessment": "Atomic same-filesystem mv replaces the original only after transform success. Rename failure exits without blocking the commit; the exit trap removes unused scratch.",
+          "findings": [
+            "S01"
+          ]
+        }
+      ]
+    }
+  ],
+  "limits": "Syntax validation does not exercise network access, package installation, Git lifecycle behavior or filesystem failure paths. Tests/generated assets/upstream dependencies are outside this executable-body review scope.",
+  "summary": {
+    "files": 2,
+    "functions": 3,
+    "top_level_blocks": 9
+  }
+}

@@ -11,13 +11,13 @@ import httpx
 import pytest
 from sqlalchemy import insert, select, text, update
 
-from archon_horizon.pipeline.artifacts import ArtifactStore
+from archon_horizon.pipeline.persistence.artifacts import ArtifactStore
 from archon_horizon.pipeline.config import PipelineConfig
-from archon_horizon.pipeline.connectors import ConnectorFailure, ConnectorManager, ForgejoClient, SecretResolver, ZulipClient
-from archon_horizon.pipeline.database import Database
-from archon_horizon.pipeline.records import create, get, save_blob, snapshot, transaction_lock
-from archon_horizon.pipeline.schema import tables
-from archon_horizon.pipeline.service import Service
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ConnectorManager, ForgejoClient, SecretResolver, ZulipClient
+from archon_horizon.pipeline.persistence.database import Database
+from archon_horizon.pipeline.persistence.records import create, get, save_blob, snapshot, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
+from archon_horizon.pipeline.missions.service import Service
 
 
 def test_secret_resolver_restricts_paths_and_permissions(tmp_path):
@@ -34,6 +34,22 @@ def test_secret_resolver_restricts_paths_and_permissions(tmp_path):
     path.chmod(0o644)
     with pytest.raises(ConnectorFailure, match="private"):
         resolver("forge")
+
+
+@pytest.mark.parametrize("header,delay", [
+    ("NaN", 0), ("Infinity", 0), ("-Infinity", 0), ("1e309", 0),
+    ("unknown", 0), ("-10", 0), ("30", 30),
+])
+def test_remote_retry_after_cannot_poison_retry_timestamps(header, delay):
+    with httpx.Client(transport=httpx.MockTransport(lambda request:
+            httpx.Response(429, headers={"Retry-After": header}))) as transport:
+        client = ForgejoClient("https://forge.invalid", "secret", client=transport)
+        with pytest.raises(ConnectorFailure) as failure:
+            client.request("GET", "/api/v1/user")
+    assert failure.value.transient
+    assert failure.value.retry_after == delay
+    # This is the operation scheduler's consumer of the normalized hint.
+    assert datetime.now(timezone.utc) + timedelta(seconds=failure.value.retry_after)
 
 
 def test_zulip_uncertain_post_reconciles_marker_without_duplicate_send():
@@ -335,7 +351,7 @@ def test_pr_creation_uses_repository_phase_policy_attention_labels(connector_wor
 
 def test_public_label_contract_delivers_and_updates_projection(connector_world):
     from archon_horizon.pipeline.auth import Actor
-    from archon_horizon.pipeline.reviews import queue_label
+    from archon_horizon.pipeline.review.decisions import queue_label
     world = connector_world
     labels = [{"id": 1, "name": "awaiting-review"}, {"id": 2, "name": "obsolete"}]
     attached = [labels[1]]

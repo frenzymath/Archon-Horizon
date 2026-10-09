@@ -1,0 +1,1 @@
+Preparation evidence only. Independently assess the source and rubric. Refresh relevant discussion and head/base pins before reporting; changed pins require reassessment or historical commented feedback. Omitted instructions remain required and are in complete_context.

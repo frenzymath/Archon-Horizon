@@ -30,12 +30,21 @@ verified transcription. Record printed page labels separately from physical PDF
 page indices. Do not invent a missing clause or page number. Original TeX must
 match the cited version; macros and neighboring definitions can change meaning.
 
-Use the central reference catalog for bibliographic identity and citation keys.
-It exports BibTeX, so each node need not contain another hand-maintained copy.
-Use the bounded local BibTeX cache for quick access; it does not download the
-paper. Reusable notes/transcriptions belong in deliberately published project
-artifacts. Large disposable downloads belong under `$TMPDIR`, with the source
-locator retained in durable evidence. Read [references and blueprints](references/catalog.md)
+Use the central reference catalog for bibliographic identity, citation keys,
+and stored source files. Check `agent reference-files REFERENCE_UUID` before
+downloading a paper again. Preserve obtained PDFs, matching original TeX/source
+archives, and useful transcriptions with `agent reference-upload`; record the
+edition/version and source URL. Retrieve them with `agent reference-download`
+into `$TMPDIR` or another intentional workspace location and consult them with
+normal PDF/text tools. Cite the attachment ID/version alongside precise locators
+when different files could support different statements.
+
+The catalog exports BibTeX, so each node need not contain another hand-maintained
+copy. The bounded local BibTeX cache contains metadata; source-file downloads
+retrieve the stored bytes separately. Keep large disposable extraction outputs
+under `$TMPDIR`. Do not execute downloaded source or extract an archive into a
+live project without first inspecting its paths and contents.
+Read [references and blueprints](references/catalog.md)
 for concrete API and file workflows.
 
 When translating a passage, list its objects, domains, quantifiers, regularity,

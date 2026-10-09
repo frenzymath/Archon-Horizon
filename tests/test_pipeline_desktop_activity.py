@@ -5,11 +5,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event, func, insert, select, update
 
-from archon_horizon.pipeline import dashboard_activity
+from archon_horizon.pipeline.dashboard import dashboard_activity
 from archon_horizon.pipeline.auth import Actor, issue_credential
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import create, get, json_value
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import create, get, json_value
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, auth, mutate  # noqa: F401
 from test_pipeline_provider_events import counter, observe, start
 from test_pipeline_service import service_database, world  # noqa: F401
@@ -52,7 +52,8 @@ def test_original_run_directory_and_tree_use_actual_counts_and_usage(world):
 
 @pytest.mark.parametrize("compact", [False, True])
 def test_orchestrator_function_is_projected_as_its_dashboard_profile(world, compact):
-    run = world.run()
+    # Reconstruct a saved supervisor profile; new launches cannot create one.
+    run = world.run(orchestrated=True)
     world.disable_automations(run)
     assignment = world.assignment(run, role="maintainer", functions=["orchestrator"])
     detail = dashboard_activity.run_detail(world.conn, world.actor, run["id"], service=world.service, compact=compact)
@@ -62,7 +63,7 @@ def test_orchestrator_function_is_projected_as_its_dashboard_profile(world, comp
 
 
 def test_subagent_uses_the_pinned_reviewer_description_not_current_catalog(world):
-    from archon_horizon.pipeline.records import snapshot, change
+    from archon_horizon.pipeline.persistence.records import snapshot, change
     state = start(world)
     observe(world, state, {"type": "item.completed", "item": {"id": "spawn", "type": "collab_tool_call", "tool": "spawn_agent",
         "task_name": "hz_review_internal_identifier", "receiver_thread_ids": ["native-reviewer"]}})
@@ -265,8 +266,8 @@ def test_compact_session_and_report_view_do_not_read_events(world, monkeypatch):
 
 
 def test_event_preview_has_scoped_lazy_full_body(world):
-    from archon_horizon.pipeline.activity_display import select_provider_event
-    from archon_horizon.pipeline.worker_events import WorkerOperation, handle
+    from archon_horizon.pipeline.dashboard.activity_display import select_provider_event
+    from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle
     state = start(world)
     text = "Long public reasoning. " * 300
     execution, thread, request = state

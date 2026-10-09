@@ -6,9 +6,9 @@ from sqlalchemy import update
 
 from archon_horizon.pipeline.auth import Actor
 from archon_horizon.pipeline.models import ForgeEdit
-from archon_horizon.pipeline.records import create, get, snapshot, transaction_lock
-from archon_horizon.pipeline.reviews import queue_edit
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import create, get, snapshot, transaction_lock
+from archon_horizon.pipeline.review.decisions import queue_edit
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_connectors import connector_world, manager
 
 

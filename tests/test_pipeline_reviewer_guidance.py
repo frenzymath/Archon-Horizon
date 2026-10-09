@@ -7,11 +7,11 @@ from uuid import uuid4
 
 import pytest
 
-from archon_horizon.pipeline.bootstrap import PRESETS, ProjectRecipe, expanded
+from archon_horizon.pipeline.projects.bootstrap import PRESETS, ProjectRecipe, expanded
 from archon_horizon.pipeline.models import ReviewerDescriptorCreate
-from archon_horizon.pipeline.prompts import catalog
-from archon_horizon.pipeline.instruction_catalog import read_catalog
-from archon_horizon.pipeline.reviewer_guidance import PERSPECTIVES, instructions
+from archon_horizon.pipeline.instructions.prompts import catalog
+from archon_horizon.pipeline.instructions.instruction_catalog import read_catalog
+from archon_horizon.pipeline.review.guidance import PERSPECTIVES, instructions
 
 
 def test_every_phase_preset_uses_available_functions_and_packaged_review_guidance():

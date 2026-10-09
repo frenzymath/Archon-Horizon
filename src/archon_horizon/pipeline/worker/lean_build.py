@@ -25,6 +25,9 @@ from .cache_retention import (DEFAULT_MAX_BYTES, DEFAULT_MAX_AGE_SECONDS, DEFAUL
 class LeanBuildPolicy:
     root: Path
     max_parallel_builds: int = 1
+    # Dependency checkout/copy uses a separate host lane to bound GPFS traffic
+    # even when several checkouts need different pinned dependencies.
+    max_parallel_preparations: int = 1
     timeout_seconds: float = 1800
     queue_timeout_seconds: float = 30
     minimum_free_bytes: int = 1024**3
@@ -41,6 +44,8 @@ class LeanBuildPolicy:
             raise ValueError("Lean build root must be an explicit absolute directory")
         if type(self.max_parallel_builds) is not int or not 1 <= self.max_parallel_builds <= 64:
             raise ValueError("Lean build concurrency must be between 1 and 64")
+        if type(self.max_parallel_preparations) is not int or not 1 <= self.max_parallel_preparations <= 64:
+            raise ValueError("Dependency preparation concurrency must be between 1 and 64")
         if (not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
                 or not math.isfinite(self.queue_timeout_seconds) or self.queue_timeout_seconds < 0):
             raise ValueError("Lean build deadlines must be finite and nonnegative, with a positive timeout")
@@ -116,6 +121,7 @@ def _check(root: Path, targets: list[str], policy: LeanBuildPolicy, *, lean_file
            "HORIZON_LEAN_CACHE_ROOT": str(policy.root),
            "HORIZON_BUILD_MINIMUM_FREE_BYTES": str(policy.minimum_free_bytes),
            "HORIZON_BUILD_SLOTS": str(policy.max_parallel_builds),
+           "HORIZON_BUILD_PREPARATION_SLOTS": str(policy.max_parallel_preparations),
            "HORIZON_BUILD_CACHE_MAX_BYTES": str(policy.cache_max_bytes),
            "HORIZON_BUILD_CACHE_MAX_AGE_SECONDS": str(policy.cache_max_age_seconds),
            "HORIZON_BUILD_NATIVE_MAX_BYTES": str(policy.native_cache_max_bytes),

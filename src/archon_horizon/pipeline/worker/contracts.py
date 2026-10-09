@@ -33,6 +33,12 @@ def validate_tool_environment(values: dict[str, str]) -> dict[str, str]:
     return values
 
 
+def validate_subagent_limit(value: int | None) -> None:
+    """Accept no Horizon cap, explicit disabling, or an optional positive cap."""
+    if value is not None and (type(value) is not int or value < 0):
+        raise ValueError("native subagent limit must be null or a nonnegative integer")
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -113,7 +119,7 @@ class ExecutionGrant:
     roadmap_snapshot_id: str | None = None
     harness_configuration: dict[str, Any] | None = None
     max_offline_replay_seconds: int = 604800
-    max_parallel_subagents: int = 0
+    max_parallel_subagents: int | None = None
     role: str = "worker"
     functions: tuple[str, ...] = ()
     skill_bundle_sha256: str | None = None
@@ -129,8 +135,7 @@ class ExecutionGrant:
             raise ValueError("invalid execution lease")
         if self.max_offline_replay_seconds < 1:
             raise ValueError("offline replay horizon must be positive")
-        if self.max_parallel_subagents < 0:
-            raise ValueError("native subagent capacity must be nonnegative")
+        validate_subagent_limit(self.max_parallel_subagents)
         if not self.workspace_path.startswith("/") or (not self.goal.strip() and not self.goal_artifact_id):
             raise ValueError("grant requires an absolute workspace and nonempty goal")
 

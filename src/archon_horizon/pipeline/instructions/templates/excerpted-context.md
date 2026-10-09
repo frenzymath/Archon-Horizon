@@ -1,0 +1,1 @@
+Some record text is excerpted, not removed from the objective. Full text for the displayed mission, assignment instructions and obligations at their stated revisions: GET /api/v3/artifacts/{{artifact_id}}/content. Read the relevant full text before acting on an excerpt unless that revision is already retained in your context. This is not a request to reload skills.

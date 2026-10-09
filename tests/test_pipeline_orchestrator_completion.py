@@ -4,8 +4,8 @@ import pytest
 from sqlalchemy import select
 
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 

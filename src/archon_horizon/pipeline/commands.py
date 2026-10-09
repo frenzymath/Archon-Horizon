@@ -11,9 +11,9 @@ from sqlalchemy import func, select, update
 from .auth import live_execution, require_admin, require_project
 from .errors import DomainError
 from .models import AssignmentCreate, Condition
-from .records import change, create, emit, get, next_number, project_of, snapshot
-from .schema import tables
-from .mission_tree import bump_parent, ensure_closure_allowed, require_assignment_authority, require_mission_authority
+from .persistence.records import change, create, emit, get, next_number, project_of, snapshot
+from .persistence.schema import tables
+from .missions.mission_tree import bump_parent, ensure_closure_allowed, require_assignment_authority, require_mission_authority
 
 
 class Command(BaseModel):
@@ -37,6 +37,10 @@ COMMAND_TARGETS = {
     "reconcile_delivery_absent": "outbox_operation",
     "recover_context": "provider_thread", "edit_obligation": "obligation", "reopen_obligation": "obligation",
     "confirm_host_stopped": "execution",
+    "request_review": "forge_item", "settle_review": "forge_item",
+    "comment_obligation": "obligation", "resume_session": "assignment",
+    "retire_workspace": "workspace",
+    "accept_phase": "run", "request_maintenance": "run", "reset_circuit": "resource_limit",
 }
 
 
@@ -63,6 +67,12 @@ def restore_recurring_assignment(conn, actor, assignment, project_id):
 
 
 def execute(conn, actor, command: Command, service, scheduler):
+    """Apply one authorized lifecycle decision at its expected record revision.
+
+    The caller holds the mutation transaction lock and owns replay receipts.
+    Command-specific handlers preserve physical-stop uncertainty, retained
+    context and unresolved delivery ownership across logical status changes.
+    """
     op, identifier, args = command.operation, command.target_id, command.args
     if op not in COMMAND_TARGETS:
         raise DomainError("unknown_command", "Unsupported command", 422)
@@ -72,10 +82,12 @@ def execute(conn, actor, command: Command, service, scheduler):
     except ValidationError as error:
         raise DomainError("invalid_arguments", "Command arguments do not match the contract", 422,
                           fields=[{"path": list(item["loc"]), "message": item["msg"]} for item in error.errors()]) from None
+    if op in ("resume_session", "reset_circuit", "request_maintenance", "accept_phase", "settle_review") and not args["note"].strip():
+        raise DomainError("decision_required", "Record the diagnosis or decision before continuing", 422)
     kind = COMMAND_TARGETS[op]
     old = get(conn, kind, identifier, lock=True)
     project_id = project_of(conn, kind, identifier)
-    require_project(conn, actor, project_id, "maintainer" if kind == "run" else "worker")
+    require_project(conn, actor, project_id, "maintainer" if kind == "run" and op != "request_maintenance" else "worker")
     if kind == "assignment":
         require_assignment_authority(conn, actor, old)
     elif kind == "automation" and actor.kind == "agent":
@@ -84,7 +96,37 @@ def execute(conn, actor, command: Command, service, scheduler):
         require_mission_authority(conn, actor, old["mission_id"])
     if old["revision"] != command.expected_revision:
         raise DomainError("revision_conflict", "The record changed; refresh and retry", current_revision=old["revision"])
-    if op == "confirm_host_stopped":
+    if op == "retire_workspace":
+        from .operations.workspace_retention import retire
+        return retire(conn, actor, old, service, args["note"])
+    if op == "reset_circuit":
+        require_admin(conn, actor)
+        row = change(conn, kind, identifier, command.expected_revision, circuit_open=False,
+                     circuit_reason=None, failure_count=0, cooldown_until=None)
+        emit(conn, actor.id, project_id, None, row, ["circuit_open"], note=args["note"])
+        return row
+    if op == "request_maintenance":
+        from .execution.objectives import request_maintenance
+        return request_maintenance(scheduler, conn, actor, old, args)
+    if op == "request_review":
+        from .review.demand import request
+        return request(conn, actor, service, identifier, args["note"], run_id=args.get("run_id"))
+    elif op == "settle_review":
+        from .review.demand import settle
+        return settle(conn, actor, service, identifier, args["generation"], args["note"])
+    elif op == "resume_session":
+        require_project(conn, actor, project_id, "maintainer")
+        if old["status"] != "pending" or not old.get("pause_reason"):
+            raise DomainError("session_not_paused", "Resume an existing paused session; do not queue a replacement", 409)
+        campaign = get(conn, "run", old["run_id"])
+        if campaign["status"] != "active":
+            raise DomainError("run_not_active", "Resume the objective before its session", 409)
+        row = change(conn, kind, identifier, command.expected_revision, pause_reason=None, retry_at=None,
+            not_before=None, status_note=args["note"])
+        # Recovery history remains visible. A recorded repair grants a new
+        # bounded attempt, rather than erasing previous failures.
+        snapshot(conn, kind, row, actor.id)
+    elif op == "confirm_host_stopped":
         require_admin(conn, actor)
         check_args(args, {"note", "evidence", "machine_fenced"}, {"note", "evidence", "machine_fenced"})
         if args["machine_fenced"] is not True or any(not isinstance(args[key], str) or not args[key].strip()
@@ -109,7 +151,13 @@ def execute(conn, actor, command: Command, service, scheduler):
         return row
     elif kind == "obligation":
         service.require_ledger_owner(conn, actor, old["assignment_id"])
-        if op == "edit_obligation":
+        if op == "comment_obligation":
+            comments = old["comments"]
+            if len(comments) >= 128:
+                raise DomainError("comment_limit", "Summarize further discussion in a linked workspace note", 409)
+            row = change(conn, kind, identifier, command.expected_revision, comments=comments + [{
+                "author_id": str(actor.id), "markdown": args["note"], "created_at": datetime.now(timezone.utc).isoformat()}])
+        elif op == "edit_obligation":
             check_args(args, {"description", "kind"}, {"description"})
             if old["status"] != "open":
                 raise DomainError("obligation_settled", "Reopen a settled obligation before editing it")
@@ -138,7 +186,7 @@ def execute(conn, actor, command: Command, service, scheduler):
             emit(conn, actor.id, project_id, "project", get(conn, "project", project_id), ["deliveries"],
                  note=f"{op} {identifier}; original principal {old['actor_principal_id']}; "
                       f"uncertain -> failed without resending. Remote evidence: {args['note']}")
-            from .notifications import delivery_failed
+            from .execution.notifications import delivery_failed
             delivery_failed(conn, row)
             return row
         if old["status"] not in ("pending", "failed"):
@@ -163,6 +211,9 @@ def execute(conn, actor, command: Command, service, scheduler):
             raise DomainError("invalid_recovery", "Primary context recovery needs an explanation", 422)
         assignment = get(conn, "assignment", old["assignment_id"], lock=True)
         execution, request, thread = (tables[name] for name in ("execution", "provider_request", "provider_thread"))
+        if get(conn, "run", assignment["run_id"]).get("orchestration") == "objective" and conn.execute(select(execution.c.id).where(
+                execution.c.assignment_id == assignment["id"], execution.c.stop_confirmed_at.is_(None)).limit(1)).first():
+            raise DomainError("physical_stop_unconfirmed", "Confirm the original process stopped before replacing an unusable native context", 409)
         if assignment["status"] not in ("pending", "failed") or conn.execute(select(execution.c.id).where(
                 execution.c.assignment_id == assignment["id"], execution.c.status.in_(("starting", "running", "stopping")))).first():
             raise DomainError("execution_active", "Stop and reconcile the previous execution before replacing its context")
@@ -178,8 +229,10 @@ def execute(conn, actor, command: Command, service, scheduler):
             skill_bundle_artifact_id=old["skill_bundle_artifact_id"],
             provider_state_ref=f"assignments/{assignment['id']}/recovery/{old['id']}",
             predecessor_id=old["id"], recovery_note=args["note"], applied_model_options=old["applied_model_options"])
+        objective_mode = get(conn, "run", assignment["run_id"]).get("orchestration") == "objective"
         row = change(conn, "assignment", assignment["id"], status="pending", finished_at=None, retry_at=None,
-                     recovery_attempts=0, status_note="Provider context explicitly replaced; source and ledger retained")
+                     **({"pause_reason": None} if objective_mode else {"recovery_attempts": 0}),
+                     status_note="Provider context explicitly replaced; source and ledger retained")
         emit(conn, actor.id, project_id, "assignment", row, ["provider_thread"], note=args["note"])
         return replacement
     elif kind == "mission":
@@ -216,7 +269,10 @@ def execute(conn, actor, command: Command, service, scheduler):
         if parent:
             bump_parent(conn, parent, actor.id)
     elif kind == "run":
-        if op == "set_run_budget":
+        if op == "accept_phase":
+            from .execution.objectives import accept_phase
+            return accept_phase(scheduler, conn, actor, old, args)
+        elif op == "set_run_budget":
             require_admin(conn, actor)
             if old["status"] not in ("active", "paused"):
                 raise DomainError("invalid_transition", "Only active or paused runs can change their admission budget")
@@ -242,14 +298,17 @@ def execute(conn, actor, command: Command, service, scheduler):
             return row
         elif op == "adopt_roadmap_snapshot":
             check_args(args, {"snapshot_id"}, {"snapshot_id"})
-            from .records import same_project
+            from .persistence.records import same_project
             baseline = same_project(conn, "roadmap_snapshot", args["snapshot_id"], project_id)
-            from .milestones import require_baseline
+            from .projects.milestones import require_baseline
             require_baseline(conn, baseline)
             if old["phase"]["kind"] != "formalization":
                 raise DomainError("invalid_baseline", "This run does not consume a roadmap baseline")
-            original = get(conn, "roadmap_snapshot", old["adopted_roadmap_snapshot_id"])
-            if baseline["roadmap_document_id"] != original["roadmap_document_id"]:
+            if old["adopted_roadmap_snapshot_id"]:
+                objective_id = get(conn, "roadmap_snapshot", old["adopted_roadmap_snapshot_id"])["roadmap_document_id"]
+            else:
+                objective_id = old.get("objective_id") or get(conn, "mission", old["mission_id"])["roadmap_document_id"]
+            if baseline["roadmap_document_id"] != objective_id:
                 raise DomainError("invalid_baseline", "Adoption must keep the run's roadmap document", 422)
             row = change(conn, kind, identifier, command.expected_revision, adopted_roadmap_snapshot_id=baseline["id"])
             assignment = tables["assignment"]
@@ -271,6 +330,8 @@ def execute(conn, actor, command: Command, service, scheduler):
                 source, status = targets[op]
                 if old["status"] not in ((source,) if isinstance(source, str) else source):
                     raise DomainError("invalid_transition", "Run cannot make this status transition")
+            if op == "resume_run" and old.get("pending_phase") and not old.get("auto_advance") and actor.kind == "agent":
+                raise DomainError("human_approval_required", "This objective is configured to pause for human phase approval", 403)
             if op in ("drain_run", "complete_run"):
                 if get(conn, "mission", old["mission_id"])["status"] != "completed":
                     raise DomainError("mission_open", "Record the semantic mission-completion decision first")
@@ -304,7 +365,11 @@ def execute(conn, actor, command: Command, service, scheduler):
                 automation = tables["automation"]
                 for template in conn.execute(select(automation).where(automation.c.run_id == identifier,
                         automation.c.enabled.is_(True))).mappings():
-                    scheduler.replenish(conn, actor, dict(template))
+                    if old.get("orchestration") == "objective":
+                        from .execution.objectives import ensure_successor
+                        ensure_successor(scheduler, conn, row, dict(template))
+                    else:
+                        scheduler.replenish(conn, actor, dict(template))
             if status in ("stopping", "draining"):
                 automation, assignment = tables["automation"], tables["assignment"]
                 if status == "stopping":
@@ -325,6 +390,9 @@ def execute(conn, actor, command: Command, service, scheduler):
             raise DomainError("invalid_transition", "Only a failed assignment can be retried")
         if get(conn, "run", old["run_id"])["status"] not in ("active", "paused"):
             raise DomainError("run_not_active", "Resume the run before recovering this context")
+        run = get(conn, "run", old["run_id"])
+        if run.get("orchestration") == "objective":
+            raise DomainError("session_preserved", "Use resume_session with a diagnosis; retry accounting is persistent", 409)
         restore_recurring_assignment(conn, actor, old, project_id)
         row = change(conn, kind, identifier, command.expected_revision, status="pending", finished_at=None,
                      retry_at=None, recovery_attempts=0, status_note="Explicit recovery requested")
@@ -346,6 +414,8 @@ def execute(conn, actor, command: Command, service, scheduler):
             change(conn, kind, item_id, queue_rank=(index + 1) * 1024)
         row = get(conn, kind, identifier)
     elif op == "resume_assignment":
+        if get(conn, "run", old["run_id"]).get("orchestration") == "objective":
+            raise DomainError("session_settled", "Completed sessions stay settled; use a distinct bounded mission for new work or resume_session for suspended work", 409)
         require_admin(conn, actor)
         if old["status"] not in ("completed", "failed"):
             raise DomainError("invalid_transition", "Only a settled assignment can be explicitly resumed")
@@ -384,7 +454,7 @@ def execute(conn, actor, command: Command, service, scheduler):
         values = {key: old[key] for key in AssignmentCreate.model_fields}
         values.update(args)
         parsed = AssignmentCreate.model_validate(values)
-        from .service import FUNCTIONS
+        from .missions.service import FUNCTIONS
         if set(parsed.functions) - FUNCTIONS:
             raise DomainError("unknown_function", "Functions must exist in the pinned catalog", 422)
         condition = parsed.start_condition.model_dump(mode="json") if parsed.start_condition else None
@@ -417,6 +487,8 @@ def execute(conn, actor, command: Command, service, scheduler):
             if not isinstance(args["enabled"], bool):
                 raise DomainError("invalid_arguments", "enabled must be a boolean", 422)
             updates["enabled"] = args["enabled"]
+            if get(conn, "run", old["run_id"]).get("orchestration") == "objective":
+                updates["pause_reason"] = None if args["enabled"] else "operator"
         if args.get("no_progress"):
             count = old["no_progress_count"] + 1
             fallback = datetime.now(timezone.utc) + timedelta(seconds=min(3600, old["cooldown_seconds"] * 2 ** min(count, 8)))
@@ -436,7 +508,17 @@ def execute(conn, actor, command: Command, service, scheduler):
         # still controls when a host may claim it.  The scheduler's duplicate
         # guard makes retries of the same command idempotent.
         if args.get("enabled") is True and not old["enabled"]:
-            scheduler.replenish(conn, actor, row)
+            campaign = get(conn, "run", row["run_id"])
+            if campaign.get("orchestration") == "objective":
+                from .execution.objectives import ensure_successor
+                pending = ensure_successor(scheduler, conn, campaign, row)
+                if pending:
+                    change(conn, "assignment", pending["id"], pause_reason=None)
+            else:
+                scheduler.replenish(conn, actor, row)
+        elif args.get("enabled") is False and get(conn, "run", old["run_id"]).get("orchestration") == "objective":
+            conn.execute(update(tables["assignment"]).where(tables["assignment"].c.automation_id == identifier,
+                tables["assignment"].c.status == "pending").values(pause_reason="Planner automation paused explicitly"))
     elif op == "retry_publication":
         check_args(args, set())
         if old["status"] != "failed":
@@ -448,7 +530,7 @@ def execute(conn, actor, command: Command, service, scheduler):
         check_args(args, {"assignment_id", "subscribed"}, {"assignment_id", "subscribed"})
         if not isinstance(args["subscribed"], bool):
             raise DomainError("invalid_arguments", "subscribed must be a boolean", 422)
-        from .communications import subscribe
+        from .integrations.communications import subscribe
         from .models import SubscriptionCreate
         return subscribe(conn, actor, SubscriptionCreate(assignment_id=args["assignment_id"],
             subject={"kind": "discussion", "id": identifier}, mode="digest" if args["subscribed"] else "muted"), service)

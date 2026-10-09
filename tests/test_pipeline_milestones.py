@@ -11,16 +11,15 @@ import pytest
 from sqlalchemy import select
 
 from archon_horizon.pipeline import models
-from archon_horizon.pipeline import milestone_jobs
+from archon_horizon.pipeline.projects import milestone_jobs
 from archon_horizon.pipeline.auth import Actor
-from archon_horizon.pipeline.catalog import create_catalog
+from archon_horizon.pipeline.projects.catalog import create_catalog
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.milestone_sources import source_manifest, milestone_table
-from archon_horizon.pipeline.milestones import (AcceptBaseline, CheckReport, CheckSubmission, accept_baseline,
-    register_check, require_baseline, projected_manifest, review_panel, objective_view)
-from archon_horizon.pipeline.records import create, change, get, object_ref, snapshot
+from archon_horizon.pipeline.projects.milestone_sources import source_manifest, milestone_table
+from archon_horizon.pipeline.projects.milestones import AcceptBaseline, CheckReport, CheckSubmission, accept_baseline, register_check, require_baseline, projected_manifest, review_panel, objective_view
+from archon_horizon.pipeline.persistence.records import create, change, get, object_ref, snapshot
 from archon_horizon.pipeline.roadmap_index import index_snapshot
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.schema import tables
 from archon_horizon.pipeline.worker.lean_build import LeanBuildPolicy
 from archon_horizon.pipeline.worker.milestone_verify import verify
 from archon_horizon.pipeline.worker.milestone_jobs import execute as execute_verification
@@ -232,7 +231,7 @@ def test_reviewed_baseline_human_gate_launch_and_truthful_proof_status(world, re
     assert before['nodes'][0]['proof_status'] == 'open' and before['current_baseline_id'] is None
     baseline = accept_baseline(world.conn, world.actor, world.service, proposed)
     require_baseline(world.conn, baseline)
-    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(mission_id=world.mission['id'],
+    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(orchestration="legacy", mission_id=world.mission['id'],
         host_ids=[world.host['id']], phase={'kind': 'formalization', 'roadmap_snapshot_id': baseline['id']}))
     assert run['adopted_roadmap_snapshot_id'] == baseline['id']
     # A self-reported complete claim cannot establish proof closure.
@@ -390,7 +389,8 @@ def test_real_lean_skeleton_and_hidden_definition_admission(tmp_path):
         target.write_text(text)
     command('git', 'add', '.')
     command('git', 'commit', '-qm', 'Skeleton')
-    policy = LeanBuildPolicy(root=tmp_path / 'build', minimum_free_bytes=0, timeout_seconds=90)
+    # The full Lean environment audit is sensitive to shared-filesystem latency.
+    policy = LeanBuildPolicy(root=tmp_path / 'build', minimum_free_bytes=0, timeout_seconds=240)
     checked = verify(root, base, policy)
     assert checked['kind'] == 'contract'
     assert checked['targets']['Example.result'] == ['sorryAx']

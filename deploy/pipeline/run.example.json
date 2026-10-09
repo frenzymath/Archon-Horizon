@@ -2,11 +2,8 @@
   "schema_version": 1,
   "id": "aeb409f1-0a4a-4c2e-a468-e7548a778a2a",
   "run": {
-    "mission_id": "00000000-0000-0000-0000-000000000001",
-    "phase": {
-      "kind": "preprocessing",
-      "roadmap_document_id": "00000000-0000-0000-0000-000000000002"
-    },
-    "host_ids": ["00000000-0000-0000-0000-000000000003"]
+    "objective_id": "00000000-0000-0000-0000-000000000002",
+    "orchestration": "objective",
+    "auto_advance": true
   }
 }

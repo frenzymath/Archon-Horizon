@@ -7,10 +7,10 @@ from sqlalchemy import func, insert, select
 
 from archon_horizon.pipeline.auth import authenticate
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.provider_events import child_state_ref, project_observation
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.reviewer_invocations import ReviewerAttach, ReviewerCancel, ReviewerPrepare, attach, cancel, prepare, read
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.providers.provider_events import child_state_ref, project_observation
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.review.invocations import ReviewerAttach, ReviewerCancel, ReviewerPrepare, attach, cancel, prepare, read
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 
@@ -104,13 +104,13 @@ def test_prepare_exposes_pinned_check_and_distinct_matching_verification_job(wor
     assert evidence["kind"] == kind and evidence["status"] == "passed"
     assert evidence["source_commit_oid"] == review["item"]["head_commit_oid"]
     assert evidence["base_commit_oid"] == "b" * 40 and evidence["compiled"] is True
-    assert evidence["check_url"] == f"/api/v3/milestones/checks/{checked['id']}"
+    assert evidence["check_url"] == f"/api/v3/lean/checks/{checked['id']}"
     if job_state == "completed":
         assert evidence["job"] == {"id": str(job["id"]), "status": "completed",
-                                   "url": f"/api/v3/milestones/verifications/{job['id']}"}
+                                   "url": f"/api/v3/lean/verifications/{job['id']}"}
     else:
         assert "job" not in evidence
-    assert f"/api/v3/milestones/verifications/{checked['id']}" not in prepared["prompt"]
+    assert f"/api/v3/lean/verifications/{checked['id']}" not in prepared["prompt"]
     assert "only for a concrete concern" in prepared["prompt"]
     assert "does not establish semantic correctness" in prepared["prompt"]
 
@@ -127,7 +127,7 @@ def test_prepare_omits_stale_check_instead_of_inventing_current_coverage(world, 
     assert manifest["milestone_discovery"] == {
         "url": f"/api/v3/forge-items/{review['item']['id']}/inspect?view=reviews&expected_head_oid={'a' * 40}&limit=1",
         "check_id_field": "review_readiness.panel.check_id"}
-    assert "/api/v3/milestones/checks/{check_id}" in prepared["prompt"]
+    assert "/api/v3/lean/checks/{check_id}" in prepared["prompt"]
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
@@ -152,7 +152,7 @@ def test_prepare_discovers_matching_pending_verification_before_receipt(world, r
     assert "milestone_evidence" not in manifest
     assert manifest["milestone_discovery"]["pending_job"] == {
         "id": str(matching["id"]), "status": status,
-        "url": f"/api/v3/milestones/verifications/{matching['id']}",
+        "url": f"/api/v3/lean/verifications/{matching['id']}",
         "source_commit_oid": "a" * 40, "base_commit_oid": "b" * 40}
     assert all(str(job["id"]) not in prepared["prompt"] for job in rejected)
     assert "Continue semantic and source assessment while verification runs" in prepared["prompt"]

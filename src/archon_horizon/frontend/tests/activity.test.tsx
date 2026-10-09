@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { activityDuration, activityLink, AdmissionDetails, currentMainSession, EventTimeline, groupActivityEvents, runSlotCapacity, sessionCounts, sessionStatus, sessionTree, type ActivityEvent, type ActivitySession } from "../src/components/ActivityTab";
+import { GoalLedgerView, activityDuration, activityLink, AdmissionDetails, currentMainSession, EventTimeline, groupActivityEvents, runSlotCapacity, sessionCounts, sessionStatus, sessionTree, type ActivityEvent, type ActivitySession } from "../src/components/ActivityTab";
 import { capabilityHref } from "../src/utils/capabilityLinks";
 import { activityContextNodes, activityEventDetails, activityEventTitle, activityNodes, activityNoticeSummary, activityNotices, gitTransferBursts } from "../src/utils/activityPresentation";
 import { activityCommand, type ActivityRevision } from "../src/pipeline/DesktopActivity";
@@ -382,4 +382,25 @@ test("Git protocol bursts keep raw exchanges and never merge failure or session 
   const events = [transfer, { ...transfer, id: "2" }, { ...transfer, id: "3", session_id: "another" }, failed, { ...transfer, id: "4", data: { ...transfer.data, repository: "different" } }];
   assert.deepEqual(gitTransferBursts(events).map(burst => burst.map(item => item.id)), [["git", "2"], ["3"], ["failed"], ["4"]]);
   assert.equal(gitTransferBursts([transfer, { ...transfer, created_at: "2026-09-07T03:01:00Z" }]).length, 2);
+});
+
+
+test("goal ledger distinguishes delegation and keeps settled history collapsed", () => {
+  const html = renderToStaticMarkup(<GoalLedgerView projectId="project" ledger={{mission: "Deliver a proof",
+    acceptance_criteria: ["Source checked"], items: [
+      {id: "open", number: 1, description: "Investigate the obstruction", status: "open", comments: []},
+      {id: "delegated", number: 2, description: "Prove helper", status: "handled", resolution: {assignment_ids: ["owner"]}},
+    ]}} />);
+  assert.match(html, /Outstanding \(1\)/);
+  assert.match(html, /<details><summary>Settled history \(1\)<\/summary>/);
+  assert.match(html, /Delegated/);
+  assert.match(html, /aria-label="Responsible sessions"/);
+  assert.match(html, /session=owner/);
+  assert.match(html, /Delegated session 1/);
+});
+
+test("resuming a paused durable session preserves its revision and records a diagnosis", () => {
+  const records = new Map<string, ActivityRevision>([["session", {id: "session", revision: 9, status: "paused"}]]);
+  assert.deepEqual(activityCommand("/dashboard/activity/sessions/session/resume", {method: "POST", body: JSON.stringify({note: "Credential repaired"})}, records, true),
+    {operation: "resume_session", target_id: "session", expected_revision: 9, args: {note: "Credential repaired"}});
 });

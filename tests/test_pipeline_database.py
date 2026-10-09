@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-from archon_horizon.pipeline.database import Database
-from archon_horizon.pipeline.schema import metadata, tables
+from archon_horizon.pipeline.persistence.database import Database
+from archon_horizon.pipeline.persistence.schema import metadata, tables
 
 
 @pytest.fixture(scope="module")
@@ -81,11 +81,62 @@ def test_database_requires_explicit_postgres_and_valid_schema():
 
 def test_full_migration_is_explicit_repeatable_and_current(database):
     database.migrate()
-    assert database.check_revision() == "0027_review_retry_recovery"
+    assert database.check_revision() == "0031_reference_files"
     with database.transaction() as conn:
         names = set(conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"),
                                  {"schema": database.schema}).scalars())
         assert names == set(metadata.tables) | {"alembic_version"}
+
+
+def test_optional_subagent_migration_preserves_existing_limits_and_defaults_new_bindings():
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy.schema import DropSchema
+    from archon_horizon.pipeline._resources import MIGRATIONS_ROOT
+
+    url = os.environ.get("HORIZON_PIPELINE_TEST_URL")
+    if not url:
+        pytest.skip("set HORIZON_PIPELINE_TEST_URL to an isolated PostgreSQL test database")
+    schema = "subagent_migration_" + uuid4().hex
+    db = Database(url, schema=schema)
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_ROOT))
+    config.attributes["schema"] = schema
+    try:
+        with db.engine.begin() as conn:
+            conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+            config.attributes["connection"] = conn
+            command.upgrade(config, "0029_agent_planning")
+            host = put(conn, "host", slug="migration-host", display_name="Migration host",
+                workspace_root="/work", scratch_root="/scratch", sandbox={"mode": "unrestricted"})
+            for limit in (0, 3):
+                harness = put(conn, "harness", slug=f"migration-harness-{limit}", adapter="codex_exec",
+                    adapter_version="1", provider_version="1", model_options={}, settings={})
+                conn.execute(insert(tables["host_harness"]).values(host_id=host, harness_id=harness,
+                    executable_path="/bin/codex", provider_home="/provider", credential_ref="secret:provider",
+                    execution_slots=1, max_parallel_subagents=limit))
+            quota = put(conn, "resource_limit", kind="provider_account", slug="existing-account", max_concurrent=2)
+        db.migrate()
+        with db.transaction() as conn:
+            binding = tables["host_harness"]
+            assert list(conn.execute(select(binding.c.max_parallel_subagents)
+                .order_by(binding.c.max_parallel_subagents)).scalars()) == [0, 3]
+            harness = put(conn, "harness", slug="migration-harness-default", adapter="codex_exec",
+                adapter_version="1", provider_version="1", model_options={}, settings={})
+            value = conn.execute(insert(binding).values(host_id=host, harness_id=harness,
+                executable_path="/bin/codex", provider_home="/provider", credential_ref="secret:provider",
+                execution_slots=1).returning(binding.c.max_parallel_subagents)).scalar_one()
+            assert value is None
+            assert conn.execute(select(tables["resource_limit"].c.max_concurrent)
+                .where(tables["resource_limit"].c.id == quota)).scalar_one() == 2
+            put(conn, "resource_limit", kind="provider_account", slug="uncapped-guard", max_concurrent=None)
+            with pytest.raises(IntegrityError), conn.begin_nested():
+                put(conn, "resource_limit", kind="build_pool", slug="invalid-build-pool", max_concurrent=None)
+    finally:
+        with db.engine.begin() as conn:
+            conn.execute(DropSchema(schema, cascade=True, if_exists=True))
+        db.close()
 
 
 def test_revision_timestamp_and_immutable_identity(conn, graph):

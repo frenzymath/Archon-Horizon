@@ -12,16 +12,24 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from .models import SandboxPolicy
 from .worker.contracts import validate_tool_environment
 from .worker.lean_build import LeanBuildPolicy
+from .worker.resource_health import ResourcePolicy
 from .worker.cache_retention import (DEFAULT_MAX_BYTES, DEFAULT_MAX_AGE_SECONDS, DEFAULT_NATIVE_MAX_BYTES,
                                      DEFAULT_NATIVE_MIN_AGE_SECONDS)
 
 
 class LeanBuildConfig(BaseModel):
+    """Host build budgets, independent of the number of active agent sessions."""
+
     model_config = ConfigDict(extra="forbid")
     root: Path
+    # Start with one memory-heavy Lean build at a time. Increase only after
+    # measuring host capacity; agent slots do not imply extra compiler capacity.
     max_parallel_builds: int = Field(default=1, ge=1, le=64)
+    max_parallel_preparations: int = Field(default=1, ge=1, le=64)
+    # Defaults allow 30 min of compilation but only 30 s waiting for a build slot.
     timeout_seconds: float = Field(default=1800, gt=0, allow_inf_nan=False)
     queue_timeout_seconds: float = Field(default=30, ge=0, allow_inf_nan=False)
+    # A 1 GiB free-space floor gates managed builds; it is not a workspace quota.
     minimum_free_bytes: int = Field(default=1024**3, ge=0)
     # Lake's artifact cache is host-local and shared by every worker using the
     # same lean_build.root.  Disable it only for an explicit isolation reason.
@@ -38,6 +46,8 @@ class LeanBuildConfig(BaseModel):
 
 
 class LocalHarness(BaseModel):
+    """An explicitly enrolled provider executable, state location and sandbox."""
+
     model_config = ConfigDict(extra="forbid")
     id: UUID
     adapter: Literal["codex_exec", "claude_exec"]
@@ -68,7 +78,14 @@ class LocalHarness(BaseModel):
 
 
 class WorkerConfig(BaseModel):
+    """Validate the operator's worker JSON before opening credentials or journals.
+
+    Unknown fields are rejected so misspelled policy settings cannot silently
+    become defaults. See deploy/pipeline/worker.example.json for a concrete layout.
+    """
+
     model_config = ConfigDict(extra="forbid")
+    # Configuration shape version, independent of API v3 and package releases.
     schema_version: Literal[1] = 1
     host_id: UUID
     api_url: str
@@ -83,6 +100,8 @@ class WorkerConfig(BaseModel):
     journal_diagnostic_max_bytes: int = Field(default=512 * 1024**2, ge=2048)
     journal_diagnostic_retention_seconds: int = Field(default=7 * 86400, ge=1)
     journal_failure_diagnostic_retention_seconds: int = Field(default=30 * 86400, ge=1)
+    # One hour bounds a single provider turn; multiple turns still share the
+    # execution budget below. These are configurable defaults, not lease lengths.
     max_request_seconds: int = Field(default=3600, ge=60, le=86400)
     # Wall-clock budget for one physical execution episode. Provider
     # continuations within the lease share this budget.
@@ -94,15 +113,21 @@ class WorkerConfig(BaseModel):
     harnesses: list[LocalHarness] = Field(min_length=1)
     publication_remotes: dict[UUID, str] = Field(default_factory=dict)
     publication_header_files: dict[UUID, Path] = Field(default_factory=dict)
+    # Snapshot running work every five minutes for recovery. Publication polls
+    # every five seconds in a separate lane, so it need not consume an agent slot.
     checkpoint_seconds: float = Field(default=300, ge=30, le=86400)
     publication_poll_seconds: float = Field(default=5, ge=1, le=300)
     publication_concurrency: int = Field(default=1, ge=1, le=4)
     lean_build: LeanBuildConfig | None = None
+    lean_checks: bool = False
+    # Compatibility flag also permits old roadmap-contract verification jobs.
     milestone_checks: bool = False
+    resource_policy: ResourcePolicy = Field(default_factory=ResourcePolicy)
 
     @field_validator("api_url", "agent_api_url")
     @classmethod
     def api_origin(cls, value):
+        """Require TLS for remote bearer-token transport; allow HTTP on loopback."""
         if value is None:
             return value
         parsed = urlsplit(value)
@@ -122,13 +147,15 @@ class WorkerConfig(BaseModel):
 
     @model_validator(mode="after")
     def unique_and_scoped(self):
-        if self.milestone_checks and (self.lean_build is None or any(
+        if (self.lean_checks or self.milestone_checks) and (self.lean_build is None or any(
                 item.sandbox.mode != 'unrestricted' for item in self.harnesses)):
-            raise ValueError('milestone_checks requires a managed build policy and explicitly unrestricted build host')
+            raise ValueError('lean_checks/milestone_checks require a managed build policy and explicitly unrestricted build host')
         if len({item.id for item in self.harnesses}) != len(self.harnesses):
             raise ValueError("each local harness must have a unique id")
         for path in [*self.workspace_roots, *self.publication_header_files.values()]:
             self.absolute(path)
+        # Check both ancestor directions: mounting a parent can expose protected
+        # state just as directly as placing that state inside a workspace.
         for workspace in self.workspace_roots:
             for protected in [self.journal_root, self.token_file, *(item.provider_home for item in self.harnesses)]:
                 if workspace == protected or workspace in protected.parents or protected in workspace.parents:
@@ -152,11 +179,19 @@ class WorkerConfig(BaseModel):
 
 
 def private_text(path):
+    """Read one bounded secret line from a regular, owner-only credential file.
+
+    O_NOFOLLOW rejects a symlink at the final path component. Validate the opened
+    descriptor with fstat rather than checking a path and then reopening it, which
+    would allow that final file to be swapped between the check and read.
+    """
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd) as handle:
         info = os.fstat(handle.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
             raise ValueError(f"Credential file must be private and owned by this user: {path}")
+        # Read one character beyond the 64 Ki-character bound to detect oversize
+        # input without reading an arbitrarily large file into memory.
         value = handle.read(65537).strip()
         if not value or len(value) > 65536 or "\n" in value or "\r" in value:
             raise ValueError(f"Credential file must contain one nonempty line: {path}")
@@ -212,7 +247,8 @@ def load_worker(path: Path, *, progress_path: Path | None = None):
         checkpoint_seconds=config.checkpoint_seconds,
         publication_poll_seconds=config.publication_poll_seconds,
         publication_concurrency=config.publication_concurrency,
-        milestone_checks=config.milestone_checks,
+        lean_checks=config.lean_checks, milestone_checks=config.milestone_checks,
+        resource_policy=config.resource_policy,
         cleanup_target_free_percent=config.cleanup_target_free_percent,
         max_request_seconds=config.max_request_seconds,
         max_execution_seconds=config.max_execution_seconds,

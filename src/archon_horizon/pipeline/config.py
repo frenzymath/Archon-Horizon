@@ -94,12 +94,20 @@ class PipelineConfig(BaseModel):
     lease_seconds: int = Field(default=90, ge=15, le=600)
     host_stale_seconds: int = Field(default=120, ge=15, le=3600)
     scheduler_interval_seconds: float = Field(default=2, ge=0.1, le=60)
+    # Model planning has its own cadence; the cheap scheduler poll is not a
+    # request to spend another agent session on an unchanged frontier.
+    planner_min_interval_seconds: int = Field(default=120, ge=1, le=86400)
+    planner_max_idle_seconds: int = Field(default=1800, ge=1, le=86400)
+    planner_max_unchanged_passes: int = Field(default=3, ge=1, le=100)
     automation_idle_recheck_seconds: int = Field(default=300, ge=0, le=86400)
     coordination_stall_seconds: int = Field(default=1800, ge=60, le=86400)
     coordination_repeat_passes: int = Field(default=3, ge=2, le=100)
     connector_interval_seconds: int = Field(default=30, ge=5, le=3600)
     session_seconds: int = Field(default=12 * 3600, ge=60, le=7 * 86400)
     max_request_bytes: int = Field(default=1024**2, ge=1024, le=16 * 1024**2)
+    # Source documents stream to disk; this is independent of the small JSON
+    # request/journal limit and cannot exceed the artifact store's blob bound.
+    max_reference_file_bytes: int = Field(default=64 * 1024**2, ge=1, le=64 * 1024**2)
     storage: StoragePolicy = Field(default_factory=StoragePolicy)
     search_enabled: bool = False
     search_allowed_origins: list[str] = Field(default_factory=list)

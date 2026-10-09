@@ -4,9 +4,9 @@ import httpx
 import pytest
 
 from test_pipeline_api import api, api_database, auth
-from archon_horizon.pipeline.records import create
+from archon_horizon.pipeline.persistence.records import create
 
-from archon_horizon.pipeline.connectors import ConnectorFailure, ZulipClient
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ZulipClient
 
 
 def client_for(handler):
@@ -93,7 +93,7 @@ def test_discovery_api_uses_existing_project_binding_and_returns_canonical_links
             return httpx.Response(200, json={"topics": [{"name": "Earlier decision", "max_id": 99}]})
         return httpx.Response(200, json={"messages": [{"id": 99, "stream_id": 7,
             "subject": "Earlier decision", "content": "Use generic scalar fields"}], "found_oldest": True})
-    monkeypatch.setattr("archon_horizon.pipeline.connectors.ConnectorManager.remote_client",
+    monkeypatch.setattr("archon_horizon.pipeline.integrations.connectors.ConnectorManager.remote_client",
                         lambda self, integration: client_for(handler))
     response = client.get(f"/api/v3/discussions/{discussion['id']}/topics", headers=auth(token))
     assert response.status_code == 200, response.text
@@ -118,7 +118,7 @@ def test_discovery_denies_ungranted_project_before_remote_request(api, monkeypat
             channel_remote_id="7", topic="Existing", observed_at=datetime.now(timezone.utc))
     def forbidden(*args, **kwargs):
         raise AssertionError("No remote request before project authorization")
-    monkeypatch.setattr("archon_horizon.pipeline.connectors.ConnectorManager.remote_client", forbidden)
+    monkeypatch.setattr("archon_horizon.pipeline.integrations.connectors.ConnectorManager.remote_client", forbidden)
     for route in ("topics", "search?q=scalar"):
         response = client.get(f"/api/v3/discussions/{discussion['id']}/{route}", headers=auth(token))
         assert response.status_code == 403, response.text

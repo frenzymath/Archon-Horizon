@@ -37,7 +37,8 @@ def repository(root, files):
 def test_trusted_verification_builds_repository_without_lake_gitignore(tmp_path):
     root = tmp_path / 'roadmap'
     base, commit = repository(root, sources())
-    policy = LeanBuildPolicy(root=tmp_path / 'build', minimum_free_bytes=0, timeout_seconds=90)
+    # Allow slow shared-filesystem metadata access during real Lean audits.
+    policy = LeanBuildPolicy(root=tmp_path / 'build', minimum_free_bytes=0, timeout_seconds=240)
     daemon = SimpleNamespace(harnesses={'build': SimpleNamespace(lean_build=policy)},
         workspace_roots=(tmp_path,), publication_remotes={}, _publication_headers={},
         transport=SimpleNamespace(_post=lambda *args: SimpleNamespace(raise_for_status=lambda: None)),

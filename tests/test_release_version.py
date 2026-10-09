@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "version.py"
 
@@ -48,3 +49,20 @@ def test_check_reports_drift(tmp_path: Path) -> None:
     result = _run(root, "--check")
     assert result.returncode == 1
     assert "frontend package: 9.9.9" in result.stderr
+
+
+def test_prerelease_badges_can_advance_and_return_to_stable(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    for version in ("0.2.0-alpha.1", "0.2.0-beta.1", "0.2.0"):
+        assert _run(root, version).returncode == 0
+        assert _run(root, "--check").returncode == 0
+        assert f"version-{version.replace('-', '--')}-blue" in (root / "README.md").read_text("utf-8")
+
+
+@pytest.mark.parametrize("broken", ["README.md", "src/archon_horizon/frontend/package-lock.json"])
+def test_invalid_input_preserves_all_version_files(tmp_path: Path, broken: str) -> None:
+    root = _fixture(tmp_path)
+    (root / broken).write_text("invalid input", "utf-8")
+    before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert _run(root, "0.2.0-alpha.1").returncode != 0
+    assert {path: path.read_bytes() for path in before} == before

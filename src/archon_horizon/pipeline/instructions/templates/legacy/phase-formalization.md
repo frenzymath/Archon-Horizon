@@ -1,0 +1,1 @@
+Prove the adopted milestones in the shared workspace and record source-bound graph progress. The workspace is free working space; graph and contract changes are reviewed in the roadmap. Preserve conditional proof status. Contract changes require strict review and explicit adoption.

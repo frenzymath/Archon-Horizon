@@ -8,6 +8,8 @@ const macroName = /^\\[A-Za-z]+$/;
 const prohibitedMacroCommand = /\\(?:def|gdef|edef|xdef|newcommand|renewcommand|providecommand|require|include|input)\b/i;
 
 function validatedMathMacros(value: unknown): MathMacros {
+  // These input budgets keep untrusted document macros small. KaTeX also gets
+  // maxExpand=1000 and trust=false at rendering sites; neither is a TeX engine.
   if (value == null) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("math_macros must be a mapping from TeX macro names to expansions.");
   const entries = Object.entries(value);
@@ -41,6 +43,8 @@ export function splitDocument(raw: string): ParsedDocument {
   try {
     const document = parseYamlDocument(rest.slice(0, closing.index), { uniqueKeys: true });
     if (document.errors.length) throw document.errors[0];
+    // Bound YAML alias expansion rather than allowing recursive/expansive input
+    // to consume the browser's memory. 50 follows the parser's small-input use.
     const metadata = document.toJS({ maxAliasCount: 50 }) ?? {};
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("YAML frontmatter must be a mapping of field names to values.");
     validatedMathMacros((metadata as DocumentMetadata).math_macros);

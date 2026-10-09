@@ -17,7 +17,16 @@ after node rewrites. Dashboard graph, directory and node views accept
 destination is the default, with an explicit repository selector in the dashboard.
 This is a Git source format and derived projection, not a second editable database.
 
-For [milestone projects](pipeline-milestones.md), the index also retains bounded
+Default graph projects treat milestones as ordinary nodes with the `milestone`
+label. Agents choose names and additional metadata through roadmap PRs.
+The graph displays milestones as stars, while color continues to show progress.
+Historical `type: milestone` nodes receive the same marker. The **Nodes** page
+combines text search, milestone membership, node type, and progress filters before
+pagination. Types come from the project's indexed nodes, including custom types.
+Directory API filters are `search`, `milestone=true` or `false`, `node_type`, and
+`label`; progress is evaluated for the selected implementation repository.
+
+For explicitly retained [milestone projects](pipeline-milestones.md), the index also retains bounded
 Lean sources, Lake/toolchain pins and `milestones/**/*.md`. It validates typed
 objective/milestone locators, objective-scoped IDs, ownership links and dependency
 cycles without running Lean inside the API. Trusted build receipts and reviewed

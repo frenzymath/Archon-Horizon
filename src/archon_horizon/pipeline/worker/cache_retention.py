@@ -1,4 +1,9 @@
-"""Bound the rebuildable Lake artifact store without touching Git or worktrees."""
+"""Bound the rebuildable Lake artifact store without touching Git or worktrees.
+
+Space budgets count physical allocation via POSIX st_blocks (512-byte units),
+not logical file length, which can overstate sparse files. Allocation reports
+can lag recent writes on network filesystems; these checks use the current report.
+"""
 
 from contextlib import contextmanager
 import fcntl
@@ -12,8 +17,13 @@ import subprocess
 import time
 
 
+# Configurable retention defaults, expressed in binary GiB and wall-clock seconds.
+# The shared Lake artifact store targets 10 GiB and expires entries after 7 days.
+# Its leases protect active managed builds; these values are not total disk quotas.
 DEFAULT_MAX_BYTES = 10 * 1024**3
 DEFAULT_MAX_AGE_SECONDS = 7 * 86400
+# Native outputs have a separate per-checkout 4 GiB target. Their 7-day minimum
+# age protects recent work even above the target, unlike the artifact expiry above.
 DEFAULT_NATIVE_MAX_BYTES = 4 * 1024**3
 DEFAULT_NATIVE_MIN_AGE_SECONDS = 7 * 86400
 

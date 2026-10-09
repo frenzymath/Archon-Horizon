@@ -47,6 +47,31 @@ merge verified exports with its existing bibliography using a BibTeX parser;
 preserve custom fields and the project's selected citation convention. Update
 existing keys when correcting metadata rather than duplicating citations.
 
+## Store and consult source documents
+
+Check the source files already attached to a reference before fetching another
+copy. Preserve both the paper and matching original TeX when available:
+
+```sh
+horizon-pipeline agent reference-files <reference-id>
+horizon-pipeline agent reference-upload <reference-id> /absolute/paper-v2.pdf --description "arXiv v2" --source-url https://arxiv.org/pdf/2601.00001v2
+horizon-pipeline agent reference-upload <reference-id> /absolute/source-v2.tar.gz --description "Original TeX for v2"
+horizon-pipeline agent reference-download <reference-id> <file-id> --output /absolute/scratch/paper-v2.pdf
+```
+
+Use `--cursor` to list another attachment page. Uploads retain their exact bytes
+and request identity for replay; inspect `agent pending` after a failed transfer
+rather than enqueueing repeated copies. Downloads verify SHA-256 and need an
+unused absolute output filename. Bibliographic source URLs are provenance; the
+reference tool itself sends credentials only to Horizon.
+
+The default per-file limit is 64 MiB; the file list returns the installation's
+limit. PDFs and UTF-8 text can also be previewed in the dashboard. Archives and
+other formats are stored as original bytes without execution or extraction.
+Record the file ID, matching version, and checksum with source-facing evidence
+when needed. Inspect the rendered PDF for mathematical details and inspect TeX
+macros and neighboring hypotheses before translating a statement.
+
 ## Blueprint and source notes
 
 Inspect the destination's existing blueprint conventions before editing it.

@@ -6,23 +6,33 @@
 #   * "Co-authored-by: … Claude/Anthropic …" trailers
 #   * "Generated with [Claude Code]…" / "🤖 Generated with …" lines
 #
-# Enable once per clone (see CONTRIBUTING.md):
+# Enable once per clone:
 #   git config core.hooksPath .githooks
 #
-msg_file="$1"
+msg_file="${1-}"
 [ -n "$msg_file" ] && [ -f "$msg_file" ] || exit 0
 
-tmp="$(mktemp)" || exit 0
+# Keep scratch beside the Git message for disk-backed, atomic replacement.
+# Any helper failure leaves the original message intact and permits the commit.
+tmp="$(mktemp -- "${msg_file}.horizon.XXXXXX")" || exit 0
+trap 'rm -f -- "$tmp"' 0
+trap 'exit 0' HUP INT TERM
 
-# 1) Drop the offending lines (case-insensitive).
-grep -viE '^[[:space:]]*Co-authored-by:.*(claude|anthropic)' "$msg_file" \
-  | grep -viE 'generated with \[?claude code' \
-  | grep -viE '^[[:space:]]*🤖[[:space:]]*generated with' \
-  > "$tmp"
+# Filter once, preserving interior blank lines and trimming trailing ones.
+if ! awk '
+    {
+        lower = tolower($0)
+        if (lower ~ /^[[:space:]]*co-authored-by:.*(claude|anthropic)/ ||
+            lower ~ /generated with \[?claude code/ ||
+            lower ~ /^[[:space:]]*🤖[[:space:]]*generated with/)
+            next
+        line[++count] = $0
+        if (NF) last = count
+    }
+    END { for (i = 1; i <= last; i++) print line[i] }
+' < "$msg_file" > "$tmp"; then
+    exit 0
+fi
 
-# 2) Collapse any trailing blank lines the removals left behind.
-awk 'NF{last=NR} {line[NR]=$0} END{for (i=1; i<=last; i++) print line[i]}' \
-  "$tmp" > "$msg_file"
-
-rm -f "$tmp"
+mv -f -- "$tmp" "$msg_file" || exit 0
 exit 0

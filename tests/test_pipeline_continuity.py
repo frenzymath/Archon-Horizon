@@ -7,9 +7,9 @@ from sqlalchemy import func, insert, select, update
 from archon_horizon.pipeline import models
 from archon_horizon.pipeline.auth import Actor
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.schema import tables
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle as worker_event
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.persistence.schema import tables
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle as worker_event
 from test_pipeline_service import service_database, world
 
 
@@ -193,7 +193,7 @@ def test_delivery_checkpoint_wakes_on_partial_result_or_new_control_notice(world
         world.conn.execute(update(tables["outbox_operation"]).where(
             tables["outbox_operation"].c.id == operations[0]["id"]).values(status="failed", updated_at=after_checkpoint))
     else:
-        from archon_horizon.pipeline.notifications import OperatorNotice, operator_notice
+        from archon_horizon.pipeline.execution.notifications import OperatorNotice, operator_notice
         notice = operator_notice(world.conn, world.actor, assignment["id"],
             OperatorNotice(message="Continue the independent API repair while delivery is investigated"))
         world.conn.execute(update(tables["notification"]).where(tables["notification"].c.id == notice["id"]).values(
@@ -567,7 +567,7 @@ def test_postprocessing_new_workspace_uses_run_source_pin_not_later_head(world):
     source = world.conn.execute(select(tables["workspace"]).where(tables["workspace"].c.host_id == world.host["id"])
         .order_by(tables["workspace"].c.created_at, tables["workspace"].c.id).limit(1)).mappings().one()
     change(world.conn, "workspace", source["id"], head_commit_oid="b" * 40)
-    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(mission_id=world.mission["id"],
+    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(orchestration="legacy", mission_id=world.mission["id"],
         host_ids=[world.host["id"]], phase={"kind": "postprocessing", "source_workspace_id": source["id"],
             "source_commit_oid": "b" * 40, "target_repository_id": library["id"]}))
     world.disable_automations(run)

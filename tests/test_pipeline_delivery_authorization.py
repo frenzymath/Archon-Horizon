@@ -7,12 +7,12 @@ import pytest
 from sqlalchemy import insert
 
 from archon_horizon.pipeline.auth import Actor, authenticate, require_project
-from archon_horizon.pipeline.connectors import ConnectorFailure, ConnectorManager
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ConnectorManager
 from archon_horizon.pipeline.errors import DomainError
 from archon_horizon.pipeline.models import ForgeComment
-from archon_horizon.pipeline.records import change, create
-from archon_horizon.pipeline.reviews import queue_comment
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create
+from archon_horizon.pipeline.review.decisions import queue_comment
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 

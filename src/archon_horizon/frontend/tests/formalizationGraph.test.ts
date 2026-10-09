@@ -106,15 +106,26 @@ test("simultaneous node labels and open PRs appear on the DAG", () => {
   assert.match(dot, /fillcolor="#f6ebcf"/);
 });
 
-test("the milestone label adds an orthogonal double outline without changing progress labels", () => {
+test("milestones render as stars without changing progress colors, including historical types", async () => {
   const milestone = { id: "m05", title: "M05: Hamilton-Ivey pinching", status: "open", labels: ["milestone"] };
   assert.equal(nodeHasLabel(milestone, "milestone"), true);
   assert.equal(nodeGraphStatus(milestone), "open");
   const dot = formalizationDot(buildFormalizationGraph({ nodes: [milestone] }, milestone.id));
   assert.match(dot, /color="#2f789b"/);
-  assert.match(dot, /peripheries=2/);
+  const renderer = await instance();
+  const svg = renderer.renderString(dot, {format: "svg"});
+  assert.match(svg, /<polygon/);
+  assert.doesNotMatch(svg, /<ellipse/);
+  assert.match(dot, /shape=star/);
   assert.equal(nodeHasLabel({ metadata: { labels: ["Milestone"] } }, "milestone"), true);
   assert.equal(nodeHasLabel({ labels: ["reviewed"] }, "milestone"), false);
+  for (const item of [{kind: "milestone"}, {metadata: {type: "milestone"}}, {kind: "definition", labels: ["milestone"]}]) {
+    const node = {id: "m", ...item, labels: [...(item.labels || []), "formally_proved"]};
+    assert.equal(nodeHasLabel(node, "milestone"), true);
+    const rendered = renderer.renderString(formalizationDot(buildFormalizationGraph({nodes: [node]})), {format: "svg"});
+    assert.match(rendered, /<polygon fill="#9ed9b4"/);
+    assert.doesNotMatch(rendered, /<ellipse/);
+  }
 });
 
 test("graph colors follow the backend formalized status without requiring a separate attestation", () => {
@@ -137,6 +148,14 @@ test("recorded current checks render as candidates without assigning formally_pr
   assert.doesNotMatch(dot, /fillcolor="#9ed9b4"/);
   assert.equal(nodeGraphStatus({ status: "open", completion: { source_reported_complete: true } }), "open");
   assert.equal(nodeGraphStatus({ status: "open", completion: { historical_kernel_checked: true } }), "open");
+});
+
+test("a kernel_checked-only label renders safely without assigning formal proof", () => {
+  const node = {id: "checked-only", labels: ["kernel_checked"]};
+  assert.equal(nodeGraphStatus(node), "kernel_checked");
+  const dot = formalizationDot(buildFormalizationGraph({nodes: [node]}, node.id));
+  assert.match(dot, /fillcolor="#fcf4d9"/);
+  assert.doesNotMatch(dot, /fillcolor="#9ed9b4"/);
 });
 
 test("statement-aligned nodes render purple and retain formalized precedence", () => {

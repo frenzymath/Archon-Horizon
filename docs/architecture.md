@@ -4,6 +4,43 @@ Horizon has one control plane in `src/archon_horizon/pipeline`. The `horizon` an
 `horizon-pipeline` commands invoke its CLI. The API serves `/api/v3` and the React
 dashboard at `/pipeline`.
 
+The [objective orchestration contract](design/objective-orchestration.md)
+describes the design and migration boundaries for new objective-led runs.
+
+## Code Layout
+
+Python modules are grouped by responsibility. The package root retains the
+CLI/API entrypoints, configuration, authentication and shared request contracts;
+it is not a flat registry of every implementation module.
+
+| Package under `pipeline/` | Responsibility |
+| --- | --- |
+| `review/` | Contracts, review packets, pinned invocations, reviewer identities and maintainer decisions |
+| `integrations/` | Forgejo/Zulip access, browser identities and durable external delivery |
+| `missions/` | Mission ownership, scope, conditions and transactional domain services |
+| `execution/` | Queue admission, scheduler, execution events and coordination recovery |
+| `dashboard/` | Scoped read models and operator activity presentation |
+| `instructions/` | Instruction catalogs, prompt construction and bundle assembly |
+| `persistence/` | PostgreSQL schema, transactions, record primitives and immutable blobs |
+| `projects/` | Project setup, source documents, milestones, bibliography and search |
+| `operations/` | Installation diagnostics, storage, health, tracing and supervision |
+| `providers/` | Native event parsing, normalized observations and usage accounting |
+| `worker/` | Host execution, local journals, publication, sandbox and managed builds |
+
+Package initializers contain documentation rather than service imports. This
+keeps shared contracts and worker startup usable without server or scientific
+dependencies. Callers import the concrete module they need; grouping files
+does not itself enforce a dependency boundary or remove existing coupling.
+
+Skills, descriptors and Alembic history remain at `skills/`, `subagents/` and
+`migrations/`. Their loaders use `pipeline._resources` so moving a Python module
+does not change which assets it loads. The `roadmap_index` and `graph_progress`
+module commands retain their original entrypoints. Existing pinned instruction bundles remain immutable. Database changes use
+explicit migrations; the current schema is revision `0030_optional_subagent_limits`. Revision 0028 introduced
+objective queues; 0029 enables ordinary graph planning and evidence-backed phase
+transitions without requiring a milestone baseline; 0030 makes native subagent
+limits optional while preserving existing explicit settings.
+
 ## Durable State
 
 PostgreSQL stores projects, missions, runs, assignments, execution leases,
@@ -29,30 +66,41 @@ invariants prevent stale updates, cycles and unbounded delegation.
 
 ## Work And Maintenance
 
-New default runs start with one root maintainer. It chooses ready work, delegates
-independent tasks, reviews results, arranges repairs and closes the phase.
-Planning is an activity, not a required separate agent profile. Workers can
-delegate narrower work and use native helpers while retaining an integration
-owner. Parallel child maintainers are useful for independent review scopes.
+New launches use `orchestration: objective` and resolve a versioned roadmap
+`objective_id`. A short root mission supplies integration ownership; each session
+gets a distinct bounded mission. Work and Maintenance categories have independent
+queue bounds, slots, session/token budgets, harness/model defaults and retry
+policies. The role remains the permission boundary. Host/provider capacity is
+shared and reserves maintenance room when possible; one-slot hosts can alternate.
 
-The root maintainer is event-driven. It can checkpoint on a result and release
-execution capacity. The scheduler admits ready owners and wakes maintenance for
-changed work or a concrete recovery need; free slots alone are not a request for
-another coordination session. The default path does not use the separate planner
-refill, recurring orchestrator or legacy coordination-recovery admission loops.
-See [recovery](coordination-recovery.md) for deduplication and failure behavior.
+The scheduler starts one bounded Work planner. When it starts, exactly one queued
+successor is created under a different mission. Cadence starts at 120 seconds,
+increases with unchanged passes, and pauses after three unchanged passes by
+default. Meaningful objective, work, Forge or host admission changes wake idle
+planning. Explicit pauses survive those changes. The planner preserves existing
+owners, dispatches useful unowned work and diagnoses failures before repeating it.
 
-Existing configured automations remain supported. Explicit `orchestrated: true`
-runs retain their previous supervisor/planner/maintainer path; source updates do
-not rewrite live run configuration or retained instruction bundles. This is
-compatibility for existing deployments, not the recommended new-run workflow.
+An eligible roadmap/library PR or issue labelled `awaiting-review` has a durable
+review demand with a generation and one maintenance owner. Polling and duplicate
+webhooks reuse the owner. A worker can request a new review after a repair; stale
+label updates are rebased or repaired against durable demand. A completed review
+round can get a fresh owner for a later request. An interrupted round resumes its
+existing owner and keeps failure history. Workers can request other bounded
+maintenance decisions without gaining maintainer authority.
 
-The normal agent prompt carries the task, phase outcome and its open commitments.
-Supporting skills and helper descriptions are discovered on demand. Prepared
-reviewers receive their pinned packet and lifecycle without the generic work,
-planning and coordination startup. Reviewer invocation follows each configured
-descriptor: native children are collected by their parent; durable assignments
-own their review independently.
+The effective goal is the mission, acceptance criteria and open Markdown ledger.
+Comments, evidence and delegated owners remain structured. The dashboard puts
+outstanding work first and collapses settled history. A session may finish after
+faithful delegation; mission acceptance remains an integration decision. Removing
+required criteria needs a maintainer. A worker cannot enqueue its own mission or
+an exact whitespace-normalized copy under another name; semantic avoidance still
+needs maintainer judgment.
+
+Existing database rows keep `orchestration: legacy`; their automations, configured
+specialist requirements and pinned catalogs are preserved. New legacy launches
+must select that mode explicitly; fresh `orchestrated: true` launches are
+rejected. Legacy refill/recovery loops do not run alongside
+the objective planner for the same run.
 
 ### Operational Diagnosis
 
@@ -81,96 +129,39 @@ attention. This infrastructure remains necessary even with simpler agent roles.
 
 ## Phase Workflows
 
-Each phase uses the same worker, review and repair loop. The accepted artifact
-changes by phase. An operational audit is available from any step when a concrete
-anomaly appears; it is not a mandatory stage.
+All phases use the same session and queue lifecycle, with concise phase skills.
 
-### Preprocessing
-
-```mermaid
-flowchart TD
-    M[Root maintainer: choose milestone scope] --> W[Workers: graph, Lean statements and definitions]
-    W --> PR[Roadmap PR]
-    PR --> R[Maintainer and required independent reviewers]
-    PR --> V[Trusted checks at the pinned revision]
-    R --> G{Faithful contracts and required checks?}
-    V --> G
-    G -->|Specific corrections| W
-    G -->|Accept| I[Merge and index the accepted roadmap]
-    I --> C{Required milestone scope complete?}
-    C -->|No| M
-    C -->|Yes| F[Prepare exact-source baseline packet and finish]
-    F -. Separate operator action .-> H[Approve baseline and launch formalization]
-```
-
-The route is reviewed before contract acceptance. Contracts include the definitions
-needed to interpret the statements; compiling a weakened or circular statement
-does not establish quality. Preprocessing ends with its ready packet, not after
-the theorem proofs or while waiting indefinitely for human approval.
-
-### Main Formalization
-
-```mermaid
-flowchart TD
-    B[Adopted roadmap baseline] --> M[Maintainer: dependency-ready scope]
-    M --> W[Workers: proofs in the shared workspace]
-    W --> E[Published proof evidence and graph progress]
-    E --> R[Maintainer: review roadmap graph changes]
-    R --> G{Claims and dependencies supported?}
-    G -->|Specific corrections| W
-    G -->|Accept| U[Update accepted graph]
-    U --> C{Required proof outcomes complete?}
-    C -->|No: newly ready dependencies| M
-    C -->|Yes| F[Close mission and drain run]
-    W -. Contract correction .-> K[Strict contract review and explicit adoption]
-    K --> B
-```
-
-The workspace is free working space. There is no routine workspace-proof PR
-acceptance stage; the reviewed repository is the roadmap. Conditional proofs
-remain conditional until their admitted prerequisites are discharged.
-
-### Postprocessing
-
-```mermaid
-flowchart TD
-    S[Existing formalization and target library] --> M[Maintainer: coherent integration scope]
-    M --> W[Workers: reuse, adapt or remake source results]
-    W --> PR[Library PR with provenance and destination checks]
-    PR --> R[Maintainer and proportionate specialist review]
-    R --> G{Destination policy and public interfaces satisfied?}
-    G -->|Specific corrections| W
-    G -->|Accept| I[Merge and update library graph coverage]
-    I --> C{Requested library scope complete?}
-    C -->|No| M
-    C -->|Yes| F[Close mission and drain run]
-```
-
-Reuse sound proofs and matching verification evidence. A separate admitted
-statement skeleton is optional when the interface needs agreement; it is not a
-prerequisite for porting an already sound result. Reviews emphasize faithful
-meaning, useful definitions and compatibility with the destination library.
-
-## Tradeoffs And Validation
-
-| Choice | Benefit | Remaining responsibility or risk |
+| Phase | Intended outcome | Acceptance |
 | --- | --- | --- |
-| One root maintainer entrypoint | One owner for the next decision and phase closure | Large runs need disjoint child maintenance scopes to avoid a bottleneck |
-| On-demand native audit | Ordinary work avoids continuous supervision overhead | With no live parent, host recovery must make maintenance runnable |
-| Narrow mission tree | Smaller contexts and explicit responsibility | Shared interfaces and cross-branch graph dependencies still require integration judgment |
-| Short role instructions and focused skills | Fewer contradictory obligations and repeated startup calls | Useful API examples and exact reviewer packets must remain discoverable |
-| Durable receipts and obligations | Interrupted work retains evidence and an owner | Some explicit settlement calls remain; final prose alone cannot safely replace them |
+| Preprocessing | Literature/BibTeX, concise objective and milestone decomposition, concrete definitions and Lean statement skeletons | Reviewed roadmap strategy and source evidence proportionate to the objective |
+| Formalization | Complete requested outcomes in the workspace; propose graph and contract changes through roadmap PRs | Source-bound proof/dependency evidence and maintainer phase decision |
+| Postprocessing | Separate graph namespace with provenance; `Postprocessing/` workspace files; useful destination-library contributions | Library PRs with checked axiom closure, current-source review and accepted integration outcomes |
 
-Runtime tests establish particular properties: one outstanding owner, no repeated
-wake on unchanged evidence, event waits surviving checkpoints, recoverable failures
-retaining context, and strict review gates remaining in force. An offline agent
-walkthrough checks whether the instructions lead to the intended phase decisions.
-Neither establishes mathematical judgment or a wall-clock completion guarantee.
+New projects default to `workflow: graph`. A milestone is an ordinary node with
+its `milestone` display label; agents choose the route, statements and decomposition.
+Maintainers accept the phase strategy without a special compiler-certified planning
+baseline. Existing `workflow: milestones` projects retain their strict policy;
+a human can explicitly switch an idle project to `graph` through a revision-checked
+project update. Active-run changes are rejected. No migration silently converts
+accepted project contracts.
 
-A fresh Luna benchmark should measure time to the accepted phase artifact, review
-rounds per changed head, time spent producing or reviewing evidence, and idle time
-without a justified producer. Success means faithful reviewed contracts and clean
-closure, not more sessions, a larger queue or an apparently busy dashboard.
+New policies make specialists discretionary. Required external policy, checks,
+authority and unresolved findings still apply. Destination-library checks derive
+changed modules from the exact base/head and audit every declaration's axiom
+closure. Build/dependency changes expand that scope to all committed Lean modules.
+The checker fails unsupported import layouts rather than omitting files. Roadmap
+skeletons can contain admissions; destination library contributions cannot.
+
+Maintainers use `accept_phase` with evidence. Automatic transitions wait for the
+accepting session, physical stops and deliveries to settle. An interrupted accepting
+session resumes before transition. `auto_advance: false` pauses for a human boundary.
+A blueprint objective can request preprocessing alone. Final acceptance closes the
+root only after its children and commitments are accounted for, then drains the run.
+
+Natural-language coverage, good decomposition and mission satisfaction remain
+judgments. A ledger can verify ownership and evidence links; it cannot establish
+mathematical meaning. Lean receipts establish particular elaboration/axiom facts
+at pinned inputs and do not replace semantic review.
 
 ## Workers And Integrations
 
@@ -188,8 +179,8 @@ creating an endless sequence of fresh blockers.
 Unfinished retained sessions reserve their worktree even while checkpointed.
 Capable workers provision separate worktrees from pinned local Git objects when
 the reusable pool is exhausted, acknowledging preparation before provider launch.
-Persistent roadmap checkouts are prepared separately and verified with
-`verify-workspaces` before trusted milestone verification can use them. A
+Persistent roadmap checkouts for explicit compatibility milestone jobs are
+prepared separately and verified with `verify-workspaces` before use. A
 `preparing` database record alone neither clones a repository nor makes a local
 checkout available. Cleanup must preserve registered live workspaces, or update
 their availability before later admission.
@@ -209,3 +200,47 @@ of project truth.
 
 See [setup](pipeline-setup.md) for deployment and recovery procedures, and
 [the design specification](design/pipeline.md) for the intended domain model.
+
+## Resource Admission And Recovery
+
+Linux workers report available memory, effective cgroup memory/CPU quotas and
+memory, CPU and I/O pressure where readable. Conservative configurable thresholds
+pause new admissions without destroying active contexts. Unknown observations stay
+unknown. Compiler concurrency is independent of agent slots; the default managed
+build lane admits one heavy build at a time, with shared caches and bounded waits.
+Native delegation has no Horizon cap by default and does not reserve primary
+category or host slots. Shared provider quotas account for uncapped children as
+they are observed. An explicit child cap reserves capacity against category, host
+and provider limits before launch; that reservation survives uncertain stops.
+New objective launches create an account outage guard when no provider quota is
+configured. This guard has no normal concurrency cap; after a failure, recovery
+allows one probe at a time until the account is healthy again.
+
+Transient failures resume the same session with bounded jittered backoff. Recovery
+attempts survive continuations and explicit recovery. Exhausted or configuration
+failures preserve work with a visible pause reason. Shared provider-account circuits
+open after repeated failures and require an operator diagnosis/reset. Unknown
+physical stops hold reservations until confirmed; a timeout is not a stop receipt.
+
+A maintainer can retire a settled generated checkout. The server protects suspended
+owners, open commitments, unsettled publication and pinned phase inputs. The host
+then requires a clean tree and publication of every local commit to the durable
+visible branch. Cleanup is limited to one retired generated checkout per five-minute
+pass; failures retain the directory and a diagnostic. Existing cache retention
+removes only rebuildable leased artifacts and old native output, preserving sources.
+
+## Lean Verification And Compatibility
+
+General destination-library audits use `POST /api/v3/lean/verifications` with a
+ready library workspace and exact head/base commits. Poll the job by ID, then
+read its `check_id` at `/api/v3/lean/checks/{id}`. The host-only worker lane leases
+jobs and fences stale results; a receipt does not grant merge authority. Worker
+`lean_checks: true` advertises the generic lane. It requires the explicitly
+configured unrestricted managed-build profile, independently of agent slots.
+
+`projects/lean_checks.py` stores exact-source receipts and
+`worker/lean_verify.py` performs generic audits without milestone parsing. Legacy
+milestone routes, flags and immutable storage table names remain compatibility
+aliases. They do not impose milestone policy on a graph project. Fresh
+`orchestrated: true` launches are rejected; saved legacy automation profiles live
+in `execution/legacy_automation.py` so historical runs remain readable.

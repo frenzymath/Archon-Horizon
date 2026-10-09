@@ -25,7 +25,7 @@ import httpx
 from tenacity import wait_random_exponential
 
 from ..client import AgentClient
-from ..activity_display import select_provider_event
+from ..dashboard.activity_display import select_provider_event
 from .contracts import ExecutionGrant, FencedExecution, JournalFull, Operation, validate_tool_environment
 from .git_recovery import GitRecovery, PublicationBlocked
 from .journal import DurableJournal, boot_identity
@@ -34,6 +34,7 @@ from .provider import HeadlessAdapter, PhysicalStopUnconfirmed, ProcessResult, P
 from .sandbox import SandboxPolicy, podman_command
 from .skills import materialize_bundle
 from .storage_guard import inspect_storage
+from .resource_health import ResourcePolicy, observe as observe_resources
 from .transport import WorkerTransport
 
 
@@ -77,6 +78,8 @@ class WorkerDaemon:
                  publication_poll_seconds: float = 5,
                  publication_concurrency: int = 1,
                  milestone_checks: bool = False,
+                 lean_checks: bool = False,
+                 resource_policy: ResourcePolicy | None = None,
                  cleanup_target_free_percent: int = 20,
                  max_request_seconds: float = 3600,
                  max_execution_seconds: float = 4 * 3600,
@@ -119,9 +122,12 @@ class WorkerDaemon:
         self.publication_poll_seconds = publication_poll_seconds
         self.publication_concurrency = publication_concurrency
         self._publisher_running = False
+        self._workspace_cleanup_at = 0.0
+        self.resource_policy = resource_policy
         self.milestone_checks = milestone_checks
-        if milestone_checks and any(config.sandbox is not None or config.lean_build is None for config in harnesses.values()):
-            raise ValueError('Milestone verification requires an explicitly unrestricted managed build host')
+        self.lean_checks = lean_checks or milestone_checks
+        if self.lean_checks and any(config.sandbox is not None or config.lean_build is None for config in harnesses.values()):
+            raise ValueError('Lean verification requires an explicitly unrestricted managed build host')
 
     def storage_health(self) -> dict[str, Any]:
         """Return root-level storage health and the admission decision."""
@@ -348,12 +354,16 @@ class WorkerDaemon:
             if local is not None and pinned.get(key) != local:
                 raise ValueError(f"local {key} differs from the pinned harness")
         settings = pinned.get("settings", {})
-        allowed = {"schema_version", "approval_mode", "sandbox_mode", "tool_names", "auto_compaction"}
+        allowed = {"schema_version", "approval_mode", "sandbox_mode", "tool_names", "auto_compaction",
+                   "codex_multi_agent_v2", "codex_web_search", "claude_native_configuration"}
         if not isinstance(settings, dict) or set(settings) - allowed:
             raise ValueError("unsupported pinned provider settings")
         adapter = replace(config.adapter, model=options.get("model"), reasoning_effort=options.get("reasoning_effort"),
                           approval_mode=settings.get("approval_mode", "deny"), sandbox_mode=settings.get("sandbox_mode", "workspace_write"),
                           tool_names=tuple(settings.get("tool_names", [])), auto_compaction=settings.get("auto_compaction", True),
+                          codex_multi_agent_v2=settings.get("codex_multi_agent_v2", True),
+                          codex_web_search=settings.get("codex_web_search", "live"),
+                          claude_native_configuration=settings.get("claude_native_configuration", True),
                           max_parallel_subagents=grant.max_parallel_subagents)
         adapter.validate(externally_isolated=config.sandbox is not None)
         return adapter
@@ -636,10 +646,33 @@ class WorkerDaemon:
             self.journal.checkpoint(row["execution_id"], row["epoch"], checkpoint)
             return True
 
+    def cleanup_retired_workspaces(self):
+        """Bound cleanup I/O to one generated checkout per admission pass."""
+        from .workspace_retention import cleanup
+        try:
+            page = self.transport._get_json("/api/v3/worker/retired-workspaces?host_id=" + self.host_id)
+            for workspace in page["items"][:1]:
+                try:
+                    repository = str(workspace["repository_id"])
+                    cleanup(workspace, self.workspace_roots, self.publication_remotes.get(repository), self._publication_headers.get(repository))
+                    result = {"removed": True}
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    # Subprocess exceptions can include the configured remote
+                    # URL. Keep credentials out of durable cleanup diagnostics.
+                    detail = type(error).__name__ + ': durable Git verification failed' if isinstance(error, subprocess.SubprocessError) else str(error)
+                    result = {"removed": False, "error": detail[-6000:]}
+                response = self.transport._post("/api/v3/worker/retired-workspaces/" + str(workspace["id"]), result)
+                response.raise_for_status()
+        except (httpx.HTTPError, OSError, ValueError):
+            logging.exception("Retired workspace cleanup deferred")
+
     def run_once(self, *, cancel: threading.Event | None = None) -> str | None:
         self._progress("recovery", deadline_seconds=1800)
         self.recover(include_running=False)
         self._flush()
+        if self.resource_policy and time.monotonic() - self._workspace_cleanup_at >= 300:
+            self._workspace_cleanup_at = time.monotonic()
+            self.cleanup_retired_workspaces()
         storage = self.storage_health()
         if storage["status"] == "storage_pressure":
             self._progress("storage_pressure", details=storage)
@@ -649,6 +682,10 @@ class WorkerDaemon:
                 "free_bytes": shutil.disk_usage(self.journal.state_root).free,
                 "required_free_bytes": self.journal.minimum_free_bytes + self.supervisor.max_log_bytes * 2,
                 "diagnostic_max_bytes": self.journal.diagnostic_max_bytes})
+            return None
+        resources = observe_resources(self.resource_policy) if self.resource_policy else None
+        if resources and resources["status"] != "ready":
+            self._progress("resource_pressure", details=resources)
             return None
         with self._claim_lock:
             self._progress("claim", deadline_seconds=120)
@@ -874,6 +911,7 @@ class WorkerDaemon:
                     if config.lean_build is not None:
                         command_options["tool_writable_roots"] = (config.lean_build.root.resolve(),)
                 command = adapter.command(**command_options)
+                native_environment = adapter.runtime_environment() if isinstance(adapter, HeadlessAdapter) else {}
                 container_name: str | None = None
                 build_environment = config.lean_build.environment(grant.harness_id) if config.lean_build else {}
                 if config.sandbox is not None:
@@ -887,7 +925,7 @@ class WorkerDaemon:
                                              podman_executable=self._podman_executable(),
                                              environment_values=config.environment,
                                              workspace_read_only=orchestrator,
-                                             environment_names=tuple(config.environment) + tuple(build_environment) + (
+                                             environment_names=tuple(config.environment) + tuple(build_environment) + tuple(native_environment) + (
                                                  "HORIZON_API_URL", "HORIZON_EXECUTION_TOKEN",
                                                  "HORIZON_EXECUTION_ID", "HORIZON_ASSIGNMENT_ID", "HORIZON_AGENT_STATE",
                                                  "HORIZON_MAX_OFFLINE_REPLAY_SECONDS", "HORIZON_PROVIDER_REQUEST_ID",
@@ -897,6 +935,7 @@ class WorkerDaemon:
                        "TMP": str(scratch), "TEMP": str(scratch),
                        "CODEX_HOME": str(config.provider_home / ".codex"),
                        "CLAUDE_CONFIG_DIR": str(config.provider_home / ".claude"), **config.environment, **build_environment,
+                       **native_environment,
                        "HORIZON_API_URL": self.agent_api_url,
                        "HORIZON_EXECUTION_TOKEN": grant.execution_token or "",
                        "HORIZON_EXECUTION_ID": grant.execution_id,
@@ -932,7 +971,7 @@ class WorkerDaemon:
                         except JournalFull:
                             # Display telemetry must not prevent lease/stop receipts.
                             # Retained stdout remains available to activity replay.
-                            from ..provider_events import select_native_event
+                            from ..providers.provider_events import select_native_event
                             native = select_native_event(provider, event)
                             if native is not None:
                                 self._emit(grant, "provider_observed", {**envelope, "raw": native})
@@ -1199,7 +1238,13 @@ class WorkerDaemon:
                                   "required_free_bytes": max(storage["required_free_bytes"],
                                                              self.journal.minimum_free_bytes + required),
                                   "storage": storage}
+                        if self.resource_policy:
+                            health["resources"] = observe_resources(self.resource_policy)
+                            if health["status"] == "ready":
+                                health["status"] = health["resources"]["status"]
                         try:
+                            if self.lean_checks:
+                                health['capabilities']['lean_verification'] = 1
                             if self.milestone_checks:
                                 health['capabilities']['milestone_verification'] = 1
                             self.transport.host_heartbeat(self.host_id, health)
@@ -1217,9 +1262,9 @@ class WorkerDaemon:
                           for index in range(self.publication_concurrency)]
             health_thread = threading.Thread(target=host_health, name="horizon-host-health")
             checkers = []
-            if self.milestone_checks:
-                from .milestone_jobs import serve
-                checkers.append(threading.Thread(target=serve, args=(self, stop), name='horizon-milestone-checker'))
+            if self.lean_checks:
+                from .verification_jobs import serve
+                checkers.append(threading.Thread(target=serve, args=(self, stop), name='horizon-lean-checker'))
             try:
                 for worker in [*lanes, *publishers, health_thread, *checkers]:
                     worker.start()

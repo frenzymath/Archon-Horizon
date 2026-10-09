@@ -6,9 +6,9 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import func, insert, select, update
 
-from archon_horizon.pipeline.records import create, get
-from archon_horizon.pipeline.schema import tables
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle
+from archon_horizon.pipeline.persistence.records import create, get
+from archon_horizon.pipeline.persistence.schema import tables
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle
 
 from test_pipeline_service import service_database, world
 

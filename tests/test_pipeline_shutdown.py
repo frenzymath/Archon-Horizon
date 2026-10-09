@@ -33,8 +33,9 @@ def test_idle_event_stream_exits_immediately_on_server_shutdown(api):
 
 
 def test_slow_forge_sync_does_not_block_zulip_or_delivery(api, monkeypatch):
-    from archon_horizon.pipeline import connectors, storage
-    from archon_horizon.pipeline.scheduler import Scheduler
+    from archon_horizon.pipeline.integrations import connectors
+    from archon_horizon.pipeline.operations import storage
+    from archon_horizon.pipeline.execution.scheduler import Scheduler
     _, database, world, _, _, _ = api
     forge_entered, release_forge, zulip_polled, delivered = (threading.Event() for _ in range(4))
 
