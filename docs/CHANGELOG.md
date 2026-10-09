@@ -10,6 +10,11 @@ service configuration and catalog updates.
 
 ## [Unreleased]
 
+- The public dashboard demo uses a synthetic administrator with populated
+  execution hosts, provider harnesses, reviewers, skills, prompts and subagent
+  descriptors. Forge and Zulip tabs show local read-only previews without live
+  credentials or external service connections.
+
 ## [0.2.0-alpha.2] — 2026-10-09
 
 - Align Python, frontend and README version metadata with the second alpha

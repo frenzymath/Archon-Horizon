@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
   root: fileURLToPath(new URL('./showcase', import.meta.url)),
   base: './',
-  publicDir: false,
+  publicDir: fileURLToPath(new URL('./showcase/public', import.meta.url)),
   plugins: [react()],
   build: { outDir: '../build/dashboard-demo', emptyOutDir: true },
 });

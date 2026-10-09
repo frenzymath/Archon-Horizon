@@ -13,10 +13,10 @@ export function demoResponse(input: string, method = 'GET'): Response {
   if (method.toUpperCase() !== 'GET') return json({error: {message: 'This synthetic demo is read-only.'}}, 403);
   if (!url.pathname.startsWith('/api/v3/')) return json({error: {message: 'The demo has no network transport.'}}, 404);
   const route = url.pathname.slice('/api/v3'.length);
-  if (route === '/auth/me') return json({id: 'demo-viewer', username: 'demo', role: 'viewer', permissions: {admin: false, write: false}});
+  if (route === '/auth/me') return json(fixture.account);
   if (route === '/projects') return json(page([fixture.project]));
   if (route === `/projects/${fixture.project.id}`) return json(fixture.project);
-  if (route === `${prefix}/overview`) return json({...fixture.project, markdown: `# Finite sums\n\n${fixture.project.description}\n\nExplore **Objectives**, **Nodes**, the node **DAG**, **References**, and the **Activity** view.\n\nAll data in this demo is synthetic. Editing and integrations are disabled.`});
+  if (route === `${prefix}/overview`) return json({...fixture.project, markdown: `# Finite sums\n\n${fixture.project.description}\n\nExplore **Objectives**, **Nodes**, the node **DAG**, **References**, **Activity**, **Execution hosts**, and **Agents**. **Forge** and **Zulip** show local synthetic previews.\n\nThis is an administrator preview with synthetic records. Writes and live service connections are disabled.`});
   if (route === `${prefix}/objectives`) return json(page([fixture.objective]));
   if (route === `${prefix}/objectives/${fixture.objective.id}`) return json(fixture.objective);
   if (route === `${prefix}/graph-targets`) return json({target_repository_id: 'demo-workspace', targets: [{id: 'demo-workspace', slug: 'workspace', purpose: 'workspace'}]});
@@ -37,7 +37,12 @@ export function demoResponse(input: string, method = 'GET'): Response {
     const node = fixture.nodes.find(item => item.id === decodeURIComponent(route.slice(`${prefix}/nodes/`.length)));
     return node ? json({node, nodes: fixture.nodes}) : json({error: {message: 'Unknown demo node.'}}, 404);
   }
-  if (route === `/projects/${fixture.project.id}/integrations`) return json(page([]));
+  if (route === `/projects/${fixture.project.id}/integrations`) return json(page(fixture.integrations));
+  if (route === '/instruction-catalog') return json(fixture.instruction_catalog);
+  if (route === '/instruction-catalog/file') {
+    const file = fixture.instruction_files.find(item => item.path === url.searchParams.get('path'));
+    return file ? json(file) : json({error: {message: 'Unknown demo instruction.'}}, 404);
+  }
   if (route === `${prefix}/missions`) return json({items: [], match_ids: [], total: 0, next_offset: null});
   if (route === '/dashboard/activity/runs') {
     const search = (url.searchParams.get('search') || '').toLowerCase();
@@ -67,8 +72,18 @@ export function demoResponse(input: string, method = 'GET'): Response {
   if (route === `/records/reference/${fixture.references[0].id}`) return json(fixture.references[0]);
   if (route === `/references/${fixture.references[0].id}/bibtex`) return new Response(fixture.bibtex, {headers: {'Content-Type': 'text/plain'}});
   if (/^\/references\/[^/]+\/files$/.test(route)) return json({items: [], next_cursor: null, max_upload_bytes: 67108864});
+  if (route === '/records/host') return json(page(fixture.hosts));
+  if (route === '/records/harness') return json(page(fixture.harnesses));
+  if (route === '/records/reviewer_descriptor') return json(page(!url.searchParams.has('project_id') || url.searchParams.get('project_id') === fixture.project.id ? fixture.reviewers : []));
+  if (route.startsWith('/hosts/') && route.endsWith('/harnesses')) {
+    const host = fixture.hosts.find(item => item.id === route.split('/')[2]);
+    return host ? json({host_revision: host.revision, items: fixture.harnesses.map(harness => ({harness_id: harness.id,
+      harness_slug: harness.slug, execution_slots: host.mode === 'enabled' ? 2 : 1,
+      max_parallel_subagents: null, enabled: true, credential_configured: false}))}) : json({error: {message: 'Unknown demo host.'}}, 404);
+  }
   if (route.startsWith('/records/')) return json(page([]));
-  if (route === '/resources') return json({hosts: [], storage: [], free_bytes: null, observed_at: fixture.generated_at, oldest_pending_delivery: null, backup_status: 'demo', provider_status: 'demo'});
+  if (route === '/resources') return json(fixture.resources);
+  if (route === '/settings') return json({revision: 1, configuration: {public_url: 'https://demo.invalid', state_root: '/example/state', search_enabled: false}});
   return json({error: {message: `This view is outside the synthetic demo: ${route}`}}, 404);
 }
 

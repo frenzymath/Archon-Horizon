@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "generated_at": "2026-10-01T10:00:00Z",
   "project": {
     "id": "demo-project",
@@ -17,6 +17,278 @@
     "updated_at": "2026-10-01T10:00:00Z",
     "markdown": "# Direction\n\n- [x] State the finite-sum theorem.\n- [x] Prove the induction helper.\n- [ ] Complete the main theorem.\n- [ ] Package a small reusable library.\n\nThis is invented demonstration data, not a verified formalization.\n\nThe graph records local prerequisites; this objective records the overall direction."
   },
+  "account": {
+    "id": "demo-administrator",
+    "username": "demo-admin",
+    "role": "admin",
+    "permissions": {
+      "admin": true,
+      "write": false
+    }
+  },
+  "hosts": [
+    {
+      "id": "example-host",
+      "revision": 1,
+      "slug": "proof-worker",
+      "display_name": "Proof worker",
+      "mode": "enabled",
+      "workspace_root": "/example/workspaces",
+      "scratch_root": "/example/scratch"
+    },
+    {
+      "id": "example-review-host",
+      "revision": 1,
+      "slug": "review-worker",
+      "display_name": "Review worker",
+      "mode": "draining",
+      "workspace_root": "/example/reviews",
+      "scratch_root": "/example/review-scratch"
+    }
+  ],
+  "harnesses": [
+    {
+      "id": "demo-codex",
+      "revision": 1,
+      "slug": "codex-example",
+      "adapter": "codex_exec",
+      "provider_version": "synthetic",
+      "enabled": true,
+      "model_options": {
+        "model": "example-model",
+        "reasoning_effort": "medium"
+      }
+    },
+    {
+      "id": "demo-claude",
+      "revision": 1,
+      "slug": "claude-example",
+      "adapter": "claude_exec",
+      "provider_version": "synthetic",
+      "enabled": true,
+      "model_options": {
+        "model": "example-model"
+      }
+    }
+  ],
+  "reviewers": [
+    {
+      "id": "demo-reviewer",
+      "revision": 1,
+      "project_id": "demo-project",
+      "slug": "mathematical-fidelity",
+      "enabled": true,
+      "invocation": "subrequest",
+      "functions": [
+        "reviewer"
+      ],
+      "harness_id": "demo-codex",
+      "model_options": {},
+      "instructions": "Review the finite-sum statement and preserve its hypotheses. This is a synthetic reviewer configuration."
+    }
+  ],
+  "resources": {
+    "hosts": [
+      {
+        "id": "example-host",
+        "name": "Proof worker",
+        "mode": "enabled",
+        "status": "enabled",
+        "slots": 4,
+        "occupied_slots": 1,
+        "heartbeat_at": "2026-10-01T10:00:00Z",
+        "detail": "One synthetic proof session; three free slots."
+      },
+      {
+        "id": "example-review-host",
+        "name": "Review worker",
+        "mode": "draining",
+        "status": "draining",
+        "slots": 2,
+        "occupied_slots": 1,
+        "heartbeat_at": "2026-10-01T10:00:00Z",
+        "detail": "Finishing a synthetic review; no new sessions admitted."
+      }
+    ],
+    "storage": [
+      {
+        "category": "workspaces",
+        "bytes": 2147483648,
+        "protected_bytes": 1610612736,
+        "reclaimable_bytes": 536870912
+      }
+    ],
+    "free_bytes": 68719476736,
+    "observed_at": "2026-10-01T10:00:00Z",
+    "oldest_pending_delivery": null,
+    "backup_status": "synthetic snapshot",
+    "provider_status": "demo only"
+  },
+  "integrations": [
+    {
+      "id": "demo-forge",
+      "kind": "forge",
+      "enabled": true,
+      "public_url": "./integrations/forge.html",
+      "browser_session": false
+    },
+    {
+      "id": "demo-zulip",
+      "kind": "zulip",
+      "enabled": true,
+      "public_url": "./integrations/zulip.html",
+      "browser_session": false
+    }
+  ],
+  "instruction_catalog": {
+    "revision": "synthetic-catalog-1",
+    "skills": [
+      {
+        "name": "horizon-pipeline",
+        "description": "Coordinate formalization assignments and phase delivery.",
+        "category": "operations",
+        "path": "skills/operations/horizon-pipeline/SKILL.md",
+        "resources": []
+      },
+      {
+        "name": "horizon-delegation",
+        "description": "Delegate independently scoped work and collect its evidence.",
+        "category": "operations",
+        "path": "skills/operations/horizon-delegation/SKILL.md",
+        "resources": []
+      },
+      {
+        "name": "horizon-graph",
+        "description": "Inspect and update source-bound dependency graphs.",
+        "category": "operations",
+        "path": "skills/operations/horizon-graph/SKILL.md",
+        "resources": []
+      },
+      {
+        "name": "horizon-formalization",
+        "description": "Develop and verify Lean formalizations.",
+        "category": "lean",
+        "path": "skills/lean/horizon-formalization/SKILL.md",
+        "resources": []
+      },
+      {
+        "name": "lean-check",
+        "description": "Check Lean sources in their pinned project toolchain.",
+        "category": "lean",
+        "path": "skills/lean/lean-check/SKILL.md",
+        "resources": []
+      },
+      {
+        "name": "horizon-review",
+        "description": "Review proposals and reconcile findings and repairs.",
+        "category": "review",
+        "path": "skills/review/horizon-review/SKILL.md",
+        "resources": []
+      }
+    ],
+    "subagents": [
+      {
+        "slug": "lean-worker",
+        "description": "Implement a scoped Lean proof and report verification.",
+        "category": "implementation",
+        "source_path": "subagents/implementation/lean-worker.md",
+        "skills": [
+          "horizon-formalization",
+          "lean-check"
+        ]
+      },
+      {
+        "slug": "build-checker",
+        "description": "Check the exact source revision and report build evidence.",
+        "category": "validation",
+        "source_path": "subagents/validation/build-checker.md",
+        "skills": [
+          "lean-check"
+        ]
+      },
+      {
+        "slug": "mathematical-fidelity",
+        "description": "Review mathematical meaning and hypotheses.",
+        "category": "reviewers",
+        "source_path": "subagents/reviewers/mathematical-fidelity.md",
+        "skills": [
+          "horizon-review"
+        ]
+      }
+    ],
+    "prompts": [
+      {
+        "name": "Planning mission",
+        "description": "The bundled objective-planning mission template.",
+        "category": "prompts",
+        "path": "prompts/objective/planning-mission.md"
+      }
+    ],
+    "files": [
+      "skills/operations/horizon-pipeline/SKILL.md",
+      "skills/operations/horizon-delegation/SKILL.md",
+      "skills/operations/horizon-graph/SKILL.md",
+      "skills/lean/horizon-formalization/SKILL.md",
+      "skills/lean/lean-check/SKILL.md",
+      "skills/review/horizon-review/SKILL.md",
+      "subagents/implementation/lean-worker.md",
+      "subagents/validation/build-checker.md",
+      "subagents/reviewers/mathematical-fidelity.md",
+      "prompts/objective/planning-mission.md"
+    ]
+  },
+  "instruction_files": [
+    {
+      "path": "skills/operations/horizon-pipeline/SKILL.md",
+      "content": "---\nname: horizon-pipeline\ndescription: Follow the worker or maintainer workflow inside a dispatched Horizon assignment. Covers phase outcomes, ownership, delivery and when to request an operational audit.\nmetadata:\n  category: operations\n---\n\n# Horizon Assignment\n\nYou are working within **Archon Horizon**, a control plane for Lean formalization\nprojects. Its source is at\n[frenzymath/Archon-Horizon](https://github.com/frenzymath/Archon-Horizon).\nIf a local source checkout matching the installed version is available, consult\nthe relevant code when CLI help and API schemas do not explain observed behavior.\nYour project workspace is separate from Horizon's source; `$PATH` locates tools\nand does not necessarily contain a source checkout.\n\nYour assignment states the result to deliver. Its mission supplies the objective,\nscope and acceptance criteria. Work within that scope; the run selects the phase\nand repositories. The host handles execution leases, retained context and queue\nadmission. The effective goal is the mission, acceptance criteria and open Markdown ledger. A native harness goal mirrors this contract.\n\nRead this entrypoint once. Use the supplied task and current evidence to begin.\nRun `horizon-pipeline agent context` when you need omitted records, current\nobligations or notices. Continue retained work after a checkpoint; a continuation\nis not a new planning exercise. Prepared reviewers follow their supplied packet\nand lifecycle directly, without this general startup.\n\n## The Two Roles\n\n**Worker:** produce the assigned result, validate the relevant scope, publish it,\nand return evidence. For a review correction, repair the identified defect in the\nexisting PR and preserve applicable earlier work. Delivery need not wait for merge.\n\n**Maintainer:** choose ready work, delegate when useful, review delivered results,\nrequest precise repairs, and accept or reject according to repository policy.\nRetain responsibility for integration. In objective mode, a bounded maintenance session can accept the phase or repair ownership within that objective. Legacy runs retain their root-maintainer contract.\n\nPlanning is an activity within these roles. Use a helper for an independent\nquestion; do not add a planning session before a task whose inputs are clear.\nAn unused slot alone is not a reason to create work.\n\n## The Three Phases\n\n| Phase | Workers produce | Maintainers accept |\n| --- | --- | --- |\n| Preprocessing | Literature, concise objective and a proposed roadmap strategy, with Lean skeletons where useful | Roadmap PRs and the phase strategy with proportionate source evidence |\n| Formalization | Proofs in the shared workspace and source-bound graph progress | Roadmap graph and contract changes; workspace work has no routine PR gate |\n| Postprocessing | Reused, adapted or remade source results in the destination library | Library PRs with sound public interfaces and proportionate verification |\n\nObjective runs use one concise phase skill:\n[horizon-preprocessing](../horizon-preprocessing/SKILL.md),\n[horizon-main-work](../horizon-main-work/SKILL.md), or\n[horizon-postprocessing](../horizon-postprocessing/SKILL.md).\nThe same queues and session lifecycle serve every phase. Maintainer acceptance\nadvances requested phases by default; `auto_advance: false` pauses for human approval.\n[Legacy phase details](references/phases.md) apply to explicitly legacy runs. A Lean build checks elaboration, not\nwhether the statements mean the intended mathematics.\n\n## Work, Review, Repair\n\n1. Check the relevant graph nodes, source revision and existing owner. Narrow\n   tasks need the relevant records, not a review of the whole run.\n2. Do the work, or delegate independent parts with concrete inputs, acceptance\n   criteria and an integration owner. Missions describe responsibility; graph\n   edges describe mathematical prerequisites. A narrower mission does not prove\n   that its interfaces compose correctly.\n3. Publish the result and its checks. Maintainers read previous findings, choose specialists when useful and honor\n   any configured required coverage, and request specific corrections on the existing PR.\n   Reviewers use the descriptor's configured native or durable invocation mode.\n4. Account for delivered work and remaining commitments using\n   [horizon-report](../horizon-report/SKILL.md). When awaiting a known external\n   result, checkpoint with an event condition that also handles failure. This\n   releases execution capacity. Reuse an active or checkpointed owner for a\n   fitting repair; see horizon-delegation for completed-owner recovery.\n\nNative children are collected by their parent. Queued assignments own durable\nwork independently. A child can close its own subtree, never siblings or ancestors.\nObjective maintainers use `accept_phase` with source-bound evidence; legacy root\nmaintainers close the phase and drain the run. Reuse accepted evidence;\nit does not commission another review without an unresolved acceptance question.\n\n## Tools When Needed\n\nPaths below are relative to this skill. The full skill and descriptor indexes are\n`$HORIZON_SKILLS_DIR/SKILLS.md` and `$HORIZON_SKILLS_DIR/SUBAGENTS.md`.\n\n| Action | Procedure |\n| --- | --- |\n| Create narrower work, adjust the queue, or wait on a result | [horizon-delegation](../horizon-delegation/SKILL.md) |\n| Publish or recover workspace changes | [horizon-workspace](../horizon-workspace/SKILL.md) |\n| Propose or amend a destination PR | [horizon-forge](../horizon-forge/SKILL.md) |\n| Review a PR and handle its findings | [horizon-review](../../review/horizon-review/SKILL.md) |\n| Update graph nodes or milestone contracts | [horizon-graph](../horizon-graph/SKILL.md) |\n| Develop or check Lean | [horizon-formalization](../../lean/horizon-formalization/SKILL.md) |\n| Settle completion, receipts or a transport failure | [horizon-report](../horizon-report/SKILL.md) |\n| Discuss a concrete decision | [horizon-zulip](../horizon-zulip/SKILL.md) |\n| Diagnose unexpected coordination or resource behavior | [horizon-operations](../horizon-operations/SKILL.md) |\n\nUse `horizon-pipeline agent request METHOD PATH 'JSON'` for API mutations; it\njournals the request and supplies the idempotency key. Large bodies can use\n`--body-file \"$TMPDIR/request.json\"`. Discover an unknown operation with a\nscoped `agent schema --section ... --name ...` query. There is no requirement\nto enumerate schemas before work. After an uncertain response, inspect\n`agent pending` and reconcile the same intent before issuing a replacement.\n\nUse only execution-provided credentials. Preserve host-managed caches and live\nworkspaces. Put scratch work under the inherited disk-backed `$TMPDIR`.\nCheck relevant notifications at useful boundaries and settle actionable control\nnotices. Zulip carries coordination, human discussions, nontrivial brainstorms and failed\nroutes another owner should know. Link durable versioned notes for detailed\nknowledge; avoid session diaries and repeated progress reports.\n\n## Objective Queues And Recovery\n\nWork and Maintenance have independent queue bounds, slots, model defaults and\nbudgets, sharing physical host/provider capacity. One bounded planner already has\none scheduler-owned successor. Do not enqueue your current mission, a renamed\ncopy of it, or another recurring planner. Queue distinct independently useful\nmissions, using conditions only for genuine dependencies.\n\nAn eligible `awaiting-review` PR or issue receives one maintenance owner per\nreview round. Use `request_review` with new evidence after a repair and\n`settle_review` for the assigned generation. Duplicate observations reuse the\nsame owner; a late label delivery cannot erase a newer durable request.\nUse `request_maintenance` on the run for phase acceptance or another bounded\nprivileged decision, with a note and evidence. This grants no extra permission.\n\nInterruptions preserve the same session and native context. The scheduler resumes\nit with bounded backoff and persistent attempt history. Paused recovery requires\n`resume_session` with a diagnosis; do not queue a replacement or toggle labels to\nreset failure budgets. Shared provider circuits need an operator `reset_circuit`\nafter repairing the underlying account. Unknown physical stops retain capacity.\nInspect admission and resource diagnostics before dispatching more work.\n\n## When Something Looks Wrong\n\nFor unexplained idle work, repeated failed handoffs, conflicting owners or repeated\nAPI failures, inspect `horizon-pipeline agent context --view operations`.\nIt links current owners, activity, admission reasons, reviews and host health.\nA known dependency wait with a live producer is normally healthy.\n\nFor a diagnosis requiring independent investigation, launch the native\n`subagents/validation/orchestration-auditor.md` helper with the symptom and\naffected IDs. It reports evidence and a proposed repair to you. Apply authorized\nrepairs through normal APIs or identify the owner needed for an operator action.\nDo not turn diagnosis into a standing session or require every worker to monitor\nglobal activity.\n",
+      "sha256": "5aa852a779fcffbfa5a6cc88926719e3ae12784d8047ec6ff43acf7d6942cf77"
+    },
+    {
+      "path": "skills/operations/horizon-delegation/SKILL.md",
+      "content": "---\nname: horizon-delegation\ndescription: Delegate an independent Horizon task or release a slot while a concrete external dependency is pending, preserving the existing owner and evidence.\nmetadata:\n  category: operations\n---\n\n# Delegate Or Wait\n\nDelegate when a narrower, independently checkable task helps finish the assigned\nresult. Give it the objective, exact inputs, allowed files, acceptance condition\nand integration owner. Check existing ownership first. Do not recreate the same\nwhole mission under a new name, or split shared interfaces into competing writers.\nThe mission and assignment instructions are authoritative; native goals are\noptional mirrors and need no parallel reporting workflow.\n\n## Choose The Lifetime\n\n| Need | Mechanism |\n| --- | --- |\n| Short investigation or independent edit collected in this execution | Native child |\n| Work that must survive this execution or use another primary slot | Durable assignment |\n| Existing owner's concrete task resumes after an external result | Event-conditioned checkpoint |\n| A formal independent PR assessment | Prepared reviewer in its configured invocation mode |\n\nA native child receives only the relevant specialty guidance and task evidence.\nUse the provider's actual spawn tool and returned ID; a descriptor name is not\nan agent type or permission. Collect the result before ending its parent, and\ninspect the evidence before integration. Read `$HORIZON_SKILLS_DIR/SUBAGENTS.md`\nonly when choosing a specialty would help. Unsupported native delegation calls\nare not a reason to retry the same launch repeatedly.\n\nA durable child needs an appropriately scoped mission and assignment. Reuse a\nsuitable existing mission; create a narrower child only when it represents\ndistinct responsibility. Mission creation requires acceptance criteria, a\ndelegation note, the current parent revision and a contained scope. Assignment\ncreation supplies the run, mission, role, concrete instructions and any real\ndependency. See [queue requests](references/queue.md) for payloads and conditions.\nCreating work does not complete it: delegate the corresponding obligation only\nafter the child exists, and keep integration with an identified owner.\n\nWorkers can create worker tasks inside their permitted subtree. Maintainer work\nrequires maintainer authority. A child cannot close siblings or ancestors;\nroot closure stays with a root-authorized maintainer. Instructions do not widen\nthese permissions. Child budgets are adjustable mission contracts, not worker\nslot counts. On exhaustion, close genuinely fulfilled children or make a\nrevision-checked budget change for real unfinished work.\n\n## Preserve The Repair Loop\n\nWhen a reviewer requests changes, give the existing author the exact findings\nand changed-head scope when that owner is still active or checkpointed. Resume\nthe next action in its retained context instead of repeating source discovery.\nOrdinary agents cannot resume a completed assignment: that requires an operator,\nand a reassigned workspace can prevent it. If continuation is unavailable, create\none narrow repair task linked to the existing PR, findings and evidence.\n\nFor an already arranged external review or child result, the current integration\nowner may request `checkpoint_assignment` with a concrete event condition and\nthen end its provider turn. The scheduler releases the slot and retains its\ncontext. Include failed/cancelled outcomes so it can recover a broken handoff.\nDo not checkpoint on your own result, on a producer needing your retained\nworkspace, or on speculative future feedback. A checkpoint is a wait with real\nunfinished work, not an approval or a completed obligation.\n\nFor prepared review, follow [horizon-review](../../review/horizon-review/SKILL.md).\nThe descriptor chooses `assignment` or `subrequest`; neither is a universal\ndefault or a fallback for the other. Durable reviewers need no live parent.\nReuse the existing integration owner through a supported checkpoint when\npossible; otherwise arrange one narrower owner conditioned on their terminal\nresults. Native reviewers must be collected by their live parent. Direct advice\nfrom an ordinary child does not satisfy an independent review policy.\n\n## Planning And Ownership\n\nA planning owner checks current assignments and compatible capacity before\nchanging the frontier. Queue enough independent work to make progress; ordinary\nauthors need not manage the fleet. Avoid another planner, maintainer or audit\nwhen an existing owner already covers the same result. If no work is ready,\nrecord the concrete producer and unlock condition, then finish or checkpoint.\n\nChange an existing recurrence through `defer_automation`; editing an occurrence\ndoes not change its rule. Inspect actual pending conditions after changes. Every\nwait needs an independent producer, and spare capacity cannot override a real\nexternal dependency. Use [queue requests](references/queue.md) only when doing\nthis scheduling work.\n\nA handoff needs the artifact or finding, checks already performed, remaining\nquestion and next owner. Link previous evidence rather than copying transcripts.\nAfter a child failure, preserve useful work and correct its specific cause\nbefore retrying. Use [completion](../horizon-report/SKILL.md) for the current\nledger and mission requirements.\n",
+      "sha256": "469afb7ddb8fd24554dc802cbb91eabfe0f893704c7d26009630e71830d979e0"
+    },
+    {
+      "path": "skills/operations/horizon-graph/SKILL.md",
+      "content": "---\nname: horizon-graph\ndescription: Inspect and maintain Horizon roadmap documents, nodes, dependencies, and evidence without confusing attempts with accepted graph state.\nmetadata:\n  category: operations\n---\n\n# Keep the graph truthful\n\nA mathematical node can have implementations in several target repositories. Progress and review\nlive in `implementations[repository_uuid]`, using the same states for workspace\nand library. Select `target_repository_id` in graph/node/roadmap queries; use\n`run_id` on the roadmap endpoint to select the run's destination. Never downgrade\nworkspace evidence to start a library port. Read\n[repository progress](references/repository-progress.md) before editing these records.\n\nIn postprocessing, use a separate graph namespace for the integration strategy,\nlink source proofs and show accepted library coverage. Reuse existing implementation\nevidence where it applies; new strategy nodes can express generalization or changed\ninterfaces without overwriting the source formalization graph. Keep cluster ownership across several PRs. Rewrite obsolete node\ncontent freely in reviewed Git changes; Git retains history. Update dependencies\nwhen changing routes, and use new linked nodes when splitting/generalizing results.\n\nRead the project roadmap through `GET /api/v3/roadmap?project_id=...` and use\nthe dashboard graph endpoints for bounded node and dependency views. A node's\n`source_repository_id`, `source_path`, and `source_commit_oid` identify the\ncontract that a proof must match. An open or rejected PR is an attempt, not\naccepted graph state.\n\nInspect a node, its immediate prerequisites/consumers, declaration locator, labels,\nand current revision before changing it. Each dependency must be a genuine\nprerequisite whose statement helps imply the parent. Do not silently repair a\nstale source pin by following a moving branch; propose a new reviewed change.\n\nKeep statements and definitions aligned with the referenced source and Lean\ndeclaration. A successful build does not justify a `formally_proved` label by\nitself. Record exact commit, file, declaration, environment, and command for\nkernel-checked evidence. Preserve conditional status when an admitted child\nremains a real condition of the accepted route.\n\nRoadmap edits are revision-aware. Read the current document and revision, make\nthe smallest coherent change, and submit it through the configured Forge change\nworkflow. On a revision conflict, reread and reconcile; never overwrite a newer\ngraph revision. Update dependent nodes and declaration references in the same\nbounded change when the repair is obvious; otherwise record the affected owners\nand open a focused follow-up.\n\nUse [horizon-workspace](../horizon-workspace/SKILL.md) for source\ncommits and [horizon-objectives](../horizon-objectives/SKILL.md) for the user's\nmilestone document. Read [graph contracts](references/contracts.md) when changing\nsource documents, edges, status evidence, or a frozen baseline.\n\nThe default `workflow: graph` treats milestones as ordinary nodes with the\n`milestone` label. Agents propose their names, decomposition and amendments through\nroadmap PRs; no compiler receipt or frozen baseline is required merely for planning.\nOrdinary source identity, dependency validity and review permissions still apply.\n\nFor explicitly retained projects with `workflow: milestones`, follow\n[milestone contracts](references/milestones.md): route selection precedes Lean\ncontract PRs; helper ownership is distinct from logical dependencies; strict\ncontract review and human approval precede formalization.\n",
+      "sha256": "009d1b5645abb0fc90e5589d7cdddf4b08dc782e2beefb2e8ade5b62c12343e1"
+    },
+    {
+      "path": "skills/lean/horizon-formalization/SKILL.md",
+      "content": "---\nname: horizon-formalization\ndescription: Develop or adapt Lean statements, definitions and proofs for the current Horizon task using its pinned sources and toolchain.\nmetadata:\n  category: lean\n---\n\n# Work On The Mathematics\n\nStart with the assigned statement, definitions, source and existing Lean code.\nThe mission and instructions define the deliverable. Read only the relevant\npart of the [phase workflow](../../operations/horizon-pipeline/references/phases.md)\nwhen that boundary is unclear.\n\n| Phase | Usual deliverable |\n| --- | --- |\n| Preprocessing | Roadmap statements and dependencies, faithful Lean theorem contracts and concrete supporting definitions in reviewed PRs. Proof admissions remain explicit. |\n| Formalization | Proofs and useful helpers in the workspace against the adopted baseline. Graph changes are reviewed; ordinary proof edits are not library PRs. |\n| Postprocessing | A coherent result family adapted into the library, normally with the existing proofs, submitted for review. |\n\nPreprocessing ends at its accepted deliverable; human approval for a later proof\nrun does not require keeping its sessions alive. During formalization, public\ncontract corrections require the configured review and explicit adoption of\nthe replacement baseline. Postprocessing needs a separate statement prototype\nonly when an unresolved interface would otherwise cause substantial rework.\nIt does not repeat preprocessing for every existing proof.\n\nSearch the assigned project and pinned dependencies before constructing new\ninfrastructure. Check candidate signatures and versions. For remote indexed\nsearch, inspect the returned repository revision. A result in another toolchain\nis useful evidence, not proof that the declaration is available here.\n\nPreserve the mathematical target. Do not weaken it, assume the desired result,\nor move an unproved obligation into a certificate field. Keep remaining\nadmissions and assumptions visible. A successful build does not establish\nsource fidelity or close the proof's transitive dependency chain.\n\n## Check The Changed Work\n\nUse language-server diagnostics for the local edit loop. Check affected modules\nand consumers at publication boundaries; reuse valid receipts instead of\nrebuilding unchanged source. When `HORIZON_LEAN_BUILD` is present, use\n`horizon-lean-check MyProject.Module` (or the corresponding\n`python -m archon_horizon.pipeline.worker.lean_build` command). Direct\n`lake build` must not bypass managed admission.\n\nThe helper emits JSON. Exit 75 is deferred, not verified; preserve progress and\narrange a later check. Exit 124 is a timeout. Repair the cause before repeating\nthe same failed build. `--probe` checks readiness; `--lean File.lean` checks a\nfile without building its imports. Use compatible precompiled dependency caches.\nA result with `snapshot_verified: false` is not an exact-source receipt.\n\nKeep edits within assigned ownership and publish useful progress before\nyielding. For review repairs, work from the concrete findings and preserve\nunchanged source and evidence. Return changed declarations, checked revision,\nvalidation scope and any remaining mathematical gap.\n\nUse a supporting procedure only when it answers the current question:\n[lean-search](../lean-search/SKILL.md) for existing interfaces,\n[lean-cycle](../lean-cycle/SKILL.md) for sustained proof work,\n[lean-proof-repair](../lean-proof-repair/SKILL.md) for diagnostics,\n[lean-check](../lean-check/SKILL.md) for validation, and\n[lean-library-engineering](../lean-library-engineering/SKILL.md) for library\nadaptation. A prepared reviewer follows its assigned rubric; it need not load\nthis skill or every Lean procedure to publish a review.\n",
+      "sha256": "e75f6ff85d4b896c5dd3f6fcc5afff04327f12bd45e4add522d93789804df7ed"
+    },
+    {
+      "path": "skills/lean/lean-check/SKILL.md",
+      "content": "---\nname: lean-check\ndescription: Choose and interpret Lean diagnostics, managed builds, axiom checks, and publication evidence for the exact changed source without duplicating builds or overstating proof completion.\nmetadata:\n  category: lean\n---\n\n# Check Lean With Traceable Evidence\n\nLocate the Lean project root; it may be below the workspace root. Read\n`lean-toolchain`, Lake targets, dependency pins, and changed imports. Preserve\nthese unless modifying them is part of the work.\n\nUse available LSP diagnostics and goal inspection during the edit loop.\nRefresh them after edits; a diagnostic for the old document is stale. At a\npublication boundary or after exported/import changes, choose affected modules\nand relevant consumers. Run the repository's required root targets for a\nrelease. Do not run a whole-project build after every tactic experiment.\n\nWhen `HORIZON_LEAN_BUILD` is configured, use the installed foreground helper\nfrom the project root:\n\n```sh\nhorizon-lean-check MyProject.Changed\nhorizon-lean-check --lean MyProject/Changed.lean\n```\n\nThe module form prepares dependency outputs. The file form requires its imports\nalready built. Omit targets for default Lake targets; `--root PATH` selects\nanother checkout and `--probe` checks readiness without compiling. The module\nentrypoint is `python -m archon_horizon.pipeline.worker.lean_build`. Without a\nmanaged policy, use the project's ordinary Lake commands. Do not bypass host\nadmission to evade a busy build slot.\n\nRead the JSON result, not just the exit code. Exit 75 is deferred, not failed\nmathematics or successful verification. Exit 124 is timeout. Preserve useful\nsource and arrange an owned later check when deferred; repeat only after inputs\nor availability change. A deterministic source error needs a repair, and a\ntransport/cache failure needs diagnosis. `snapshot_verified: false` cannot\nsupport a claim about one exact stable source snapshot.\n\nUse pinned dependency caches when available. Do not run `lake update`, delete\nshared cache directories, or change toolchains simply to cure a cache miss.\nCheck readiness and the actual failing dependency first. Never report a cache\nhit as evidence for changed inputs without establishing their identity.\n\nRecord source identity, command, checked targets, exit status, and concise\ndiagnostics. LSP-only progress or a skeleton can be published honestly without\nclaiming a full build. A build can succeed with admissions; use\n[proof-review](../../review/proof-review/SKILL.md) when claiming proof closure.\nConfirm that required files and checks correspond to the published revision,\nand let [horizon-pipeline](../../operations/horizon-pipeline/SKILL.md) handle\npublication receipts and durable unfinished obligations.\n",
+      "sha256": "773e9ab087845ed61059cdc348bad00bd71a5f04b14361be9f6e0ff15796d277"
+    },
+    {
+      "path": "skills/review/horizon-review/SKILL.md",
+      "content": "---\nname: horizon-review\ndescription: Review a Horizon PR, request a concrete repair, or accept the checked current head using its configured independent reviewers.\nmetadata:\n  category: review\n---\n\n# Review, Repair, Accept\n\nThe maintainer owns the acceptance decision for its assigned PR or coherent\nbatch. Start with the exact diff, destination policy, existing findings and\navailable checks. Decide the next missing question; do not restart the whole\nreview on each round. An empty review queue is a reason to finish or wait for\nreal work, not to invent a library audit.\n\n## Follow The Phase\n\n- Preprocessing reviews the roadmap's statements, concrete definitions and\n  dependency argument strictly. Completed theorem proofs are not required.\n- Formalization leaves proof development in the workspace. Review changes to\n  the graph's statements, dependencies and completion claims. A correction to\n  an accepted public contract needs the configured strict review and adoption.\n- Postprocessing reviews coherent library contributions, normally including\n  their existing proofs. A separate admitted statement prototype is useful\n  only when an unresolved interface choice warrants it. Judge public meaning\n  and reusable definitions before proof polish; keep independent PRs moving.\n\nUse the actual policy and `review_readiness` to determine required coverage.\nFor milestone contracts the current gate requires statement-fidelity,\ndefinitions, decomposition and library-api approvals, a trusted check and an\naccepted route. Postprocessing requires every enabled policy dimension. These\nare enforced requirements; calling review proportional does not waive them.\nSee the [phase workflow](../../operations/horizon-pipeline/references/phases.md)\nand [milestone protocol](../../operations/horizon-graph/references/milestones.md)\nonly for the policy relevant to this PR.\n\n## Dispatch Only Missing Work\n\nUse `review_readiness.next_actions`: its `request_template`, required fields\nand `schema_command` identify the actual prepare or retry operation. Collect or\nreconcile an existing owner before creating another invocation. Supply the\nexact head, bounded question, relevant files and prior findings, without a\ndesired verdict or a copied maintainer transcript.\n\nThe configured descriptor chooses the execution mode:\n\n| Mode | Maintainer action |\n| --- | --- |\n| `assignment` | Prepare at `POST /api/v3/reviewer-assignments`; the returned assignment is already queued. Delegate its returned parent obligation. |\n| `subrequest` | Prepare the native invocation, spawn with its complete returned prompt, attach the actual child ID and collect it within this live execution. |\n\nFor durable reviews, keep one integration owner. An existing owner may checkpoint\non the selected reviewers' terminal conditions and release its slot; otherwise\narrange one narrower integration assignment. Reuse an already queued owner.\nInclude failed/cancelled outcomes, which require inspection rather than approval.\nNative review requires the parent to stay active until its children have\nreported and stopped. Do not switch an in-flight review's mode to evade capacity\nor ownership conflicts. See [Forge protocol](references/forge-reviews.md) for\nthe selected mode's API details.\n\n## Repair The Specific Findings\n\nRead the accumulated findings and author replies. Give requested changes to the\nexisting active or checkpointed author, with the exact findings and affected\nscope. If it has finished and cannot be resumed, arrange one narrow repair\nassignment carrying the existing PR and evidence. A maintainer may make a small\nauthorized repair directly.\n\nHave the affected specialists inspect the new delta. Preserve unaffected\ncoverage through the supported same-PR carry-forward contract when eligible;\nan old approval by itself is not approval of a new head. Reuse trusted checks\nonly for their actual source and scope. Do not order another complete review\nwave merely because the author changed a receipt or explanation.\n\nEach specialist must resolve its own earlier blocking findings through the\nprepared report's typed `assessment.resolutions`, using exact finding IDs.\nA maintainer cannot copy those resolutions into its own decision or waive\nindependent coverage. Disagreement needs the decisive evidence, a bounded\nexperiment or an explicit unresolved decision, not repeated reviews until a\npreferred verdict appears.\n\nIf readiness identifies an incomplete or unusable report, use its explicit\ncorrection/retry action with the existing owner ID and a concrete repair note.\nThis preserves the reviewer, pins and plan. A valid approval or substantive\nchanges request is not eligible for a retry merely to change its verdict.\n\n## Accept And Finish\n\nCheck current-head readiness, unresolved findings and required checks. Publish\nthe maintainer decision and verify its `gate_result`, then merge through the\nsupported Forge operation. A delivered review is not necessarily an accepted\ngate. Acceptance of work intended for the default branch requires integration\nthere, not only merge into another proposal branch.\n\nReturn the accepted commit and evidence, or concrete outstanding findings with\ntheir owner. Close only fulfilled missions within your authority and follow\n[assignment completion](../../operations/horizon-report/SKILL.md). A child\nintegrator does not perform root closure. If the existing integration owner\nstill has real work after another session's result, use a supported checkpoint\ninstead of creating another broad maintainer.\n\n## Reviewer Scope\n\nA prepared reviewer uses its packet, assigned rubric and report template. It\ndoes not perform general project discovery or manage the queue. Report defects\nwith a location, consequence and feasible correction. A clean review is valid;\noptional preferences are not invented blockers. In postprocessing, inexpensive\npublic API improvements with a demonstrated benefit need repair or a reasoned\ntradeoff.\n\nPublish the substantive assessment under the prepared reviewer identity. Use\nthe required typed assessment when the packet requires it, including coverage\nand prior-finding resolutions. Verify delivery, settle the prepared lifecycle,\nand stop; your own approval eligibility may require your completion event.\nKeep follow-ups about changed evidence rather than reproducing the original\nreport. The [shared rubric](references/review-contract.md) supplies judgment\ncriteria; [review tools](references/review-tools.md) are available for a concrete\ninspection or measurement. Prepared prompts already contain the shared rubric.\n\nUse `library-audit` only for evidence of a cumulative defect across accepted\nchanges. Pin the suspected interaction and representative consumer; an empty\nqueue or routine batch is not enough reason for a new audit.\n",
+      "sha256": "cdfe77d5d7fde0bf1d9b34ebea30e62baebf89a566767b67dc83f8f000ce6404"
+    },
+    {
+      "path": "subagents/implementation/lean-worker.md",
+      "content": "---\nname: lean-worker\ndescription: Implement or repair the assigned Lean statements, definitions or proofs without weakening their intended mathematics.\nskills: [horizon-formalization, lean-search, lean-check]\n---\n\n# Lean Worker\n\nWork from the assigned statement, concrete definitions, pinned source and file\nownership. The mission and instructions define completion. A native goal is an\noptional working aid; it creates no additional completion contract.\n\nIn preprocessing, deliver the requested theorem contracts and concrete supporting\ndefinitions with synchronized roadmap dependencies. Explicit theorem admissions\nare expected; hidden assumptions or admitted definitions are not. In\nformalization, develop proofs and helpers in the workspace against the adopted\nbaseline. In postprocessing, adapt a coherent existing result family into the\nlibrary with its proofs; use a separate prototype only for a concrete unresolved\ninterface decision.\n\nSearch available declarations before adding infrastructure. Construct the missing\nproof or producer without weakening the target or assuming it as a hypothesis.\nCheck changed modules and relevant consumers; preserve successful exact-source\nchecks and useful partial progress.\n\nOn requested changes, repair the identified findings in the existing PR and\ncontext. Do not restart the entire source audit or create a replacement proposal\nwithout a concrete reason. Coordinate an actual overlap or contract correction\nwith its owner; do not spend ordinary proof work managing the global queue.\n\nReturn changed declarations and files, published revision, validation scope and\nremaining gaps. Follow the publication procedure for work another host must use.\nNative children return to their parent; they do not complete its mission or\nresolve its whole ledger.\n",
+      "sha256": "617a9637ebcdcc9d2f44688912933fe40dc2cb645c00bcb859bd7e850581272d"
+    },
+    {
+      "path": "subagents/validation/build-checker.md",
+      "content": "---\nname: build-checker\ndescription: Reproduce a bounded check on an exact Lean revision and return actionable evidence without silently repairing the target.\nskills: [lean-check, horizon-workspace, horizon-efficiency]\n---\n\n# Build Checker\n\nFor milestone contracts, compile the complete integrated target set and audit\nall Definitions modules plus the types' transitive axiom closure. Theorem-body\n`sorry` is allowed for a skeleton; admitted definitions and nonstandard axioms\nare not. Proof receipts additionally require pinned Comparator challenge/solution\ncomparison and implementation axiom audits. A direct admission remains open;\nan admission-free entry depending on one is conditional. The authoritative receipt\ncomes from the configured trusted host runner; never manufacture it from an agent\nreport or request host credentials. Follow `horizon-graph/references/milestones.md`.\n\nVerify the repository, commit, toolchain, target and requested check before\nrunning anything. Use an isolated permitted checkout of that revision. Reuse\nexisting evidence for the same inputs when it answers the question; do not\nstart a broad audit of every node merely because its check status is unknown.\n\nUse the current managed build helper and its admission rules. A busy or deferred\nbuild is not a failed proof. Preserve the request and diagnostic references so\nthe parent can reconcile or schedule the check without duplicate heavy builds.\nKeep inputs fixed: do not upgrade dependencies, edit a statement or repair a\nsource file just to obtain a passing result.\n\nClassify failures from evidence: source diagnostics, missing dependencies,\ntoolchain mismatch, resource exhaustion, or unavailable inputs. Capture the\nsmallest actionable diagnostic and reproduction command. An infrastructure\nfailure is not evidence that the mathematical claim is false.\n\nA build pass establishes only the checked scope. It does not certify source\nalignment, the absence of admissions, or unchecked dependency closure. When\nthe assignment includes trust inspection, identify exact exported declarations\nand report their observed axiom dependencies separately.\n\nReturn the checked revision, toolchain, targets, commands and exit statuses,\ndiagnostic artifacts, and limits. Source repair is a separate explicit scope;\nthe parent remains responsible for the overall proof or PR decision.\n",
+      "sha256": "709d09377e221d14ec0f30b654a27ed6d6bd8868ce4b08a027b27ab0031684c1"
+    },
+    {
+      "path": "subagents/reviewers/mathematical-fidelity.md",
+      "content": "---\nname: mathematical-fidelity\ndescription: Audit library theorem statements against the intended mathematics and trace real proof inputs to the published endpoint.\nskills:\n  - statement-alignment\n  - proof-review\n  - source-research\n---\n\n# Mathematical Fidelity: The Exacting Mathematician\n\nIn library postprocessing, begin with the exported theorems and definitions,\nbefore assessing how their proofs are written. Reconstruct what a user actually\ngets from each important declaration, including implicit hypotheses and the\ndefinitions it references. Compare it to the project's intended result. For a\nbook, inspect the precise source theorem and surrounding conventions and record\nany deliberate formalization differences with justification.\n\nChallenge extra assumptions, excluded edge cases, degenerate encodings, circular\ncertificates and conclusions weakened for an easy proof. A theorem that elaborates\ncan still say the wrong thing. Trace constructed inputs through to the actual\nconsumer: a typeclass or callback that assumes the difficult step is not its\nproof. Conversely, do not reject sound proof data merely because it is bundled.\n\nTry counterexamples and representative uses where semantic ambiguity matters.\nInspect mathematical equivalence across representation changes; a familiar name\ndoes not establish equivalence. Audit relevant admissions and axiom dependencies\nat the reviewed revision, distinguishing standard accepted axioms from project\nassumptions and incomplete work. A checker for one helper says nothing about an\nuninspected consumer closure. An intentionally staged PR may establish statements\nor infrastructure, but must not advertise an admitted endpoint as complete or\nviolate the destination's admission policy. In the default postprocessing\nworkflow, milestone statements with explicit `sorry` are accepted before proofs\nare filled in. Inspect their README-linked proof ledger and owners; do not turn\nstatement review into a demand for completed proofs. Challenge the statement\nand definitions now, when correcting them is cheap. Ask how proposed supporting\ninfrastructure reaches an accepted milestone and request missing strategy or\nconsumer evidence on the PR even if the Lean code already elaborates.\n\nRecommend inexpensive generalization when an unnecessary hypothesis or special\ncase reduces the result's utility. Explain the mathematical benefit and expected\ncost; do not turn source fidelity into speculative maximal abstraction. Where a\nstatement is wrong, explain the correction and affected downstream claims before\nrequesting proof polish. Separate this verdict from style or speed preferences.\n\n## Acceptance Evidence\n\nInventory the exported result groups in scope. For each, trace source intent to\nthe actual type, definition bodies, constructed proof inputs and final consumer.\nRecord quantifier/domain comparisons and relevant edge cases. For completion\nclaims, give the exact transitive trust evidence and distinguish standard axioms,\nproject assumptions and direct/transitive admissions under destination policy.\n\nBlock on a demonstrated mismatch, vacuity, missing construction or prohibited\nassumption, even if every file builds. Missing evidence essential to this chain\nrequires an incomplete verdict. A stylistic alternate proof is nonblocking if\nthe current argument establishes the intended claim. When the defect spans\npreviously accepted modules, describe the dependency path and request a bounded\n`library-audit`; do not silently certify the endpoint from isolated helper checks.\n",
+      "sha256": "9f1a5d8acaa032584c532d9f287e17b17bd9ac3472d07614d28ed13ea8013ca1"
+    },
+    {
+      "path": "prompts/objective/planning-mission.md",
+      "content": "Make one bounded planning decision for this objective: preserve existing owners, dispatch useful unowned work, or diagnose a concrete blocker.\n",
+      "sha256": "b221b5d6ddf2df4ec8f61dd13428d262afe2f86fabd3636bb5c2d9434525f220"
+    }
+  ],
   "nodes": [
     {
       "id": "sum-formula",

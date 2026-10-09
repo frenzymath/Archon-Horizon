@@ -15,6 +15,7 @@ include src/archon_horizon/frontend/tsconfig.json
 include src/archon_horizon/frontend/vite.config.ts
 include src/archon_horizon/frontend/vite.showcase.config.ts
 include src/archon_horizon/frontend/showcase/index.html
+recursive-include src/archon_horizon/frontend/showcase/public *.html *.css
 include src/archon_horizon/frontend/src/showcase/fixture.json
 recursive-include src/archon_horizon/frontend/src *.ts *.tsx *.css
 recursive-include src/archon_horizon/frontend/tests *.ts *.tsx *.cjs

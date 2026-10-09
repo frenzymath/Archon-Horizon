@@ -8,6 +8,7 @@ option. Public documentation must never acquire operator records or credentials.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,6 +16,42 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = ROOT / "src/archon_horizon/frontend/src/showcase/fixture.json"
 STAMP = "2026-10-01T10:00:00Z"
+
+
+def instruction_catalog() -> tuple[dict, list[dict]]:
+    """Select public bundled instructions without reading an operator catalog."""
+    skills = [
+        {"name": name, "description": description, "category": category,
+         "path": f"skills/{category}/{name}/SKILL.md", "resources": []}
+        for category, name, description in [
+            ("operations", "horizon-pipeline", "Coordinate formalization assignments and phase delivery."),
+            ("operations", "horizon-delegation", "Delegate independently scoped work and collect its evidence."),
+            ("operations", "horizon-graph", "Inspect and update source-bound dependency graphs."),
+            ("lean", "horizon-formalization", "Develop and verify Lean formalizations."),
+            ("lean", "lean-check", "Check Lean sources in their pinned project toolchain."),
+            ("review", "horizon-review", "Review proposals and reconcile findings and repairs."),
+        ]
+    ]
+    subagents = [
+        {"slug": name, "description": description, "category": category,
+         "source_path": f"subagents/{category}/{name}.md", "skills": selected_skills}
+        for category, name, description, selected_skills in [
+            ("implementation", "lean-worker", "Implement a scoped Lean proof and report verification.", ["horizon-formalization", "lean-check"]),
+            ("validation", "build-checker", "Check the exact source revision and report build evidence.", ["lean-check"]),
+            ("reviewers", "mathematical-fidelity", "Review mathematical meaning and hypotheses.", ["horizon-review"]),
+        ]
+    ]
+    prompts = [{"name": "Planning mission", "description": "The bundled objective-planning mission template.",
+                "category": "prompts", "path": "prompts/objective/planning-mission.md"}]
+    files = []
+    for item in [*skills, *subagents, *prompts]:
+        path = item.get("path") or item["source_path"]
+        source = path.replace("prompts/", "instructions/templates/", 1)
+        content = (ROOT / "src/archon_horizon/pipeline" / source).read_text("utf-8")
+        files.append({"path": path, "content": content,
+                      "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
+    return {"revision": "synthetic-catalog-1", "skills": skills, "subagents": subagents,
+            "prompts": prompts, "files": [item["path"] for item in files]}, files
 
 
 def fixture() -> dict:
@@ -79,7 +116,40 @@ def fixture() -> dict:
                  "issued_year": 2026, "venue": "Demonstration Library", "identifiers": {}, "urls": [],
                  "abstract": "Invented bibliography data demonstrating the reference catalog; this is not a published work.",
                  "metadata_source": "manual", "status": "active", "revision": 1, "created_at": STAMP, "updated_at": STAMP}
-    return {"schema_version": 1, "generated_at": STAMP, "project": project, "objective": objective,
+    catalog, instruction_files = instruction_catalog()
+    hosts = [
+        {"id": "example-host", "revision": 1, "slug": "proof-worker", "display_name": "Proof worker",
+         "mode": "enabled", "workspace_root": "/example/workspaces", "scratch_root": "/example/scratch"},
+        {"id": "example-review-host", "revision": 1, "slug": "review-worker", "display_name": "Review worker",
+         "mode": "draining", "workspace_root": "/example/reviews", "scratch_root": "/example/review-scratch"},
+    ]
+    harnesses = [
+        {"id": "demo-codex", "revision": 1, "slug": "codex-example", "adapter": "codex_exec",
+         "provider_version": "synthetic", "enabled": True,
+         "model_options": {"model": "example-model", "reasoning_effort": "medium"}},
+        {"id": "demo-claude", "revision": 1, "slug": "claude-example", "adapter": "claude_exec",
+         "provider_version": "synthetic", "enabled": True, "model_options": {"model": "example-model"}},
+    ]
+    reviewers = [{"id": "demo-reviewer", "revision": 1, "project_id": project["id"],
+                  "slug": "mathematical-fidelity", "enabled": True, "invocation": "subrequest",
+                  "functions": ["reviewer"], "harness_id": "demo-codex", "model_options": {},
+                  "instructions": "Review the finite-sum statement and preserve its hypotheses. This is a synthetic reviewer configuration."}]
+    resources = {"hosts": [
+        {"id": hosts[0]["id"], "name": hosts[0]["display_name"], "mode": "enabled", "status": "enabled",
+         "slots": 4, "occupied_slots": 1, "heartbeat_at": STAMP, "detail": "One synthetic proof session; three free slots."},
+        {"id": hosts[1]["id"], "name": hosts[1]["display_name"], "mode": "draining", "status": "draining",
+         "slots": 2, "occupied_slots": 1, "heartbeat_at": STAMP, "detail": "Finishing a synthetic review; no new sessions admitted."},
+    ], "storage": [{"category": "workspaces", "bytes": 2147483648, "protected_bytes": 1610612736,
+                    "reclaimable_bytes": 536870912}], "free_bytes": 68719476736, "observed_at": STAMP,
+        "oldest_pending_delivery": None, "backup_status": "synthetic snapshot", "provider_status": "demo only"}
+    integrations = [{"id": f"demo-{kind}", "kind": kind, "enabled": True,
+                     "public_url": f"./integrations/{kind}.html", "browser_session": False}
+                    for kind in ["forge", "zulip"]]
+    return {"schema_version": 2, "generated_at": STAMP, "project": project, "objective": objective,
+            "account": {"id": "demo-administrator", "username": "demo-admin", "role": "admin",
+                        "permissions": {"admin": True, "write": False}},
+            "hosts": hosts, "harnesses": harnesses, "reviewers": reviewers, "resources": resources,
+            "integrations": integrations, "instruction_catalog": catalog, "instruction_files": instruction_files,
             "nodes": nodes, "run": run, "sessions": sessions, "events": events, "report": report,
             "references": [reference], "bibtex": "@book{synthetic_finite_sums_2026,\n  title = {A synthetic introduction to finite sums},\n  author = {Example Author},\n  year = {2026},\n  note = {Invented demonstration data}\n}\n"}
 

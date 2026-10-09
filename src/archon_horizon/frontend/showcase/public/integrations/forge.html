@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; script-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+    <link rel="stylesheet" href="preview.css">
+    <title>Synthetic Forge preview</title>
+  </head>
+  <body>
+    <header><strong>Forge</strong><span>finite-sums / workspace</span><span>demo-admin · administrator</span></header>
+    <div class="notice">Synthetic Forge preview · read-only · local example, not a live Forgejo service</div>
+    <main>
+      <h1>Finite sums repository</h1>
+      <p class="meta">A demonstration Lean workspace with roadmap proposals and review evidence.</p>
+      <nav aria-label="Repository views"><a href="#files">Code</a><a href="#issues">Issues · 2</a><a href="#proposals">Pull requests · 1</a><a href="#activity">Activity</a></nav>
+      <section id="files" class="panel">
+        <h2>workspace / main</h2>
+        <p class="meta">Example Maintainer · State the induction helper · synthetic commit</p>
+        <table><thead><tr><th>File</th><th>Latest change</th></tr></thead><tbody>
+          <tr><td><code>FiniteSums/Basic.lean</code></td><td>State the finite-sum theorem</td></tr>
+          <tr><td><code>FiniteSums/Induction.lean</code></td><td>Prove the induction step</td></tr>
+          <tr><td><code>roadmap.md</code></td><td>Connect the main milestone to its helpers</td></tr>
+          <tr><td><code>lakefile.toml</code></td><td>Pin the demonstration project dependencies</td></tr>
+          <tr><td><code>README.md</code></td><td>Describe the objective and verification boundary</td></tr>
+        </tbody></table>
+      </section>
+      <section id="proposals" class="panel"><h2>Pull requests</h2>
+        <div class="proposal"><span class="badge">Open</span><div><strong>#3 Complete the finite-sum theorem</strong><span class="meta">Example Worker requests review from Example Maintainer</span><p>The induction helper is ready. Review the public statement and its source-bound build evidence before accepting the library interface.</p></div></div>
+      </section>
+      <section id="issues" class="panel"><h2>Issues</h2>
+        <div class="proposal"><span class="badge">Open</span><div><strong>#2 Package a reusable library</strong><span class="meta">Postprocessing · depends on the main theorem</span></div></div>
+        <div class="proposal"><span class="badge">Closed</span><div><strong>#1 Prove the empty-sum case</strong><span class="meta">Formalization · helper completed in the example graph</span></div></div>
+      </section>
+      <section id="activity" class="panel"><h2>Review activity</h2><p><strong>Example Reviewer:</strong> Keep the natural-number hypotheses explicit and reuse the verified induction helper.</p><p class="meta">All commits, proposals and review messages are invented demonstration records.</p></section>
+    </main>
+  </body>
+</html>

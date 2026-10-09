@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'none'; script-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+    <link rel="stylesheet" href="preview.css">
+    <title>Synthetic Zulip preview</title>
+  </head>
+  <body class="zulip">
+    <header><strong>Zulip</strong><span>Finite sums</span><span>demo-admin · administrator</span></header>
+    <div class="notice">Synthetic Zulip preview · read-only · local example, not a live Zulip service</div>
+    <div class="zulip-layout">
+      <aside class="streams"><strong>CHANNELS</strong><a href="#formalization"># formalization</a><a href="#review"># review</a><a href="#operations"># operations</a><strong>PEOPLE</strong><p class="meta">Example Maintainer<br>Example Worker<br>Example Reviewer</p></aside>
+      <main class="discussions">
+        <h1>Finite sums discussions</h1>
+        <section id="formalization" class="panel topic"><h2># formalization › induction helper</h2>
+          <div class="message"><strong>Example Worker</strong><time>18:00</time><p>The induction helper is ready. The empty-sum case and induction step are recorded in the dependency graph.</p></div>
+          <div class="message"><strong>Example Maintainer</strong><time>18:02</time><p>Connect those helpers to the main theorem, then provide the exact source revision and toolchain check.</p></div>
+        </section>
+        <section id="review" class="panel topic"><h2># review › finite-sum library proposal</h2>
+          <div class="message"><strong>Example Reviewer</strong><time>18:05</time><p>The mathematical statement should quantify over natural numbers and preserve the intended finite range. I will review proposal #3 in Forge.</p></div>
+          <div class="message"><strong>Example Worker</strong><time>18:07</time><p>I have linked the proposal and kept the remaining verification obligation in the goal ledger.</p></div>
+        </section>
+        <section id="operations" class="panel topic"><h2># operations › execution capacity</h2>
+          <div class="message"><strong>Example Maintainer</strong><time>18:10</time><p>The proof worker has three unoccupied scheduler slots. The review worker is draining; no new work should be placed there.</p></div>
+          <div class="message"><strong>Demo Administrator</strong><time>18:12</time><p>These host states and messages are synthetic examples. No provider account or running agent is connected to this preview.</p></div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

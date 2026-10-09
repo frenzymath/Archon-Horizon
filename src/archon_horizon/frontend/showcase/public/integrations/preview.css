@@ -1,0 +1,36 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; color: #223047; background: #f5f7fb; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: #2859a5; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { padding: 16px 24px; display: flex; align-items: center; gap: 16px; background: #213b30; color: white; }
+header strong { font-size: 20px; }
+header span:last-child { margin-left: auto; font-size: 13px; }
+.notice { padding: 10px 24px; background: #e9effa; color: #30466b; font-size: 13px; }
+main { padding: 24px; max-width: 1100px; margin: auto; }
+h1 { font-size: 23px; margin: 0 0 8px; }
+h2 { font-size: 18px; margin: 0 0 14px; }
+p { line-height: 1.6; }
+nav { display: flex; flex-wrap: wrap; gap: 22px; padding: 16px 0; border-bottom: 1px solid #dce2eb; }
+.panel { padding: 20px; margin-top: 20px; border: 1px solid #dce2eb; border-radius: 10px; background: white; }
+.panel:target { border-color: #759ac9; box-shadow: 0 0 0 2px #d9e8fc; }
+.meta { font-size: 13px; color: #65748b; }
+.badge { display: inline-block; padding: 3px 9px; border-radius: 20px; background: #e6f4ec; color: #286445; font-size: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+td, th { padding: 12px 8px; text-align: left; border-bottom: 1px solid #edf0f5; }
+code { font-family: ui-monospace, monospace; font-size: 13px; }
+.proposal { display: flex; align-items: start; gap: 14px; margin: 16px 0; }
+.proposal strong { display: block; margin-bottom: 5px; }
+.zulip header { background: #352b5b; }
+.zulip-layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); max-width: 1300px; margin: auto; min-height: calc(100vh - 100px); }
+.streams { padding: 24px 16px; background: #efedf7; border-right: 1px solid #dcd7ed; }
+.streams a { display: block; margin: 14px 0; color: #51456f; }
+.streams strong { display: block; margin: 16px 0 8px; font-size: 13px; color: #756a91; }
+.discussions { padding: 24px; }
+.topic { padding: 0; overflow: hidden; }
+.topic h2 { padding: 13px 18px; background: #f0edf7; border-bottom: 1px solid #e7e2f0; margin: 0; font-size: 15px; }
+.message { padding: 16px 18px; border-bottom: 1px solid #edf0f5; }
+.message strong { font-size: 14px; }
+.message time { color: #7c8493; font-size: 12px; float: right; }
+.message p { margin: 7px 0 0; font-size: 14px; }
+@media (max-width: 650px) { header { padding: 14px; flex-wrap: wrap; } main, .discussions { padding: 16px; } .zulip-layout { grid-template-columns: 1fr; } .streams { border-right: 0; border-bottom: 1px solid #dcd7ed; } .streams a { display: inline-block; margin: 6px 12px 6px 0; } }
