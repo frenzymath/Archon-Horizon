@@ -1,18 +1,45 @@
 """Native harness event parsing used by the Activity collector."""
 
 import json
+import pytest
 
-from archon_horizon.pipeline.harness_events import HarnessEvent, HarnessEventKind, HarnessUsage
-from archon_horizon.pipeline.harness_parsers import (
-    claude_session_id, codex_session_id, parse_claude_line, parse_codex_line,
-    parse_codex_rollout_line, parse_plain_line,
-)
+from archon_horizon.pipeline.providers.harness_events import HarnessEvent, HarnessEventKind, HarnessUsage
+from archon_horizon.pipeline.providers.harness_parsers import claude_session_id, codex_session_id, parse_claude_line, parse_codex_line, parse_codex_rollout_line, parse_plain_line
 
 
 def test_plain_parser() -> None:
     assert parse_plain_line("  ") == []
     [event] = parse_plain_line("hello")
     assert event.kind is HarnessEventKind.TEXT and event.text == "hello"
+
+
+@pytest.mark.parametrize("parser,payload", [
+    (parse_claude_line, {"type": "assistant", "message": {"content": None}}),
+    (parse_codex_line, {"type": "item.completed", "item": None}),
+    (parse_codex_rollout_line, {"type": "response_item", "payload": {"type": "message", "content": 42}}),
+    (parse_codex_rollout_line, {"type": "response_item", "payload": {"type": "reasoning", "summary": 42}}),
+    (parse_codex_rollout_line, {"type": "response_item", "payload": {"type": "reasoning", "summary": [{"text": [1]}]}}),
+    (parse_codex_rollout_line, {"type": "event_msg", "payload": {"type": "sub_agent_activity", "agent_thread_id": "child", "kind": {}}}),
+    (parse_codex_rollout_line, {"type": "event_msg", "payload": {"type": "token_count", "info": [1]}}),
+    (parse_codex_rollout_line, {"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": [1]}}}),
+])
+def test_unexpected_native_field_shapes_do_not_abort_parsing(parser, payload):
+    assert parser(json.dumps(payload)) == []
+
+
+def test_malformed_native_counter_values_do_not_abort_later_events():
+    events = parse_codex_rollout_line(json.dumps({"type": "event_msg", "payload": {
+        "type": "token_count", "info": {"last_token_usage": {
+            "input_tokens": "unknown", "output_tokens": float("inf")}}}}))
+    assert events[0].usage.tokens_in == 0 and events[0].usage.tokens_out == 0
+    assert parse_codex_line(json.dumps({"type": "item.completed", "item": {
+        "type": "agent_message", "text": "Still running"}}))[0].text == "Still running"
+
+
+@pytest.mark.parametrize("role", ["user", "developer", "system"])
+def test_rollout_does_not_render_injected_prompts_as_agent_narration(role):
+    assert parse_codex_rollout_line(json.dumps({"type": "response_item", "payload": {
+        "type": "message", "role": role, "content": [{"type": "text", "text": "Private instructions"}]}})) == []
 
 
 def test_codex_rollout_collaboration_uses_thread_ids_and_observed_configuration() -> None:
@@ -165,7 +192,7 @@ def test_codex_rollout_session_meta_surfaces_model_and_role() -> None:
 def test_codex_rollout_turn_context_surfaces_effort() -> None:
     # Codex records the reasoning-effort tier it actually ran with on turn_context;
     # observed_effort scans it back so the run view can verify it (not just config).
-    from archon_horizon.pipeline.harness_parsers import observed_effort
+    from archon_horizon.pipeline.providers.harness_parsers import observed_effort
 
     line = json.dumps({
         "type": "turn_context",
@@ -180,7 +207,7 @@ def test_codex_rollout_turn_context_surfaces_effort() -> None:
 
 def test_observed_model_ignores_nested_subagent_events() -> None:
     """Parent session chip must not inherit the first subagent's model (I: luna→gpt)."""
-    from archon_horizon.pipeline.harness_parsers import observed_model
+    from archon_horizon.pipeline.providers.harness_parsers import observed_model
 
     events = [
         HarnessEvent(

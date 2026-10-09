@@ -1,0 +1,1 @@
+Run one bounded control pass: inspect Horizon health and queue consistency, activate only the required planner or maintainer automation, report incidents through operations Zulip, and finish without mathematical or repository work.

@@ -16,7 +16,7 @@ import sqlite3
 import time
 from uuid import UUID, uuid5
 
-from ..activity_display import display_event
+from ..dashboard.activity_display import display_event
 from ..worker_config import WorkerConfig, open_journal
 from .contracts import Operation
 from .journal import JournalFull

@@ -10,17 +10,14 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from archon_horizon.pipeline.auth import authenticate
-from archon_horizon.pipeline.communications import route_subject_event, subscribe
-from archon_horizon.pipeline.connectors import ConnectorFailure, ConnectorManager, ForgejoClient
+from archon_horizon.pipeline.integrations.communications import route_subject_event, subscribe
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ConnectorManager, ForgejoClient
 from archon_horizon.pipeline.errors import DomainError
 from archon_horizon.pipeline.models import SubscriptionCreate
-from archon_horizon.pipeline.notifications import (
-    CONTROL_NOTICE_LIMIT, CONTROL_SUMMARY_BYTES, OperatorNotice, control_summary,
-    delivery_failed, operator_notice, prompt_summary,
-)
-from archon_horizon.pipeline.prompts import goal
-from archon_horizon.pipeline.records import change, create, emit, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.execution.notifications import CONTROL_NOTICE_LIMIT, CONTROL_SUMMARY_BYTES, OperatorNotice, control_summary, delivery_failed, operator_notice, prompt_summary
+from archon_horizon.pipeline.instructions.prompts import goal
+from archon_horizon.pipeline.persistence.records import change, create, emit, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 from test_pipeline_api import api, api_database, auth, mutate
 
@@ -75,7 +72,8 @@ def test_summary_bounds_unicode_and_preserves_overflow_and_assignment_scope(worl
 @pytest.mark.parametrize("role,functions", [("worker", []), ("maintainer", []), ("maintainer", ["orchestrator"])])
 @pytest.mark.parametrize("status", ["succeeded", "yielded"])
 def test_unhandled_notice_cannot_restart_successful_context_forever(world, role, functions, status):
-    run = world.run(retry_policy={"max_no_progress_requests": 2})
+    run = world.run(orchestrated="orchestrator" in functions,
+                    retry_policy={"max_no_progress_requests": 2})
     world.disable_automations(run)
     assigned = world.assignment(run, role=role, functions=functions)
     notice = operator_notice(world.conn, world.actor, assigned["id"],

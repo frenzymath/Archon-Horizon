@@ -1,0 +1,2480 @@
+{
+  "schema_version": 1,
+  "scope": "instructions, review, integrations, providers, search, pipeline/_resources.py",
+  "method": "Read each complete function body and module-level contracts; record findings and applied repairs. This is scoped source review, not execution proof.",
+  "files": [
+    {
+      "path": "src/archon_horizon/pipeline/_resources.py",
+      "sha256": "86c06459353047be1ed1d2ca926e4ce46d864584ef7319616a2a24735cf3739b",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/__init__.py",
+      "sha256": "507100e7d1fa19aadea97f3ff484e821fafddfad09dcd0cd676e54f3ccd0e826",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/bundles.py",
+      "sha256": "81b9926554109022a0e682dc287cb3630da66b5c502bbf94a78e281760f6e77d",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_skill_metadata",
+          "line": 16,
+          "end_line": 38,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "skill_overview",
+          "line": 41,
+          "end_line": 49,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "skill_files",
+          "line": 52,
+          "end_line": 111,
+          "status": "reviewed",
+          "findings": [
+            "prompt_catalog_packaging"
+          ]
+        },
+        {
+          "name": "skill_path",
+          "line": 114,
+          "end_line": 121,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/instruction_catalog.py",
+      "sha256": "8e375b8a79721b221fd65be52cc0e56da51cf09ffa94c7477ba15d0a7f57293f",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "read_catalog",
+          "line": 14,
+          "end_line": 46,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/prompts.py",
+      "sha256": "fff560053eab95fabbe30e6428994121a646aded1a7aebd1a30553e95ea88c46",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "catalog",
+          "line": 38,
+          "end_line": 49,
+          "status": "reviewed",
+          "findings": [
+            "retained_prompt_provenance"
+          ]
+        },
+        {
+          "name": "_phase_repositories",
+          "line": 56,
+          "end_line": 76,
+          "status": "reviewed",
+          "findings": [
+            "objective_document_repository"
+          ]
+        },
+        {
+          "name": "_review_readiness_batch",
+          "line": 79,
+          "end_line": 94,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "operations_context",
+          "line": 97,
+          "end_line": 310,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "operations_context.size",
+          "line": 109,
+          "end_line": 112,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "operations_context.sanitized",
+          "line": 114,
+          "end_line": 115,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "orchestrator_context",
+          "line": 313,
+          "end_line": 314,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_orchestrator_goal",
+          "line": 317,
+          "end_line": 324,
+          "status": "reviewed",
+          "findings": [
+            "retained_prompt_provenance"
+          ]
+        },
+        {
+          "name": "_pinned_bundle",
+          "line": 330,
+          "end_line": 339,
+          "status": "reviewed",
+          "findings": [
+            "retained_prompt_provenance"
+          ]
+        },
+        {
+          "name": "objective_goal",
+          "line": 342,
+          "end_line": 393,
+          "status": "reviewed",
+          "findings": [
+            "retained_prompt_provenance",
+            "objective_briefing_bounds"
+          ]
+        },
+        {
+          "name": "goal",
+          "line": 396,
+          "end_line": 496,
+          "status": "reviewed",
+          "findings": [
+            "retained_prompt_provenance",
+            "objective_briefing_bounds"
+          ]
+        },
+        {
+          "name": "goal.excerpt",
+          "line": 432,
+          "end_line": 437,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/subagent_guidance.py",
+      "sha256": "0ca94bdb0141858244e7607edf3be8d48f4a4147ec9e5e4c44d4766a88dee91c",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "descriptor",
+          "line": 10,
+          "end_line": 24,
+          "status": "reviewed",
+          "findings": [
+            "subagent_prompt_source"
+          ]
+        },
+        {
+          "name": "overview",
+          "line": 27,
+          "end_line": 33,
+          "status": "reviewed",
+          "findings": [
+            "subagent_prompt_source"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/instructions/templates.py",
+      "sha256": "9d3d13898d468e64a5aa8a0705104cd191ab02cd082ba22cd550d91d32dd27cb",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "template",
+          "line": 21,
+          "end_line": 49,
+          "status": "reviewed",
+          "findings": [
+            "pinned_template_loader"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/__init__.py",
+      "sha256": "6275bae351ce6039c63208bded0a67dbe5dc608e68cd84f6301680dbf32ccf79",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/browser_integrations.py",
+      "sha256": "d9c235b6210c1d20d5d3e4a167ef2ba9565aa925e5b4c77b37db1069bde2eae8",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "authorize",
+          "line": 25,
+          "end_line": 58,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_jwt",
+          "line": 61,
+          "end_line": 65,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_jwt.encode",
+          "line": 62,
+          "end_line": 63,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "binding_name",
+          "line": 68,
+          "end_line": 69,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_binding_value",
+          "line": 72,
+          "end_line": 80,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "verify_binding",
+          "line": 83,
+          "end_line": 99,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "bind_cookies",
+          "line": 102,
+          "end_line": 115,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_cookies",
+          "line": 118,
+          "end_line": 157,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "provider_cookies",
+          "line": 160,
+          "end_line": 186,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "establish",
+          "line": 189,
+          "end_line": 198,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/communications.py",
+      "sha256": "a8cff44ebb0b4dff103168e08be588ad34a3a1b35094aa67fc3596dd46537ad4",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "DiscussionRegistration.one_binding",
+          "line": 31,
+          "end_line": 39,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "register_discussion",
+          "line": 47,
+          "end_line": 69,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "scoped_subject",
+          "line": 72,
+          "end_line": 79,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "link_subject",
+          "line": 82,
+          "end_line": 88,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "discussion_channel",
+          "line": 91,
+          "end_line": 102,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "seed_assignment_subscriptions",
+          "line": 105,
+          "end_line": 113,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "subscribe",
+          "line": 116,
+          "end_line": 134,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "read_messages",
+          "line": 137,
+          "end_line": 171,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "follow_discussion",
+          "line": 174,
+          "end_line": 178,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "discussion_fingerprint",
+          "line": 181,
+          "end_line": 189,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "discussion_read_scope",
+          "line": 192,
+          "end_line": 214,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "queue_reply",
+          "line": 217,
+          "end_line": 255,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_mention_text",
+          "line": 258,
+          "end_line": 273,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "resolve_mentions",
+          "line": 276,
+          "end_line": 316,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "route_subject_event",
+          "line": 319,
+          "end_line": 342,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "route_message",
+          "line": 345,
+          "end_line": 398,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/connectors.py",
+      "sha256": "2f0453c002f9863df32429d72faf281a3326d87c01156c7beae44ea3b70679c0",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "ConnectorFailure.__init__",
+          "line": 35,
+          "end_line": 38,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "SecretResolver.__init__",
+          "line": 44,
+          "end_line": 47,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "SecretResolver.__call__",
+          "line": 49,
+          "end_line": 68,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "RemoteClient.__init__",
+          "line": 72,
+          "end_line": 84,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "RemoteClient.request",
+          "line": 86,
+          "end_line": 142,
+          "status": "reviewed",
+          "findings": [
+            "retry_after_finite"
+          ]
+        },
+        {
+          "name": "RemoteClient.close",
+          "line": 144,
+          "end_line": 146,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.__init__",
+          "line": 150,
+          "end_line": 153,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.repository_path",
+          "line": 156,
+          "end_line": 160,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.pages",
+          "line": 162,
+          "end_line": 171,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.pull",
+          "line": 173,
+          "end_line": 177,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.file_at_commit",
+          "line": 179,
+          "end_line": 201,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.inspect_item",
+          "line": 203,
+          "end_line": 241,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.sync_items",
+          "line": 243,
+          "end_line": 256,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.set_label",
+          "line": 258,
+          "end_line": 279,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.require_head_checks",
+          "line": 281,
+          "end_line": 297,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.find_review",
+          "line": 299,
+          "end_line": 305,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.submit_review",
+          "line": 307,
+          "end_line": 335,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.create_item",
+          "line": 337,
+          "end_line": 370,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.create_item.finish",
+          "line": 345,
+          "end_line": 350,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.comment",
+          "line": 372,
+          "end_line": 385,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ForgejoClient.merge_checked",
+          "line": 387,
+          "end_line": 413,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.__init__",
+          "line": 417,
+          "end_line": 421,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.register",
+          "line": 423,
+          "end_line": 430,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.events",
+          "line": 432,
+          "end_line": 447,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.topic_messages",
+          "line": 449,
+          "end_line": 473,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.message",
+          "line": 475,
+          "end_line": 476,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.topics",
+          "line": 478,
+          "end_line": 488,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.search_messages",
+          "line": 490,
+          "end_line": 509,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ZulipClient.post",
+          "line": 511,
+          "end_line": 535,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager.__init__",
+          "line": 539,
+          "end_line": 546,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager.remote_client",
+          "line": 548,
+          "end_line": 556,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._cursor",
+          "line": 559,
+          "end_line": 563,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._unavailable",
+          "line": 565,
+          "end_line": 572,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager.sync_all",
+          "line": 574,
+          "end_line": 594,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._item_values",
+          "line": 597,
+          "end_line": 605,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager.sync_forge",
+          "line": 607,
+          "end_line": 685,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._claim_operation",
+          "line": 687,
+          "end_line": 725,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._claim_operation.delivery_target",
+          "line": 690,
+          "end_line": 698,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._actor",
+          "line": 728,
+          "end_line": 734,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._require_delivery_project",
+          "line": 737,
+          "end_line": 770,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._operation_snapshot",
+          "line": 772,
+          "end_line": 886,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._deliver",
+          "line": 888,
+          "end_line": 977,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._record_review",
+          "line": 979,
+          "end_line": 1035,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._activate_gate",
+          "line": 1038,
+          "end_line": 1100,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._settle_operation",
+          "line": 1102,
+          "end_line": 1218,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._invalidate_gate",
+          "line": 1220,
+          "end_line": 1236,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager.dispatch_one",
+          "line": 1238,
+          "end_line": 1260,
+          "status": "reviewed",
+          "findings": [
+            "connector_unexpected_shape"
+          ]
+        },
+        {
+          "name": "ConnectorManager._authorize_mutation",
+          "line": 1262,
+          "end_line": 1269,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._upsert_message",
+          "line": 1272,
+          "end_line": 1295,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._delete_message",
+          "line": 1298,
+          "end_line": 1306,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager.sync_zulip",
+          "line": 1308,
+          "end_line": 1317,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ConnectorManager._sync_zulip",
+          "line": 1319,
+          "end_line": 1453,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/forge_change_transport.py",
+      "sha256": "01d4a8a1b1d84f8c8ceed84ac34ad510a0551f32548f8feb07e39563b6487d0e",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_commit",
+          "line": 14,
+          "end_line": 19,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_tree",
+          "line": 22,
+          "end_line": 52,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_validate_base_changes",
+          "line": 55,
+          "end_line": 91,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_verify_changes",
+          "line": 94,
+          "end_line": 129,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "change_files",
+          "line": 132,
+          "end_line": 187,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/forge_changes.py",
+      "sha256": "b9c0a9f31840bf493baa743c5f1d507026fa3807e478e948922185d0048fd7a0",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "queue",
+          "line": 11,
+          "end_line": 42,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/forge_inspection.py",
+      "sha256": "d7559667f7229a4cc771dc84f06ac6eb594b4cbb2332785cf3b8fb8bf876510c",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "repository_head",
+          "line": 14,
+          "end_line": 43,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "inspect",
+          "line": 46,
+          "end_line": 76,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/integration_views.py",
+      "sha256": "9949135dbafa8336833a87c687f2a9e532fb927cf3ef62644cce509fcbac68fe",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "public_url",
+          "line": 11,
+          "end_line": 18,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "repository_url",
+          "line": 21,
+          "end_line": 24,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "project_integrations",
+          "line": 27,
+          "end_line": 46,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/integrations/operation_receipts.py",
+      "sha256": "8491314c5396d1a31084de87903749e8a90a61d9ae67d55f095349a9ceb9db3b",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "current_receipt",
+          "line": 22,
+          "end_line": 39,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "publication_receipt",
+          "line": 42,
+          "end_line": 70,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/__init__.py",
+      "sha256": "ca71082120a4851e966712e830a923fd2d22da6b0143604505e13b7d10607920",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/harness_events.py",
+      "sha256": "e2a40352510439b1a164b820a3eb73cfa8e16315581225115341fda9707664f5",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "utc_now",
+          "line": 11,
+          "end_line": 12,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/harness_parsers.py",
+      "sha256": "f8c40dba44c3e707d8db6a2e872ce2550431ed3d550969884ee28fa36c8e2f97",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "parse_plain_line",
+          "line": 22,
+          "end_line": 24,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_loads",
+          "line": 27,
+          "end_line": 35,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_native_ts",
+          "line": 38,
+          "end_line": 46,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_tag_value",
+          "line": 49,
+          "end_line": 57,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_subagent_name",
+          "line": 60,
+          "end_line": 66,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_subagent_description",
+          "line": 69,
+          "end_line": 76,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_subagent_start",
+          "line": 79,
+          "end_line": 85,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_subagent_end",
+          "line": 88,
+          "end_line": 102,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_workflow_progress",
+          "line": 105,
+          "end_line": 124,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_notification_text",
+          "line": 127,
+          "end_line": 138,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_claude_workflow_events",
+          "line": 141,
+          "end_line": 191,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_int_or_zero",
+          "line": 194,
+          "end_line": 198,
+          "status": "reviewed",
+          "findings": [
+            "native_parser_shape_recovery"
+          ]
+        },
+        {
+          "name": "_float_or_none",
+          "line": 201,
+          "end_line": 207,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_usage_from_native",
+          "line": 210,
+          "end_line": 240,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_claude_model",
+          "line": 243,
+          "end_line": 270,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_claude_model._tokens",
+          "line": 261,
+          "end_line": 266,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_is_subagent_scoped_event",
+          "line": 287,
+          "end_line": 292,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "observed_model",
+          "line": 295,
+          "end_line": 309,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "observed_effort",
+          "line": 312,
+          "end_line": 328,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_usage_data",
+          "line": 331,
+          "end_line": 340,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_codex_context_data",
+          "line": 343,
+          "end_line": 365,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_codex_context_data.number",
+          "line": 346,
+          "end_line": 351,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "parse_claude_line",
+          "line": 368,
+          "end_line": 513,
+          "status": "reviewed",
+          "findings": [
+            "native_parser_shape_recovery"
+          ]
+        },
+        {
+          "name": "parse_codex_line",
+          "line": 516,
+          "end_line": 640,
+          "status": "reviewed",
+          "findings": [
+            "native_parser_shape_recovery"
+          ]
+        },
+        {
+          "name": "_codex_ts",
+          "line": 646,
+          "end_line": 649,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_codex_command_str",
+          "line": 652,
+          "end_line": 662,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_decode_codex_args",
+          "line": 665,
+          "end_line": 674,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_codex_rollout_item",
+          "line": 677,
+          "end_line": 738,
+          "status": "reviewed",
+          "findings": [
+            "native_parser_shape_recovery",
+            "native_injected_prompt_narration"
+          ]
+        },
+        {
+          "name": "parse_codex_rollout_line",
+          "line": 741,
+          "end_line": 895,
+          "status": "reviewed",
+          "findings": [
+            "native_parser_shape_recovery"
+          ]
+        },
+        {
+          "name": "claude_session_id",
+          "line": 904,
+          "end_line": 910,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "codex_session_id",
+          "line": 913,
+          "end_line": 928,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/provider_events.py",
+      "sha256": "cbffdcce09957b4f9d94f31e4dc3b019e3cd28fdab0c13b6c4316b6333780d56",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_text",
+          "line": 30,
+          "end_line": 31,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_count",
+          "line": 34,
+          "end_line": 35,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_cost",
+          "line": 38,
+          "end_line": 45,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_usage",
+          "line": 48,
+          "end_line": 59,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_usage_fields",
+          "line": 62,
+          "end_line": 69,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "select_native_event",
+          "line": 72,
+          "end_line": 161,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_invocation_ref",
+          "line": 189,
+          "end_line": 198,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "normalize",
+          "line": 201,
+          "end_line": 267,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "child_state_ref",
+          "line": 270,
+          "end_line": 272,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "project_observation",
+          "line": 275,
+          "end_line": 325,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_child",
+          "line": 328,
+          "end_line": 435,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_record_usage",
+          "line": 438,
+          "end_line": 519,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/providers/usage_accounting.py",
+      "sha256": "296301fa8944555689853dfa3d9115911541bcdea4edf89888e2f1eaa43277f8",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "reconcile_counter",
+          "line": 14,
+          "end_line": 41,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_legacy_codex",
+          "line": 44,
+          "end_line": 46,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "trusted_amount",
+          "line": 49,
+          "end_line": 53,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "uncertain_usage",
+          "line": 56,
+          "end_line": 79,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/__init__.py",
+      "sha256": "06780050737d2bfc36c28ea1f40a121aacee4401352ee2b95d9499949f7a6b40",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/accounts.py",
+      "sha256": "02425b033495e3374bcf6a9407d2b6c098db6d6841830164a2a71a4302b8a77f",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_descriptors",
+          "line": 24,
+          "end_line": 39,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "credentials",
+          "line": 42,
+          "end_line": 76,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_write_secret",
+          "line": 79,
+          "end_line": 95,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_provision",
+          "line": 98,
+          "end_line": 174,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_refresh_access",
+          "line": 177,
+          "end_line": 204,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ensure_project_accounts",
+          "line": 207,
+          "end_line": 285,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/backlog.py",
+      "sha256": "ba19fde140fd641ac7f98ac48321829ae5ad39388d5966d80c1664a1e2c033ac",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_terminal_review_dependencies",
+          "line": 10,
+          "end_line": 34,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_terminal_review_dependencies.visit",
+          "line": 16,
+          "end_line": 32,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "recurring_maintenance_blocker",
+          "line": 37,
+          "end_line": 91,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "current_objection",
+          "line": 94,
+          "end_line": 114,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/contracts.py",
+      "sha256": "321cedc11b0e1720ffe7de8cdfb3ffaaec7c9f229f2fff170b2f7112f368161d",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "ReviewPlan.distinct_questions",
+          "line": 34,
+          "end_line": 37,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ReviewAssessment.distinct_entries",
+          "line": 69,
+          "end_line": 76,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ReviewAssessment.check_verdict",
+          "line": 78,
+          "end_line": 85,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "ReviewAssessment.render",
+          "line": 87,
+          "end_line": 100,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/decisions.py",
+      "sha256": "ee76b523a85d4338d72784e7a884154bc42012d8134a1c7cb44429f3f4634b31",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_review_history",
+          "line": 17,
+          "end_line": 28,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_current_approval",
+          "line": 31,
+          "end_line": 52,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_completed_review_defect",
+          "line": 55,
+          "end_line": 115,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_review_next_action",
+          "line": 118,
+          "end_line": 180,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "review_readiness",
+          "line": 183,
+          "end_line": 268,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_latest_current_reviews",
+          "line": 271,
+          "end_line": 277,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_unresolved_reviews",
+          "line": 280,
+          "end_line": 301,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_with_findings",
+          "line": 304,
+          "end_line": 317,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_validate_resolutions",
+          "line": 320,
+          "end_line": 351,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_carry_source",
+          "line": 354,
+          "end_line": 382,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_validate_carries",
+          "line": 385,
+          "end_line": 413,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "carried_review_payload",
+          "line": 416,
+          "end_line": 429,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "repository_review_panel",
+          "line": 432,
+          "end_line": 511,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "postprocessing_review_panel",
+          "line": 514,
+          "end_line": 516,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "validate_postprocessing_report",
+          "line": 519,
+          "end_line": 552,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "maintainer_identity",
+          "line": 555,
+          "end_line": 566,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "queue_review",
+          "line": 569,
+          "end_line": 719,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "queue_merge",
+          "line": 722,
+          "end_line": 756,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "queue_label",
+          "line": 759,
+          "end_line": 764,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "queue_comment",
+          "line": 767,
+          "end_line": 779,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "queue_edit",
+          "line": 782,
+          "end_line": 790,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/demand.py",
+      "sha256": "0b804df4a82672a4a3956c56717f10fb5d02999a6015ce1fa87f2b594247226a",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "fingerprint",
+          "line": 20,
+          "end_line": 24,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "observe",
+          "line": 27,
+          "end_line": 65,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "request",
+          "line": 68,
+          "end_line": 103,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "reconcile",
+          "line": 106,
+          "end_line": 187,
+          "status": "reviewed",
+          "findings": [
+            "maintenance_prompt_source"
+          ]
+        },
+        {
+          "name": "settle",
+          "line": 190,
+          "end_line": 211,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "label_projection",
+          "line": 214,
+          "end_line": 223,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "repair_label",
+          "line": 226,
+          "end_line": 239,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/guidance.py",
+      "sha256": "5f2670353551245963b174d243228f3d9a0ef2180c27374c5c7c98880aa45292",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "descriptor",
+          "line": 17,
+          "end_line": 24,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "instructions",
+          "line": 27,
+          "end_line": 28,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "descriptors",
+          "line": 31,
+          "end_line": 32,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/invocations.py",
+      "sha256": "077815cb27a34d04503fdfd33cf74a0cbc804816f03e13aeb99b7052db9c36ad",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "ReviewerPrepare.explicit_retry",
+          "line": 43,
+          "end_line": 46,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "report",
+          "line": 67,
+          "end_line": 82,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_maintainer",
+          "line": 85,
+          "end_line": 89,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_owned",
+          "line": 92,
+          "end_line": 100,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "provider_limits",
+          "line": 103,
+          "end_line": 108,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_capacity",
+          "line": 111,
+          "end_line": 136,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "prepare",
+          "line": 139,
+          "end_line": 140,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "prepare_assignment",
+          "line": 143,
+          "end_line": 145,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_assignment_result",
+          "line": 148,
+          "end_line": 154,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_work_key",
+          "line": 157,
+          "end_line": 160,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_verification_evidence",
+          "line": 163,
+          "end_line": 185,
+          "status": "reviewed",
+          "findings": [
+            "general_verification_links"
+          ]
+        },
+        {
+          "name": "_verification_discovery",
+          "line": 188,
+          "end_line": 205,
+          "status": "reviewed",
+          "findings": [
+            "general_verification_links"
+          ]
+        },
+        {
+          "name": "_existing_work",
+          "line": 208,
+          "end_line": 268,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_record_work",
+          "line": 271,
+          "end_line": 278,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_prepare",
+          "line": 281,
+          "end_line": 455,
+          "status": "reviewed",
+          "findings": [
+            "reviewer_prompt_provenance"
+          ]
+        },
+        {
+          "name": "assignment_manifest",
+          "line": 458,
+          "end_line": 471,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "assignment_request_fields",
+          "line": 474,
+          "end_line": 481,
+          "status": "reviewed",
+          "findings": [
+            "reviewer_prompt_provenance"
+          ]
+        },
+        {
+          "name": "read",
+          "line": 484,
+          "end_line": 492,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "attach",
+          "line": 495,
+          "end_line": 504,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "bind_native",
+          "line": 507,
+          "end_line": 551,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_bind_observed_child",
+          "line": 554,
+          "end_line": 590,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "cancel",
+          "line": 593,
+          "end_line": 610,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "release_child_claims",
+          "line": 613,
+          "end_line": 616,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "account_observed_child",
+          "line": 619,
+          "end_line": 632,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/labels.py",
+      "sha256": "cba730bdfb104eedbd3ac1af9fc5ac556f2675a24a6f42af3dcf4fb736412677",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "terminal_state",
+          "line": 14,
+          "end_line": 31,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "terminal_label_operation",
+          "line": 34,
+          "end_line": 76,
+          "status": "reviewed",
+          "findings": [
+            "terminal_label_convergence"
+          ]
+        },
+        {
+          "name": "queue_state",
+          "line": 79,
+          "end_line": 126,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "invocation_state",
+          "line": 129,
+          "end_line": 140,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/review/packets.py",
+      "sha256": "84dd9383090fd47bbc740a350cf1f3d7962cc6e6707f06dcee97e7bea0c124ec",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "encode",
+          "line": 17,
+          "end_line": 19,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "prepare_packet",
+          "line": 22,
+          "end_line": 117,
+          "status": "reviewed",
+          "findings": [
+            "review_packet_prompt_source"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/__init__.py",
+      "sha256": "8a3f2b1cec7220ad062117d9410ce067b8ee5841b1a17bd353b92fbc3098c916",
+      "module_review": "reviewed",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/search/index.py",
+      "sha256": "9f1c124a1d571ecb2b165fd459762e50c0f8521fe10628d41f6a5710e359fdf2",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "Declaration.as_document",
+          "line": 67,
+          "end_line": 70,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_read_comment_block",
+          "line": 73,
+          "end_line": 89,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_read_docstring",
+          "line": 92,
+          "end_line": 94,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_collect_signature",
+          "line": 97,
+          "end_line": 134,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "extract_declarations",
+          "line": 137,
+          "end_line": 209,
+          "status": "reviewed",
+          "findings": [
+            "inline_attribute_declarations"
+          ]
+        },
+        {
+          "name": "_tokenize",
+          "line": 214,
+          "end_line": 230,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_bm25s_module",
+          "line": 235,
+          "end_line": 244,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_numpy",
+          "line": 247,
+          "end_line": 254,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_build_retriever",
+          "line": 257,
+          "end_line": 271,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_load_retriever",
+          "line": 274,
+          "end_line": 279,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_save_retriever",
+          "line": 282,
+          "end_line": 286,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_name_score",
+          "line": 307,
+          "end_line": 337,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_type_pattern_to_regex",
+          "line": 340,
+          "end_line": 368,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_type_literal_needles",
+          "line": 371,
+          "end_line": 381,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_prefix_indices",
+          "line": 384,
+          "end_line": 395,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_normalize_sig",
+          "line": 398,
+          "end_line": 399,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.__init__",
+          "line": 420,
+          "end_line": 430,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.build",
+          "line": 435,
+          "end_line": 467,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.build.extract",
+          "line": 453,
+          "end_line": 456,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.library_counts",
+          "line": 470,
+          "end_line": 476,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.validate_library",
+          "line": 478,
+          "end_line": 481,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex._text",
+          "line": 483,
+          "end_line": 490,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex._header",
+          "line": 492,
+          "end_line": 499,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.query",
+          "line": 501,
+          "end_line": 512,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.search_text",
+          "line": 516,
+          "end_line": 518,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.search_name",
+          "line": 520,
+          "end_line": 562,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.search_name.consider",
+          "line": 531,
+          "end_line": 537,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.search_type",
+          "line": 564,
+          "end_line": 587,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex._ensure_name_index",
+          "line": 589,
+          "end_line": 611,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.search_header",
+          "line": 613,
+          "end_line": 615,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex._library_array",
+          "line": 617,
+          "end_line": 621,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex._header_mask",
+          "line": 623,
+          "end_line": 627,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex._search_bm25",
+          "line": 629,
+          "end_line": 652,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.to_jsonl",
+          "line": 656,
+          "end_line": 658,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.from_jsonl",
+          "line": 661,
+          "end_line": 669,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.save_cache",
+          "line": 671,
+          "end_line": 696,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "LeanSearchIndex.load_cache",
+          "line": 699,
+          "end_line": 719,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_extract_source_file",
+          "line": 724,
+          "end_line": 730,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_iter_source_files",
+          "line": 733,
+          "end_line": 743,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_iter_lean_files",
+          "line": 746,
+          "end_line": 757,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_display_path",
+          "line": 760,
+          "end_line": 766,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/mcp_server.py",
+      "sha256": "e9973049c145ea9e55b56b765cf2d14757311a3958e67f4e2ba3169a78a162cf",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "_run_query",
+          "line": 45,
+          "end_line": 81,
+          "status": "reviewed",
+          "findings": [
+            "mcp_query_bounds"
+          ]
+        },
+        {
+          "name": "_handle",
+          "line": 84,
+          "end_line": 120,
+          "status": "reviewed",
+          "findings": [
+            "mcp_request_recovery"
+          ]
+        },
+        {
+          "name": "_error",
+          "line": 123,
+          "end_line": 124,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "line": 127,
+          "end_line": 147,
+          "status": "reviewed",
+          "findings": [
+            "mcp_request_recovery"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/search/workspace.py",
+      "sha256": "f20a22198cd3a01aaefddeef9f73c5aa6a0a4f5dfe9fac0e715d36fed9839dad",
+      "module_review": "reviewed",
+      "functions": [
+        {
+          "name": "resolve_source_roots",
+          "line": 24,
+          "end_line": 84,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "resolve_source_roots.include",
+          "line": 41,
+          "end_line": 49,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_read_manifest",
+          "line": 87,
+          "end_line": 92,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "_fingerprint",
+          "line": 95,
+          "end_line": 110,
+          "status": "reviewed",
+          "findings": []
+        },
+        {
+          "name": "load_or_build_index",
+          "line": 113,
+          "end_line": 152,
+          "status": "reviewed",
+          "findings": []
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "terminal_label_convergence",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/review/labels.py",
+      "functions": [
+        "terminal_label_operation"
+      ],
+      "detail": "Preserve an already-correct terminal outcome label instead of removing/re-adding it; settled projections emit no operation. Regression covers already-settled and stale-label cleanup."
+    },
+    {
+      "id": "inline_attribute_declarations",
+      "status": "fixed",
+      "path": "src/archon_horizon/search/index.py",
+      "functions": [
+        "extract_declarations"
+      ],
+      "detail": "Inline Lean attribute declarations were skipped by the standalone-attribute branch. Preserve their declaration/docstring/line and bump the cache generation to 7 so old missing entries rebuild."
+    },
+    {
+      "id": "mcp_request_recovery",
+      "status": "fixed",
+      "path": "src/archon_horizon/search/mcp_server.py",
+      "functions": [
+        "_handle",
+        "main"
+      ],
+      "detail": "Validate request shape before exception reporting; malformed JSON/non-object requests return protocol errors and the next stdio request still succeeds. Unknown notifications receive no response."
+    },
+    {
+      "id": "mcp_query_bounds",
+      "status": "fixed",
+      "path": "src/archon_horizon/search/mcp_server.py",
+      "functions": [
+        "_run_query"
+      ],
+      "detail": "Validate integer result limits 1..100 before expensive index loading, and reject unsupported query/mode shapes. Schema and runtime bounds agree."
+    },
+    {
+      "id": "native_parser_shape_recovery",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/providers/harness_parsers.py",
+      "functions": [
+        "_int_or_zero",
+        "parse_claude_line",
+        "parse_codex_line",
+        "_codex_rollout_item",
+        "parse_codex_rollout_line"
+      ],
+      "detail": "Guard malformed optional native containers/counters/statuses so known schema drift cases cannot abort activity ingestion. Tests include null content/items, invalid numeric counters and malformed rollout message/reasoning shapes."
+    },
+    {
+      "id": "native_injected_prompt_narration",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/providers/harness_parsers.py",
+      "functions": [
+        "_codex_rollout_item"
+      ],
+      "detail": "Do not render persisted user/developer/system message blocks as the agent narration; regression covers all three roles."
+    },
+    {
+      "id": "retry_after_finite",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/integrations/connectors.py",
+      "functions": [
+        "RemoteClient.request"
+      ],
+      "detail": "Reject NaN/infinite remote Retry-After values before durable retry timestamp construction, retaining normal exponential backoff. Regression includes nonnumeric, negative, valid and overflow-to-infinity hints."
+    },
+    {
+      "id": "retained_prompt_provenance",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/instructions/prompts.py",
+      "functions": [
+        "catalog",
+        "_pinned_bundle",
+        "_orchestrator_goal",
+        "objective_goal",
+        "goal"
+      ],
+      "detail": "Readable Markdown templates and phase contracts are pinned with the session bundle. Retained startup/recovery/continuation use that bundle rather than current installed behavioral fragments. Historical bundles preserve original fields with explicit fallback only for fragments never pinned historically."
+    },
+    {
+      "id": "objective_briefing_bounds",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/instructions/prompts.py",
+      "functions": [
+        "objective_goal",
+        "goal"
+      ],
+      "detail": "Continuation avoids replaying startup instructions or identical mission text; ledger character limits include IDs, markup and JSON escaping. Full omitted content remains linked."
+    },
+    {
+      "id": "objective_document_repository",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/instructions/prompts.py",
+      "functions": [
+        "_phase_repositories"
+      ],
+      "detail": "Objective formalization resolves its objective document repository without requiring a frozen roadmap snapshot."
+    },
+    {
+      "id": "pinned_template_loader",
+      "status": "implemented",
+      "path": "src/archon_horizon/pipeline/instructions/templates.py",
+      "functions": [
+        "template"
+      ],
+      "detail": "Validate names/digests and exact argument names; interpolate trusted placeholder tokens once. JSON braces, shell variables and inserted record text remain literal."
+    },
+    {
+      "id": "prompt_catalog_packaging",
+      "status": "implemented",
+      "path": "src/archon_horizon/pipeline/instructions/bundles.py",
+      "functions": [
+        "skill_files"
+      ],
+      "detail": "Package all installed Markdown prompts under reserved prompts/ namespace and expose a categorized prompt_index. Operator additions cannot replace installed template text; existing byte/file/symlink bounds remain."
+    },
+    {
+      "id": "reviewer_prompt_provenance",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/review/invocations.py",
+      "functions": [
+        "_prepare",
+        "assignment_request_fields"
+      ],
+      "detail": "Reviewer startup, mission, recovery and lifecycle use the parent-pinned template bundle; immutable manifests preserve the rendered prompt."
+    },
+    {
+      "id": "general_verification_links",
+      "status": "fixed",
+      "path": "src/archon_horizon/pipeline/review/invocations.py",
+      "functions": [
+        "_verification_evidence",
+        "_verification_discovery"
+      ],
+      "detail": "Generalized internal discovery names/imports and public Lean check/job URLs. Historical milestone_evidence/discovery packet field names remain readable for retained manifests."
+    },
+    {
+      "id": "review_packet_prompt_source",
+      "status": "implemented",
+      "path": "src/archon_horizon/pipeline/review/packets.py",
+      "functions": [
+        "prepare_packet"
+      ],
+      "detail": "Readable pinned Markdown holds behavioral reporting prose; Python retains structural report schema, exact-source links and aggregate packet bounds."
+    },
+    {
+      "id": "subagent_prompt_source",
+      "status": "implemented",
+      "path": "src/archon_horizon/pipeline/instructions/subagent_guidance.py",
+      "functions": [
+        "descriptor",
+        "overview"
+      ],
+      "detail": "Readable Markdown holds appended specialist guidance and overview instructions. Callers construct new catalogs/descriptors; no retained-runtime reread caller was identified."
+    },
+    {
+      "id": "maintenance_prompt_source",
+      "status": "implemented",
+      "path": "src/archon_horizon/pipeline/review/demand.py",
+      "functions": [
+        "reconcile"
+      ],
+      "detail": "Generated maintenance mission/instructions are authored in Markdown before their new assignment is persisted."
+    },
+    {
+      "id": "connector_unexpected_shape",
+      "status": "documented_limitation",
+      "path": "src/archon_horizon/pipeline/integrations/connectors.py",
+      "functions": [
+        "ConnectorManager.dispatch_one"
+      ],
+      "detail": "Unexpected nested remote shapes can escape as Python shape errors. The claimed lease stays outstanding; after expiry the operation is reconciliation-only, preventing blind duplicate resend. The connector process may nevertheless restart. Existing explicit adapter schemas and fence/idempotency tests do not prove arbitrary schema drift recovery."
+    }
+  ],
+  "summary": {
+    "files_reviewed": 35,
+    "functions_reviewed": 284,
+    "pending": 0
+  },
+  "limits": [
+    "Source-body inspection is not runtime coverage or a proof of correctness.",
+    "Hashes identify the reviewed snapshot; changed bodies require review again.",
+    "Live providers, all transport shapes and all concurrent interleavings were not exercised."
+  ]
+}

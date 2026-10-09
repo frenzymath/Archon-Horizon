@@ -1,7 +1,14 @@
+"""Run native coding providers within the pinned execution policy.
+
+Preserve their tools, customization, collaboration and context management. The
+adapter adds unattended permission behavior and supervised process ownership.
+"""
+
 from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
 import signal
 import subprocess
@@ -13,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .contracts import FencedExecution, require_identifier
+from .contracts import FencedExecution, require_identifier, validate_subagent_limit
 from .journal import DurableJournal, boot_identity
 
 
@@ -94,7 +101,12 @@ class HeadlessAdapter:
     sandbox_mode: str = "workspace_write"
     tool_names: tuple[str, ...] = ()
     auto_compaction: bool = True
-    max_parallel_subagents: int = 0
+    max_parallel_subagents: int | None = None
+    # Collaboration and current-source research belong in ordinary worker runs.
+    # Pinned harness settings can opt into an older mode or narrower discovery.
+    codex_multi_agent_v2: bool = True
+    codex_web_search: str = "live"
+    claude_native_configuration: bool = True
 
     def validate(self, *, externally_isolated: bool) -> None:
         if self.approval_mode not in {"deny", "preauthorized"}:
@@ -107,19 +119,27 @@ class HeadlessAdapter:
             raise ValueError("preauthorized execution requires the externally_isolated provider policy")
         if self.auto_compaction is not True:
             raise ValueError("disabling native automatic compaction is not supported")
-        if self.max_parallel_subagents < 0:
-            raise ValueError("native subagent capacity must be nonnegative")
+        validate_subagent_limit(self.max_parallel_subagents)
+        if type(self.codex_multi_agent_v2) is not bool or type(self.claude_native_configuration) is not bool:
+            raise ValueError("native feature settings must be booleans")
+        if not isinstance(self.codex_web_search, str) or self.codex_web_search not in {"live", "cached", "disabled"}:
+            raise ValueError("unsupported Codex web-search mode")
         if self.provider == "codex_exec":
             if self.tool_names:
                 raise ValueError("Codex headless tool-name allowlists are not supported")
         elif self.provider == "claude_exec":
             if self.sandbox_mode == "workspace_write":
                 raise ValueError("Claude workspace_write is unsupported; use rootless externally_isolated or read_only")
-            if self.max_parallel_subagents:
-                raise ValueError("Claude native parallel-subagent bounds cannot be enforced by this CLI adapter; configure zero")
-            tools = {"Read", "Glob", "Grep"} if self.sandbox_mode == "read_only" else {
-                "Read", "Glob", "Grep", "Bash", "Write", "Edit", "WebFetch", "WebSearch", "TodoWrite"}
-            if not set(self.tool_names).issubset(tools):
+            if self.max_parallel_subagents is not None and self.max_parallel_subagents > 0:
+                raise ValueError("Claude native parallel-subagent bounds cannot be enforced by this CLI adapter; use null or zero")
+            # The provider owns its evolving built-in tool catalog. Validate
+            # names without freezing writable runs to an old list of tools.
+            if any(not isinstance(tool, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", tool)
+                   for tool in self.tool_names):
+                raise ValueError("unsupported Claude tool name")
+            if self.sandbox_mode == "read_only" and not set(self.tool_names).issubset({"Read", "Glob", "Grep"}):
+                raise ValueError("unsupported Claude tool in the configured sandbox mode")
+            if self.max_parallel_subagents == 0 and {"Agent", "Task"}.intersection(self.tool_names):
                 raise ValueError("unsupported Claude tool in the configured sandbox mode")
         else:
             raise ValueError("unsupported provider adapter")
@@ -153,9 +173,11 @@ class HeadlessAdapter:
                 roots = ([str(agent_state_path)] if agent_state_path is not None else []) + [str(root) for root in tool_writable_roots]
                 if roots:
                     args.extend(["-c", "sandbox_workspace_write.writable_roots=" + json.dumps(roots)])
-            args.extend(["-c", "agents.enabled=" + ("true" if self.max_parallel_subagents else "false")])
-            args.extend(["-c", "features.multi_agent=" + ("true" if self.max_parallel_subagents else "false"),
-                         "-c", "features.multi_agent_v2=false"])
+            enabled = self.max_parallel_subagents != 0
+            args.extend(["-c", "agents.enabled=" + ("true" if enabled else "false")])
+            args.extend(["-c", "features.multi_agent=" + ("true" if enabled else "false"),
+                         "-c", "features.multi_agent_v2=" + ("true" if enabled and self.codex_multi_agent_v2 else "false"),
+                         "-c", "web_search=" + json.dumps(self.codex_web_search)])
             if self.max_parallel_subagents:
                 args.extend(["-c", "agents.max_threads=" + str(self.max_parallel_subagents)])
             if self.approval_mode == "preauthorized":
@@ -168,11 +190,19 @@ class HeadlessAdapter:
         if self.provider == "claude_exec":
             args = [self.executable, "--print", "--verbose", "--output-format", "stream-json",
                     "--permission-mode", "bypassPermissions" if self.approval_mode == "preauthorized" else "dontAsk",
-                    "--permission-prompts", "none", "--autocompact", "auto",
-                    "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
-            tools = self.tool_names or (("Read", "Glob", "Grep") if self.sandbox_mode == "read_only" else
-                     ("Read", "Glob", "Grep", "Bash", "Write", "Edit", "WebFetch", "WebSearch", "TodoWrite"))
-            args.extend(["--tools", ",".join(tools)])
+                    "--permission-prompts", "none", "--autocompact", "auto"]
+            if not self.claude_native_configuration or self.sandbox_mode == "read_only":
+                # Native hooks and MCP commands can execute outside the tool
+                # allowlist; discovery remains restricted for host read-only runs.
+                args.extend(["--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}'])
+            # Keep the provider’s default tools as they evolve. Disabling native
+            # delegation removes just Agent/Task, preserving unrelated tools.
+            tools = ",".join(self.tool_names) if self.tool_names else (
+                "Read,Glob,Grep" if self.sandbox_mode == "read_only" else
+                "default")
+            args.extend(["--tools", tools])
+            if self.max_parallel_subagents == 0:
+                args.extend(["--disallowedTools", "Agent,Task"])
             if provider_thread_id:
                 args.extend(["--resume", provider_thread_id])
             if self.model:
@@ -181,6 +211,14 @@ class HeadlessAdapter:
                 args.extend(["--effort", self.reasoning_effort])
             return args
         raise ValueError("unsupported provider adapter")
+
+    def runtime_environment(self) -> dict[str, str]:
+        """Let helpers finish within Horizon's existing execution deadline.
+
+        Claude print mode otherwise abandons background helpers after ten idle
+        minutes. Horizon already renews/fences the lease and enforces wall time.
+        """
+        return {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"} if self.provider == "claude_exec" else {}
 
 
 @dataclass(frozen=True)

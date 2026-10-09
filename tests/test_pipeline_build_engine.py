@@ -189,3 +189,22 @@ def test_deferred_checks_have_an_execution_scoped_queue_budget(tmp_path, monkeyp
     assert run_check(tmp_path, env=env, queue_timeout=5)["repeated_deferred"]
     assert not run_check(tmp_path, env={**env, "HORIZON_EXECUTION_ID": "second"}, queue_timeout=5)["repeated_deferred"]
     assert waits == [5, 0, 5]
+
+
+def test_dependency_preparation_uses_a_shared_host_lane(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    def preparing(*args):
+        entered.set()
+        assert release.wait(5)
+    monkeypatch.setattr(build_engine, '_prepare_dependencies', preparing)
+    env = {'HORIZON_LEAN_CACHE_ROOT': str(tmp_path/'cache')}
+    with ThreadPoolExecutor() as pool:
+        first = pool.submit(build_engine.prepare_dependencies, tmp_path/'one', env, time.monotonic()+10)
+        assert entered.wait(5)
+        try:
+            with pytest.raises(build_engine.CheckDeferred):
+                build_engine.prepare_dependencies(tmp_path/'two', env, time.monotonic()+10,
+                    build_engine.CheckProgress(0))
+        finally:
+            release.set()
+        first.result(timeout=5)

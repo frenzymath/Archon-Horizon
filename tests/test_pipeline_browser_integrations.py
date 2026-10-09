@@ -13,12 +13,12 @@ from pydantic import ValidationError
 import pytest
 from sqlalchemy import delete, insert, update
 
-from archon_horizon.pipeline import browser_integrations
+from archon_horizon.pipeline.integrations import browser_integrations
 from archon_horizon.pipeline.api import create_app
 from archon_horizon.pipeline.auth import Actor, issue_credential
 from archon_horizon.pipeline.config import PipelineConfig
-from archon_horizon.pipeline.records import create, transaction_lock
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import create, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api_database  # noqa: F401
 from test_pipeline_service import make_world
 

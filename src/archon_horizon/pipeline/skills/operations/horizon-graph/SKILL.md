@@ -7,17 +7,17 @@ metadata:
 
 # Keep the graph truthful
 
-The same mathematical node serves each target repository. Progress and review
+A mathematical node can have implementations in several target repositories. Progress and review
 live in `implementations[repository_uuid]`, using the same states for workspace
 and library. Select `target_repository_id` in graph/node/roadmap queries; use
 `run_id` on the roadmap endpoint to select the run's destination. Never downgrade
 workspace evidence to start a library port. Read
 [repository progress](references/repository-progress.md) before editing these records.
 
-In postprocessing, use the graph to locate ready independent families, link
-source proofs and show accepted library coverage. Reuse existing nodes and fill
-missing mappings incrementally; a complete graph rewrite is not a dispatch
-prerequisite. Keep cluster ownership across several PRs. Rewrite obsolete node
+In postprocessing, use a separate graph namespace for the integration strategy,
+link source proofs and show accepted library coverage. Reuse existing implementation
+evidence where it applies; new strategy nodes can express generalization or changed
+interfaces without overwriting the source formalization graph. Keep cluster ownership across several PRs. Rewrite obsolete node
 content freely in reviewed Git changes; Git retains history. Update dependencies
 when changing routes, and use new linked nodes when splitting/generalizing results.
 
@@ -50,7 +50,12 @@ commits and [horizon-objectives](../horizon-objectives/SKILL.md) for the user's
 milestone document. Read [graph contracts](references/contracts.md) when changing
 source documents, edges, status evidence, or a frozen baseline.
 
-For projects with `workflow: milestones`, follow
+The default `workflow: graph` treats milestones as ordinary nodes with the
+`milestone` label. Agents propose their names, decomposition and amendments through
+roadmap PRs; no compiler receipt or frozen baseline is required merely for planning.
+Ordinary source identity, dependency validity and review permissions still apply.
+
+For explicitly retained projects with `workflow: milestones`, follow
 [milestone contracts](references/milestones.md): route selection precedes Lean
 contract PRs; helper ownership is distinct from logical dependencies; strict
 contract review and human approval precede formalization.

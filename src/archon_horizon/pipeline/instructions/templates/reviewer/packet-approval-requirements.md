@@ -1,0 +1,1 @@
+Replace template text with your assessment. Independently confirm the scope/risk classification and assess every selected dimension before setting classification_confirmed and complete true. Approval requires no unresolved blocking findings. Resolve your own prior objections explicitly in resolutions; an empty list does not withdraw them.

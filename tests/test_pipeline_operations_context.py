@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from archon_horizon.pipeline.prompts import OPERATIONS_CONTEXT_BYTES
-from archon_horizon.pipeline.records import change, create, transaction_lock
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.instructions.prompts import OPERATIONS_CONTEXT_BYTES
+from archon_horizon.pipeline.persistence.records import change, create, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, auth
 from test_pipeline_review_assessments import setup
 from test_pipeline_reviewer_invocations import review
@@ -104,7 +104,7 @@ def test_operations_context_is_bounded_and_states_job_window_limit(world):
 
 @pytest.mark.parametrize("mode", ["native", "assignment"])
 def test_operations_context_links_current_reviewer_ownership(world, review, mode):
-    from archon_horizon.pipeline.reviewer_invocations import prepare, prepare_assignment
+    from archon_horizon.pipeline.review.invocations import prepare, prepare_assignment
     setup(world, review)
     if mode == "assignment":
         change(world.conn, "reviewer_descriptor", review["descriptor"]["id"], invocation="assignment")

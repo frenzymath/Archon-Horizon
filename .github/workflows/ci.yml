@@ -6,9 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# CI checks source and packages; it has no need to push commits or publish releases.
+# Give the workflow token read access to repository contents only.
 permissions:
   contents: read
 
+# A newer push supersedes checks for the same branch/PR, while other refs run
+# independently. Avoid spending runners on a head reviewers will no longer merge.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -20,6 +24,8 @@ jobs:
     services:
       postgres:
         image: postgres:17-alpine
+        # Disposable CI-only credentials. Database tests create/drop isolated
+        # schemas here; backup tests additionally require the development label.
         env:
           POSTGRES_USER: horizon_test
           POSTGRES_PASSWORD: horizon_test_ci

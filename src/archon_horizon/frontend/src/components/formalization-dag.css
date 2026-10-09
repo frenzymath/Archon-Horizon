@@ -43,7 +43,7 @@
 .formalization-dag-legend i.proof_sketch { border-color: #b8893a; background: #f6ebcf; }
 .formalization-dag-legend i.informal_stated { border-color: #4e738c; background: #dce8f0; }
 .formalization-dag-legend i.statement-aligned { border-color: #7b3f98; background: #eadcf2; }
-.formalization-dag-legend i.milestone { border-width: 2px; border-color: #2f789b; background: #fff; box-shadow: 0 0 0 1px #fff, 0 0 0 2px #2f789b; }
+.formalization-dag-milestone-symbol { color: #2f789b; fill: #eaf3f8; }
 .formalization-dag-legend i.definition { border-radius: 0; background: #eaf3f8; }
 .formalization-dag-legend i.active { border: 2px solid #a6004f; background: transparent; }
 .formalization-dag-legend i.incoming, .formalization-dag-legend i.outgoing { width: 18px; height: 0; border: 0; border-top: 2px solid #277a70; border-radius: 0; background: transparent; }

@@ -6,8 +6,9 @@ and historical findings; they are not an alternative dispatch procedure.
 
 ## Ownership And Dependencies
 
-The mission tree is the source of mathematical intent and delegated scope. A run
-pursues a root mission under a phase and resource limits. Assignments give scoped
+The mission tree is the source of mathematical intent and delegated scope. An objective run
+locates the human's versioned roadmap objective and pursues its root mission
+through requested phases under resource limits. Assignments give scoped
 work and an obligation ledger to a worker or maintainer. Executions are leased
 attempts on those assignments; retrying an attempt does not invent a new mission.
 
@@ -169,11 +170,13 @@ Choose the next action from the observed bottleneck. Unreviewed deliverables nee
 maintainer attention; ready accepted work needs workers; current-head objections
 need repairs; unavailable capacity or services need a recorded waiting reason.
 Adding sessions does not repair missing ownership or unblock invalid conditions.
-Keep a small ready frontier and reconsider it as evidence changes. A new default
-run has one root maintainer entrypoint, not separate planning and supervision
-loops. Update an existing recurrence through `defer_automation`, which updates
-its pending occurrence with the rule. A concrete external wait can checkpoint
-the existing assignment instead of creating another owner.
+Keep a small ready frontier and reconsider it as evidence changes. An objective
+run has one bounded planner with one scheduler-owned successor, plus item-specific
+maintenance owners. Do not queue another planner or your current mission. Request
+maintenance for a bounded privileged decision; it does not grant extra authority.
+A concrete external wait can checkpoint the existing session instead of creating
+another owner. Legacy root-maintainer recurrence uses `defer_automation`; it does
+not run alongside objective planning.
 
 For unexpected behavior, a parent can invoke the native `orchestration-auditor`
 descriptor with the symptom and affected records. The child returns diagnosis,
@@ -181,11 +184,13 @@ proposed repair and a success condition; the parent decides and applies authoriz
 changes. This is an on-demand investigation, not a standing session. Read-only
 instructions do not create a separate authorization boundary for native children.
 
-The scheduler owns capacity claims, bounded candidate scanning and bounded
-maintenance refill across shared runs. Each recurring automation has at most one
-outstanding occurrence; historical duplicate rows are retained and reported for
-reconciliation. Explicit child missions and manually authorized assignments may
-parallelize disjoint work, subject to the global live-maintainer half-slot budget.
+The scheduler owns capacity claims and bounded candidate scanning across runs.
+Objective Work and Maintenance categories have separate slots and queue bounds,
+sharing physical/provider capacity. Native child reservations count against that
+capacity. The legacy global live-maintainer budget applies to legacy runs.
+Historical duplicate automations are retained and reported for reconciliation;
+they do not authorize a competing objective owner. Distinct child missions may
+parallelize independently useful work within those limits.
 Pending rows are obligations and do not reserve physical slots; live executions
 do. Agents can prioritize permitted work and adjust its conditions, but cannot
 manufacture resources or bypass run budgets.

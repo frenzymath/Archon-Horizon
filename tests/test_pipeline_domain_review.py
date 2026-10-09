@@ -5,14 +5,14 @@ import pytest
 from sqlalchemy import insert, select, update
 
 from archon_horizon.pipeline.auth import Actor, authenticate
-from archon_horizon.pipeline.catalog import CatalogUpdate, configure_host_harness, update_catalog
+from archon_horizon.pipeline.projects.catalog import CatalogUpdate, configure_host_harness, update_catalog
 from archon_horizon.pipeline.commands import Command, execute
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.reviewer_invocations import prepare
-from archon_horizon.pipeline.reviews import queue_review
-from archon_horizon.pipeline.schema import tables
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.review.invocations import prepare
+from archon_horizon.pipeline.review.decisions import queue_review
+from archon_horizon.pipeline.persistence.schema import tables
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle
 from test_pipeline_reviewer_invocations import review  # noqa: F401
 from test_pipeline_service import service_database, world  # noqa: F401
 

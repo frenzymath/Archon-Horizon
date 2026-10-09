@@ -4,12 +4,12 @@ import pytest
 import yaml
 from sqlalchemy import select
 
-from archon_horizon.pipeline import dashboard_projects, readmodels
+from archon_horizon.pipeline.dashboard import dashboard_projects, readmodels
 from archon_horizon.pipeline.errors import DomainError
 from archon_horizon.pipeline.graph_progress import fingerprint, validate_implementations
-from archon_horizon.pipeline.records import create
+from archon_horizon.pipeline.persistence.records import create
 from archon_horizon.pipeline.roadmap_index import index_snapshot
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 

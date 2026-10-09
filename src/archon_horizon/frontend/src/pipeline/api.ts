@@ -5,7 +5,7 @@ export type Project = {
   title: string;
   slug: string;
   description?: string;
-  workflow?: "legacy" | "milestones";
+  workflow?: "graph" | "legacy" | "milestones";
   revision?: number;
 };
 export type Run = {
@@ -170,7 +170,7 @@ export type Resources = {
     id: string;
     slug: string;
     kind: string;
-    max_concurrent: number;
+    max_concurrent: number | null;
     occupied: number;
     cooldown_until: string | null;
   }[];
@@ -220,10 +220,19 @@ export async function request<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
+  return requestResponse<T>(path, init, "json");
+}
+
+/** Read text exports through the same cancellation, timeout and retry policy as JSON. */
+export async function requestText(path: string, init: RequestInit = {}): Promise<string> {
+  return requestResponse<string>(path, init, "text");
+}
+
+async function requestResponse<T>(path: string, init: RequestInit, format: "json" | "text"): Promise<T> {
   const read = !init.method || init.method.toUpperCase() === "GET";
   for (let attempt = 0; ; attempt++) {
     try {
-      return await requestOnce<T>(path, init, read ? 30000 : 15000);
+      return await requestOnce<T>(path, init, init.body instanceof Blob ? 120000 : read ? 30000 : 15000, format);
     } catch (error) {
       const transient = error instanceof TypeError || error instanceof ApiError &&
         [408, 429, 500, 502, 503, 504].includes(error.status);
@@ -241,7 +250,7 @@ export async function request<T>(
   }
 }
 
-async function requestOnce<T>(path: string, init: RequestInit, timeoutMs: number): Promise<T> {
+async function requestOnce<T>(path: string, init: RequestInit, timeoutMs: number, format: "json" | "text"): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
   const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
@@ -249,8 +258,8 @@ async function requestOnce<T>(path: string, init: RequestInit, timeoutMs: number
   init.signal?.addEventListener("abort", abort, { once: true });
   if (init.signal?.aborted) controller.abort();
   const headers = new Headers(init.headers);
-  headers.set("Accept", "application/json");
-  if (init.body) headers.set("Content-Type", "application/json");
+  headers.set("Accept", format === "text" ? "application/x-bibtex" : "application/json");
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   try {
     const response = await fetch(`/api/v3${path}`, {
       ...init,
@@ -273,7 +282,7 @@ async function requestOnce<T>(path: string, init: RequestInit, timeoutMs: number
         response.status,
       );
     }
-    return (await response.json()) as T;
+    return (format === "text" ? await response.text() : await response.json()) as T;
   } catch (error) {
     if (timedOut && !init.signal?.aborted)
       throw new ApiError("The connection timed out. Check your connection and retry; previously loaded data is retained.", 408);

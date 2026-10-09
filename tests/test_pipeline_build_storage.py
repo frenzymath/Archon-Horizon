@@ -45,7 +45,12 @@ time.sleep(60)
     for pid in json.loads(marker.read_text()):
         for _ in range(50):
             stat = Path(f"/proc/{pid}/stat")
-            if not stat.exists() or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+            # The process can disappear between exists() and read_text().
+            try:
+                state = stat.read_text().rsplit(")", 1)[1].split()[0]
+            except FileNotFoundError:
+                break
+            if state == "Z":
                 break
             time.sleep(0.01)
         else:

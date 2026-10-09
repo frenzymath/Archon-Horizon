@@ -1,0 +1,1 @@
+Assignment A{{number}} ({{role}}) ended with unresolved work. Read /api/v3/records/obligation?assignment_id={{assignment_id}} for the original findings and evidence before scheduling repair. Reconcile existing owners and record the next action and its unlock condition: {{findings}}

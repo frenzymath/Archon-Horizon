@@ -2,9 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import insert
 
-from archon_horizon.pipeline.coordination import global_health, summary
-from archon_horizon.pipeline.records import change, create
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.execution.coordination import global_health, summary
+from archon_horizon.pipeline.persistence.records import change, create
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 

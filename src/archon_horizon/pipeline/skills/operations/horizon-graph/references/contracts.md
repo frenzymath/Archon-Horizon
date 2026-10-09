@@ -3,7 +3,7 @@
 ## Locate the real source
 
 Knowledge repositories contain `nodes/**/*.md` and `objectives/**/*.md`.
-Milestone projects additionally contain buildable
+Explicit compatibility projects with `workflow: milestones` additionally contain buildable
 `milestones/<Objective>/{Mi.lean,Definitions/,milestones.md}`; follow
 [milestone contracts](milestones.md) for typed locators, route/contract gates,
 human baseline approval and proof verification.
@@ -52,8 +52,9 @@ Main formalization usually needs proportionate roadmap consistency review, not
 full library polishing of every workspace change. Post-processing reviews the
 destination library according to its configured policies.
 
-A formalization run pins `roadmap_snapshot_id`; compare that snapshot with
-proposed contract changes. Correct a demonstrated source/statement error through
+Default objective runs follow their versioned roadmap document. An explicit
+compatibility formalization run pins `roadmap_snapshot_id`; compare that snapshot
+with proposed contract changes. Correct a demonstrated source/statement error through
 review, explain affected consumers and queue concrete repairs. Do not silently
 reinterpret a frozen theorem to make proof work easier. Adoption of a revised
 frozen baseline is an explicit maintainer run command, not an incidental node

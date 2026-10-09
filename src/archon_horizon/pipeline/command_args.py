@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import Field, StrictBool, StrictStr, create_model
 
-from .models import AssignmentCreate, AutomationCreate, Contract, ObligationCreate, Positive, Text
+from .models import AssignmentCreate, AutomationCreate, Contract, ObligationCreate, Positive, Text, ObjectRef, RunPhase
 
 
 class Empty(Contract):
@@ -43,6 +43,23 @@ class Snapshot(Contract):
     snapshot_id: UUID
 
 
+class ReviewSettlement(Note):
+    generation: Positive
+
+
+class ReviewRequest(Note):
+    run_id: UUID | None = None
+
+
+class LedgerComment(Contract):
+    note: Text = Field(max_length=8000)
+
+
+class PhaseAcceptance(Note):
+    evidence: list[ObjectRef] = Field(min_length=1, max_length=32)
+    next_phase: RunPhase | None = None
+
+
 class Repair(Note):
     assignment: AssignmentCreate
 
@@ -72,6 +89,10 @@ DeferAutomation = subset("DeferAutomation", AutomationCreate,
     ("not_before", "start_condition", "cooldown_seconds"),
     enabled=(StrictBool, True), no_progress=(StrictBool, False))
 
+class MaintenanceRequest(Note):
+    evidence: list[ObjectRef] = Field(min_length=1, max_length=32)
+
+
 COMMAND_ARGS = {
     "complete_mission": Note, "cancel_mission": Note, "reopen_mission": Note,
     "pause_run": OptionalNote, "resume_run": OptionalNote, "cancel_run": OptionalNote,
@@ -86,4 +107,8 @@ COMMAND_ARGS = {
     "reconcile_delivery_absent": DeliveryAbsence,
     "recover_context": Note, "edit_obligation": EditObligation, "reopen_obligation": Note,
     "confirm_host_stopped": Fencing,
+    "request_review": ReviewRequest, "settle_review": ReviewSettlement,
+    "comment_obligation": LedgerComment, "resume_session": Note,
+    "accept_phase": PhaseAcceptance, "request_maintenance": MaintenanceRequest,
+    "reset_circuit": Note, "retire_workspace": Note,
 }

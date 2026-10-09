@@ -5,12 +5,12 @@ from sqlalchemy import delete, select
 
 from archon_horizon.pipeline.errors import DomainError
 from archon_horizon.pipeline.auth import authenticate
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.reviewer_invocations import ReviewerAttach, ReviewerReport, attach, prepare, report
-from archon_horizon.pipeline.reviewer_invocations import ReviewerCancel, cancel
-from archon_horizon.pipeline.review_labels import terminal_label_operation, terminal_state
-from archon_horizon.pipeline.reviews import postprocessing_review_panel, validate_postprocessing_report
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.review.invocations import ReviewerAttach, ReviewerReport, attach, prepare, report
+from archon_horizon.pipeline.review.invocations import ReviewerCancel, cancel
+from archon_horizon.pipeline.review.labels import terminal_label_operation, terminal_state
+from archon_horizon.pipeline.review.decisions import postprocessing_review_panel, validate_postprocessing_report
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_reviewer_invocations import review  # noqa: F401
 from test_pipeline_service import service_database, world  # noqa: F401
 
@@ -18,7 +18,7 @@ from test_pipeline_service import service_database, world  # noqa: F401
 @pytest.mark.parametrize("role", ["maintainer", "worker"])
 def test_pr_discussion_uses_maintainer_account_only_for_maintainer(world, review, role):
     from archon_horizon.pipeline.models import ForgeComment
-    from archon_horizon.pipeline.reviews import queue_comment
+    from archon_horizon.pipeline.review.decisions import queue_comment
     repository = get(world.conn, "repository", review["item"]["repository_id"])
     identity = create(world.conn, "integration_identity", integration_id=repository["integration_id"],
         principal_id=world.actor.id, remote_user_id="maintainer", credential_ref="secret:maintainer")
@@ -68,6 +68,16 @@ def test_closed_forge_items_use_explicit_superseded_marker(world, review):
     change(world.conn, "forge_item", review["item"]["id"], status="closed", labels=["superseded"])
     item = get(world.conn, "forge_item", review["item"]["id"])
     assert terminal_state(item) == "superseded"
+
+
+def test_terminal_outcome_label_is_preserved_and_converges(world, review):
+    item = change(world.conn, "forge_item", review["item"]["id"], status="merged",
+                  labels=["review/merged"])
+    assert terminal_label_operation(world.conn, world.service, review["actor"].id, item) is None
+    item = change(world.conn, "forge_item", item["id"], labels=["review/merged", "review/closed", "awaiting-review"])
+    operation = terminal_label_operation(world.conn, world.service, review["actor"].id, item)
+    assert operation["payload"]["add"] == ["review/merged"]
+    assert operation["payload"]["remove"] == ["awaiting-review", "review/closed"]
 
 
 def test_postprocessing_gate_requires_every_enabled_current_head_reviewer(world, review):
@@ -188,7 +198,7 @@ def test_review_dispatch_labels_are_queued_durably(world, review):
 
 
 def test_review_lifecycle_labels_use_policy_maintainer_identity(world, review):
-    from archon_horizon.pipeline.reviews import queue_label
+    from archon_horizon.pipeline.review.decisions import queue_label
     repository = get(world.conn, "repository", review["item"]["repository_id"])
     identity = create(world.conn, "integration_identity", integration_id=repository["integration_id"],
         principal_id=world.actor.id, remote_user_id="maintainer", credential_ref="secret:maintainer")
@@ -224,7 +234,7 @@ def test_review_labels_use_operational_identity_while_reports_keep_specialist_au
 
 
 def test_review_labels_do_not_fall_back_to_specialist_when_maintainer_identity_is_disabled(world, review):
-    from archon_horizon.pipeline.review_labels import queue_state
+    from archon_horizon.pipeline.review.labels import queue_state
 
     reviewer_account(world, review)
     repository = get(world.conn, "repository", review["item"]["repository_id"])

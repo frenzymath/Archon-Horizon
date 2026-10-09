@@ -75,3 +75,9 @@ nodes for mathematical obligations, and Zulip for live decisions. Record the
 published commit, files, checks, and remaining limitations in the handoff.
 Read [change requests](references/changes.md) for exact file-change payloads and
 operation reconciliation; use the review coordination skill for reviewer dispatch.
+
+For objective runs, publication labels eligible PRs and issues `awaiting-review`.
+This creates a durable item-specific maintenance request. After addressing changes,
+use `request_review` with the new evidence/decision needed; the request coalesces
+with an active owner. Maintainers use `settle_review` for their assigned generation.
+A remote label alone is not evidence that a review round was accepted.

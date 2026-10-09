@@ -4,7 +4,7 @@ import ActivityTab, { type ActivityDataSource } from "../components/ActivityTab"
 import { request, type Command, type Project } from "./api";
 
 type Session = {id: string; revision: number; status: string; native: boolean; queue_position?: number};
-export type ActivityRevision = {id: string; revision: number; sessions?: Session[]};
+export type ActivityRevision = {id: string; revision: number; status?: string; sessions?: Session[]};
 
 export function activityCommand(path: string, init: RequestInit, records: Map<string, ActivityRevision>, writable: boolean): Command | null {
   if (!writable) throw new Error("This account cannot change activity");
@@ -31,6 +31,12 @@ export function activityCommand(path: string, init: RequestInit, records: Map<st
   } else operation = action[3] === "cancel" ? "cancel_run" : "retry_assignment";
   const record = records.get(target);
   if (!record) throw new Error("Refresh activity before changing this record");
+  if (action[3] === "resume" && record.status === "paused") {
+    operation = "resume_session";
+    const body = JSON.parse(String(init.body || "{}")) as {note?: string};
+    if (!body.note?.trim()) throw new Error("Record the recovery diagnosis before resuming");
+    args.note = body.note;
+  }
   return {operation, target_id: target, expected_revision: record.revision, args};
 }
 

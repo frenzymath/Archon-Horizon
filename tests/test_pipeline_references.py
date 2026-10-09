@@ -6,13 +6,13 @@ from pybtex.database import parse_string
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
-from archon_horizon.pipeline.catalog import CatalogUpdate, create_catalog, update_catalog
+from archon_horizon.pipeline.projects.catalog import CatalogUpdate, create_catalog, update_catalog
 from archon_horizon.pipeline.errors import DomainError
 from archon_horizon.pipeline.models import ReferenceCreate, ReferenceIdentifiers
-from archon_horizon.pipeline.records import create
-from archon_horizon.pipeline.reference_identifiers import arxiv_key, normalize_identifier
-from archon_horizon.pipeline.references import ReferenceUsage, bibtex, record_usage
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import create
+from archon_horizon.pipeline.projects.reference_identifiers import arxiv_key, normalize_identifier
+from archon_horizon.pipeline.projects.references import ReferenceUsage, bibtex, record_usage
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 

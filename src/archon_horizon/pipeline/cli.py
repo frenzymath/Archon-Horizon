@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import tempfile
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from .errors import DomainError
 
@@ -57,6 +57,14 @@ def parser():
         recipe.add_argument("--input", type=Path, required=True)
         recipe.add_argument("--operator", required=True)
         recipe.add_argument("--apply", action="store_true")
+    objective = commands.add_parser("launch-objective", help="Launch bounded Work/Maintenance queues from one versioned objective ID")
+    objective.add_argument("objective_id", type=UUID)
+    objective.add_argument("--operator", required=True)
+    objective.add_argument("--host", type=UUID, action="append", default=[], help="Eligible host; defaults to enabled hosts")
+    objective.add_argument("--phase", choices=("preprocessing", "formalization", "postprocessing"), action="append", help="Requested phases in order; default follows project repositories")
+    objective.add_argument("--human-approval", action="store_true", help="Pause at accepted phase boundaries")
+    objective.add_argument("--queue-policies", type=Path, help="JSON category policies; Work and Maintenance are required")
+    objective.add_argument("--apply", action="store_true", help="Launch the displayed objective configuration")
     workspaces = commands.add_parser("verify-workspaces", help="Verify existing Git checkouts for one authenticated local worker")
     workspaces.add_argument("--worker-config", type=Path, required=True)
     workspaces.add_argument("--operator", required=True)
@@ -94,6 +102,18 @@ def parser():
     reference.add_argument("id")
     reference.add_argument("--workspace", type=Path, required=True)
     reference.add_argument("--path", action="store_true", dest="print_path")
+    files = actions.add_parser("reference-files", help="List stored PDFs, TeX, notes, and companion files")
+    files.add_argument("reference_id", type=UUID)
+    files.add_argument("--cursor")
+    reference_upload = actions.add_parser("reference-upload", help="Store source-file bytes with a reference; journal exact uploads for recovery")
+    reference_upload.add_argument("reference_id", type=UUID)
+    reference_upload.add_argument("file", type=Path)
+    reference_upload.add_argument("--description", default="")
+    reference_upload.add_argument("--source-url")
+    reference_download = actions.add_parser("reference-download", help="Retrieve a stored source file with checksum verification")
+    reference_download.add_argument("reference_id", type=UUID)
+    reference_download.add_argument("file_id", type=UUID)
+    reference_download.add_argument("--output", type=Path, required=True)
     upload = actions.add_parser("upload-file", help="Upload exact file bytes as a journaled project artifact")
     upload.add_argument("path", type=Path)
     upload.add_argument("--project-id", type=UUID, required=True)
@@ -109,7 +129,7 @@ def parser():
 
 
 def database(config):
-    from .database import Database
+    from .persistence.database import Database
     return Database(config.database_url.get_secret_value(), pool_size=config.database_pool_size,
                     pool_timeout=config.database_pool_timeout_seconds,
                     statement_timeout_ms=config.statement_timeout_seconds * 1000)
@@ -172,6 +192,16 @@ def agent_command(args):
             result = client.replay_pending()
         elif args.action == "resolve-intent":
             result = client.resolve_intent(args.key, args.note)
+        elif args.action == "reference-files":
+            from urllib.parse import urlencode
+            result = client.request("GET", f"/api/v3/references/{args.reference_id}/files" +
+                                    ("?" + urlencode({"cursor": args.cursor}) if args.cursor else ""))
+        elif args.action == "reference-upload":
+            from .projects.reference_files_client import upload_file
+            result = upload_file(client, args.reference_id, args.file, description=args.description, source_url=args.source_url)
+        elif args.action == "reference-download":
+            from .projects.reference_files_client import download_file
+            result = download_file(client, args.reference_id, args.file_id, args.output)
         elif args.action == "upload-file":
             import base64
             import re
@@ -191,7 +221,7 @@ def agent_command(args):
             payload["content_base64"] = base64.b64encode(content).decode("ascii")
             result = client.request("POST", "/api/v3/artifacts", payload)
         elif args.action == "reference":
-            from .reference_cache import ReferenceCache
+            from .projects.reference_cache import ReferenceCache
             if not args.workspace.is_absolute():
                 raise ValueError("reference workspace must be an explicit absolute path")
             with ReferenceCache(args.workspace, os.environ["HORIZON_API_URL"], os.environ["HORIZON_EXECUTION_TOKEN"]) as cache:
@@ -263,7 +293,7 @@ def doctor(config, *, client=None, worker_config=None):
     try:
         with database(config) as db:
             version = db.check_revision()
-            from .diagnostics import database_checks
+            from .operations.diagnostics import database_checks
             with db.transaction() as conn:
                 operational = database_checks(conn)
         checks.append({"name": "database", "status": "ready", "detail": version})
@@ -293,7 +323,7 @@ def doctor(config, *, client=None, worker_config=None):
         if owned:
             probe.close()
     if worker_config is not None:
-        from .diagnostics import worker_checks
+        from .operations.diagnostics import worker_checks
         checks.extend(worker_checks(worker_config))
     return {"healthy": all(check["status"] == "ready" for check in checks),
             "checks": checks, "configuration": config.redacted()}
@@ -403,7 +433,7 @@ def main(argv=None):
             return
         if args.command == "worker-watchdog":
             from .worker_config import WorkerConfig
-            from .watchdog import check_worker
+            from .operations.watchdog import check_worker
             worker = WorkerConfig.model_validate_json(args.worker_config.read_bytes())
             print(json.dumps(check_worker(worker, service=args.restart_service,
                 threshold=args.failure_threshold, cooldown_seconds=args.cooldown_seconds), indent=2))
@@ -429,19 +459,41 @@ def main(argv=None):
             return
         config = load_config(args.config)
         if args.command == "verify-workspaces":
-            from .bootstrap import operator
+            from .projects.bootstrap import operator
             from .worker_config import WorkerConfig
-            from .workspace_setup import verify
+            from .execution.workspace_setup import verify
             worker = WorkerConfig.model_validate_json(args.worker_config.read_bytes())
             with database(config) as db:
                 with db.transaction() as conn:
                     actor = operator(conn, args.operator)
                 print(json.dumps(verify(db, actor, worker, apply=args.apply), indent=2))
+        elif args.command == "launch-objective":
+            from . import models
+            from .projects import bootstrap
+            from .persistence.artifacts import ArtifactStore
+            from .execution.scheduler import Scheduler
+            from .missions.service import Service
+            values = {"objective_id": args.objective_id, "host_ids": args.host,
+                      "auto_advance": not args.human_approval}
+            if args.phase:
+                values["requested_phases"] = args.phase
+                if args.phase[0] != "preprocessing":
+                    raise ValueError("Use launch-run with pinned phase inputs to begin after preprocessing")
+            if args.queue_policies:
+                values["queue_policies"] = json.loads(args.queue_policies.read_bytes())
+            data = models.RunCreate.model_validate(values)
+            result = data.model_dump(mode="json")
+            if args.apply:
+                with database(config) as db, db.transaction() as conn:
+                    actor = bootstrap.operator(conn, args.operator)
+                    result = bootstrap.launch(conn, actor, Scheduler(Service(ArtifactStore(config.artifact_root), config)),
+                                              bootstrap.RunRecipe(id=uuid4(), run=data))
+            print(json.dumps(result, indent=2, default=str))
         elif args.command in ("bootstrap-project", "launch-run"):
-            from . import bootstrap
-            from .artifacts import ArtifactStore
-            from .scheduler import Scheduler
-            from .service import Service
+            from .projects import bootstrap
+            from .persistence.artifacts import ArtifactStore
+            from .execution.scheduler import Scheduler
+            from .missions.service import Service
             model = bootstrap.ProjectRecipe if args.command == "bootstrap-project" else bootstrap.RunRecipe
             if args.input.stat().st_size > 1024**2:
                 raise ValueError("setup recipe exceeds one MiB")
@@ -461,19 +513,19 @@ def main(argv=None):
             if not result["healthy"]:
                 raise SystemExit(1)
         elif args.command == "watchdog":
-            from .watchdog import check
+            from .operations.watchdog import check
             print(json.dumps(check(config, service=args.restart_service, threshold=args.failure_threshold,
                                    cooldown_seconds=args.cooldown_seconds), indent=2))
         elif args.command == "backup":
-            from .storage import backup
+            from .operations.storage import backup
             with database(config) as db:
                 print(json.dumps(backup(db, config, args.destination), indent=2))
         elif args.command == "verify-backup":
-            from .storage import verify_backup
+            from .operations.storage import verify_backup
             manifest = verify_backup(args.backup)
             print(json.dumps({"status": "verified", "created_at": manifest["created_at"], "artifacts": len(manifest["artifacts"])}, indent=2))
         elif args.command == "cleanup":
-            from .storage import StorageManager, database_retention_preview, apply_database_retention
+            from .operations.storage import StorageManager, database_retention_preview, apply_database_retention
             if args.database:
                 with database(config) as db, db.transaction() as conn:
                     result = apply_database_retention(conn, config, json.loads(args.apply_preview.read_bytes())) if args.apply_preview else database_retention_preview(conn, config)
@@ -488,7 +540,7 @@ def main(argv=None):
         elif args.command == "serve":
             import uvicorn
             from .api import create_app
-            from .storage import service_logging
+            from .operations.storage import service_logging
             with service_logging(config):
                 app = create_app(config)
                 class Server(uvicorn.Server):
@@ -503,8 +555,8 @@ def main(argv=None):
             from pydantic import TypeAdapter
             from .auth import PASSWORDS
             from .models import Slug
-            from .records import create, transaction_lock
-            from .schema import tables
+            from .persistence.records import create, transaction_lock
+            from .persistence.schema import tables
             TypeAdapter(Slug).validate_python(args.username)
             password = sys.stdin.readline().rstrip("\n") if args.password_stdin else getpass.getpass("New administrator password: ")
             if len(password) < 12:
@@ -519,8 +571,8 @@ def main(argv=None):
             from uuid import UUID
             from sqlalchemy import select
             from .auth import issue_credential
-            from .records import create, get, transaction_lock
-            from .schema import tables
+            from .persistence.records import create, get, transaction_lock
+            from .persistence.schema import tables
             # Create the destination exclusively before issuing the credential. Never print the token.
             fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:

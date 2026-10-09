@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from archon_horizon.pipeline.bundles import skill_files
+from archon_horizon.pipeline.instructions.bundles import skill_files
 
 
 SCRIPT = Path(__file__).parents[1] / "src/archon_horizon/pipeline/skills/lean/lean-performance/scripts/compare_measurements.py"

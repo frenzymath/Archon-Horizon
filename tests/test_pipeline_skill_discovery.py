@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from archon_horizon.pipeline.bundles import skill_files, skill_path
+from archon_horizon.pipeline.instructions.bundles import skill_files, skill_path
 from archon_horizon.pipeline.errors import DomainError
 from archon_horizon.pipeline.worker.skills import materialize_bundle
 from test_pipeline_worker_skills import digest

@@ -8,8 +8,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 
 from archon_horizon.pipeline import models
-from archon_horizon.pipeline.records import change, get, transaction_lock
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, get, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
 
 from test_pipeline_api import api, api_database, auth, mutate
 

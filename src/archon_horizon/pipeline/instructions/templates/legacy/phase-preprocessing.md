@@ -1,0 +1,1 @@
+Produce the roadmap graph, Lean milestone statements and all supporting definitions. Workers propose roadmap PRs; maintainers review the route and contracts, request concrete repairs and accept exact checked revisions. This phase does not prove all milestones. A ready baseline approval packet ends preprocessing; human approval and proof work are separate.

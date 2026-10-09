@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Closed value contracts shared by the API, scheduler and worker journal.
 
 Database ownership and authority checks belong to the transaction service;
 these models reject malformed and ambiguous values before a transaction starts.
 """
+
+from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
@@ -14,6 +14,7 @@ from uuid import UUID
 
 from pydantic import (
     AfterValidator,
+    JsonValue,
     AwareDatetime,
     BaseModel,
     BeforeValidator,
@@ -28,7 +29,7 @@ from pydantic import (
     model_validator,
 )
 
-from .review_contracts import ReviewAssessment
+from .review.contracts import ReviewAssessment
 
 
 class Contract(BaseModel):
@@ -237,14 +238,16 @@ class Condition(Contract):
 class Preprocessing(Contract):
     kind: Literal["preprocessing"]
     roadmap_document_id: UUID
-    # False starts one root maintainer; True retains the explicit supervisor
-    # workflow. Existing runs keep their persisted automations.
+    # Persisted legacy runs may retain the retired supervisor profile. New
+    # launches reject True; the field remains readable for those saved runs.
     orchestrated: StrictBool = False
 
 
 class Formalization(Contract):
     kind: Literal["formalization"]
-    roadmap_snapshot_id: UUID
+    # Graph workflows work directly from the run's versioned objective. A
+    # snapshot remains an optional source pin and is required by legacy runs.
+    roadmap_snapshot_id: UUID | None = None
     orchestrated: StrictBool = False
 
 
@@ -287,6 +290,32 @@ class RetryPolicy(Contract):
         if self.max_delay_seconds < self.initial_delay_seconds:
             raise ValueError("maximum delay cannot be smaller than initial delay")
         return self
+
+
+class QueuePolicy(Contract):
+    """Independent scheduling defaults; the role remains an authorization boundary."""
+
+    role: Role = "worker"
+    slots: Positive = 4
+    max_pending: Positive = 32
+    max_sessions: Positive | None = None
+    token_budget: Count | None = None
+    reserved_slots: Count = 0
+    harness_id: UUID | None = None
+    model_options: ModelOptions = Field(default_factory=ModelOptions)
+    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
+
+    @model_validator(mode="after")
+    def valid_reservation(self):
+        if self.reserved_slots > self.slots:
+            raise ValueError("reserved_slots must not exceed slots")
+        return self
+
+
+def default_queue_policies() -> dict[str, QueuePolicy]:
+    # These bound model sessions, not compiler processes. Host/provider limits
+    # still apply; reserve one available host slot for maintenance when possible.
+    return {"work": QueuePolicy(), "maintenance": QueuePolicy(role="maintainer", slots=2, reserved_slots=1)}
 
 
 class Failure(Contract):
@@ -388,6 +417,11 @@ class AdapterSettings(Contract):
     sandbox_mode: Literal["read_only", "workspace_write", "externally_isolated"] = "workspace_write"
     tool_names: list[Text] = Field(default_factory=list)
     auto_compaction: StrictBool = True
+    codex_multi_agent_v2: StrictBool = True
+    codex_web_search: Literal["live", "cached", "disabled"] = "live"
+    # Native settings/plugins/hooks/MCP discovery run inside the selected
+    # container. Read-only Claude runs retain the restricted adapter policy.
+    claude_native_configuration: StrictBool = True
 
 
 class SandboxMount(Contract):
@@ -426,7 +460,7 @@ class ReferenceIdentifiers(Contract):
     @field_validator("doi", "arxiv", "isbn", "pmid")
     @classmethod
     def canonical_identifier(cls, value, info):
-        from .reference_identifiers import normalize_identifier
+        from .projects.reference_identifiers import normalize_identifier
         return normalize_identifier(info.field_name, value) if value is not None else None
 
     @model_serializer
@@ -438,7 +472,9 @@ class ProjectCreate(Contract):
     slug: Slug
     title: Text
     description: StrictStr = ""
-    workflow: Literal["legacy", "milestones"] = "milestones"
+    # Planning policy belongs to agents. Older workflows retain their recorded
+    # contracts until an operator explicitly switches an idle project to graph.
+    workflow: Literal["graph", "legacy", "milestones"] = "graph"
 
 
 class MissionRepositoryScope(Contract):
@@ -489,13 +525,35 @@ class MissionUpdate(Contract):
 
 
 class RunCreate(Contract):
-    mission_id: UUID
-    phase: RunPhase
-    host_ids: Annotated[list[UUID], Field(min_length=1)]
+    mission_id: UUID | None = None
+    objective_id: UUID | None = None
+    phase: RunPhase | None = None
+    host_ids: list[UUID] = Field(default_factory=list)
+    orchestration: Literal["objective", "legacy"] = "objective"
+    queue_policies: dict[Slug, QueuePolicy] = Field(default_factory=default_queue_policies)
+    requested_phases: list[PhaseKind] = Field(default_factory=list, max_length=3)
+    auto_advance: StrictBool = True
     max_assignments: Positive | None = None
     token_budget: Count | None = None
     expires_at: Instant | None = None
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
+
+    @model_validator(mode="after")
+    def valid_objective(self):
+        if self.mission_id is None and self.objective_id is None:
+            raise ValueError("supply objective_id or an existing mission_id")
+        if self.orchestration == "legacy" and (self.mission_id is None or self.phase is None or not self.host_ids):
+            raise ValueError("legacy launches require mission_id, phase and host_ids")
+        if (self.orchestration == "legacy" and self.phase is not None
+                and self.phase.kind == "formalization" and self.phase.roadmap_snapshot_id is None):
+            raise ValueError("legacy formalization requires roadmap_snapshot_id")
+        if not {"work", "maintenance"} <= self.queue_policies.keys():
+            raise ValueError("work and maintenance queue policies are required")
+        if self.queue_policies["work"].role != "worker" or self.queue_policies["maintenance"].role != "maintainer":
+            raise ValueError("work and maintenance retain their worker/maintainer roles")
+        if len(set(self.requested_phases)) != len(self.requested_phases):
+            raise ValueError("requested_phases must be unique")
+        return self
 
 
 class AssignmentCreate(Contract):
@@ -504,6 +562,7 @@ class AssignmentCreate(Contract):
     parent_id: UUID | None = None
     reviewer_descriptor_id: UUID | None = None
     role: Role = "worker"
+    category: Slug | None = None
     functions: list[Slug] = Field(default_factory=list)
     instructions: Text | None = None
     harness_id: UUID | None = None
@@ -557,6 +616,7 @@ class AutomationCreate(Contract):
 
 class HostCapabilities(Contract):
     workspace_preparation: StrictInt | None = Field(default=None, ge=1, le=1)
+    lean_verification: StrictInt | None = Field(default=None, ge=1, le=1)
     milestone_verification: StrictInt | None = Field(default=None, ge=1, le=1)
 
 
@@ -585,7 +645,8 @@ class StorageHealth(Contract):
 
 class HostHealth(Contract):
     capabilities: HostCapabilities = Field(default_factory=HostCapabilities)
-    status: Literal["ready", "storage_pressure"]
+    status: Literal["ready", "storage_pressure", "resource_pressure"]
+    resources: dict[str, JsonValue] | None = None
     free_bytes: StrictInt = Field(ge=0, le=2**63 - 1)
     required_free_bytes: StrictInt = Field(ge=0, le=2**63 - 1)
     storage: StorageHealth | None = None
@@ -898,6 +959,7 @@ class ReviewPolicyCreate(Contract):
     required_checks: list[Slug] = Field(default_factory=list)
     attention_labels: list[Annotated[Text, Field(max_length=200)]] = Field(default_factory=lambda: ["awaiting-review"], max_length=100)
     enabled: StrictBool = True
+    specialist_mode: Literal["advisory", "required"] = "advisory"
 
     @model_validator(mode="after")
     def unique_selectors(self) -> "ReviewPolicyCreate":
@@ -947,7 +1009,9 @@ class HostHarnessCreate(Contract):
     provider_home: AbsolutePath
     credential_ref: Text
     execution_slots: Positive
-    max_parallel_subagents: Count = 0
+    # None leaves native delegation uncapped by Horizon; zero explicitly disables
+    # it. Positive values opt into a per-execution cap and capacity reservation.
+    max_parallel_subagents: Count | None = None
     enabled: StrictBool = True
     resource_limit_ids: list[UUID] = Field(default_factory=list)
 
@@ -992,7 +1056,14 @@ class SubscriptionCreate(Contract):
 class ResourceLimitCreate(Contract):
     kind: Literal["provider_account", "build_pool"]
     slug: Slug
-    max_concurrent: Positive
+    # Provider accounts may track outages without a concurrency quota.
+    max_concurrent: Positive | None
+
+    @model_validator(mode="after")
+    def finite_build_capacity(self) -> "ResourceLimitCreate":
+        if self.kind == "build_pool" and self.max_concurrent is None:
+            raise ValueError("build pools require a positive concurrency limit")
+        return self
 
 
 class IntegrationIdentityCreate(Contract):

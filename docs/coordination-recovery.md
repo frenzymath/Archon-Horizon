@@ -1,6 +1,9 @@
-# Maintenance And Recovery
+# Legacy Maintenance And Recovery
 
-New default runs use one `root-maintainer` automation. It creates a root-scoped
+This reference describes `orchestration: legacy`. New objective runs use the
+[objective lifecycle and migration contract](design/objective-orchestration.md).
+
+Explicit legacy runs use one `root-maintainer` automation. It creates a root-scoped
 maintainer task for the next decision: choose work, review a result, arrange a
 repair or close the phase. Workers and child maintainers own narrower outcomes.
 There is no new task store, scheduling profile or agent hierarchy.
@@ -27,7 +30,7 @@ them within the same live execution.
 
 The default root path does not also enter idle-planner refill or legacy
 coordination-recovery admission. Those mechanisms remain for previously configured
-separate planner/supervisor runs. Explicit `orchestrated: true` still selects that
+separate planner/supervisor runs. Fresh orchestrated launches are rejected. Saved `orchestrated: true` runs retain that
 compatibility path; it is not the new default.
 
 ## Failure And Missing Ownership

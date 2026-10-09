@@ -11,7 +11,9 @@ from pathlib import Path
 
 VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[a-zA-Z0-9.+-]*)$")
 SOURCE_PATTERN = re.compile(r'(?m)^__version__ = "([^"]+)"$')
-BADGE_PATTERN = re.compile(r"(shields\.io/badge/version-)([^-]+)(-blue)")
+# A prerelease can contain hyphens. Stop at the final color segment, not at
+# the first hyphen in its version; Shields escapes a literal hyphen as "--".
+BADGE_PATTERN = re.compile(r"(shields\.io/badge/version-)([^\s)]+?)(-blue)(?=[/?#)\s]|$)")
 
 
 def _source_version(root: Path) -> str:
@@ -39,7 +41,7 @@ def _read_versions(root: Path) -> dict[str, str]:
     badge = BADGE_PATTERN.search(readme)
     versions = {
         "Python package": _source_version(root),
-        "README badge": badge.group(2) if badge else "<missing>",
+        "README badge": badge.group(2).replace("--", "-") if badge else "<missing>",
     }
     versions.update(_json_versions(root))
     return versions
@@ -58,38 +60,44 @@ def check(root: Path) -> bool:
     return False
 
 
-def _replace_once(path: Path, pattern: re.Pattern[str], replacement: str) -> None:
+def _replace_once(path: Path, pattern: re.Pattern[str], replacement: str) -> str:
+    """Validate and prepare one marker replacement without changing the file."""
     text = path.read_text("utf-8")
     updated, count = pattern.subn(replacement, text)
     if count != 1:
         raise ValueError(f"expected one version marker in {path}, found {count}")
-    path.write_text(updated, "utf-8")
+    return updated
 
 
 def set_version(root: Path, version: str) -> None:
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError(f"invalid version {version!r}; expected MAJOR.MINOR.PATCH")
 
-    _replace_once(
-        root / "src" / "archon_horizon" / "__init__.py",
+    source_path = root / "src" / "archon_horizon" / "__init__.py"
+    readme_path = root / "README.md"
+    # Validate every marker and JSON input before any write, so a malformed
+    # checkout cannot leave Python and frontend versions partly synchronized.
+    updates = {source_path: _replace_once(
+        source_path,
         SOURCE_PATTERN,
         f'__version__ = "{version}"',
-    )
-    _replace_once(
-        root / "README.md",
+    ), readme_path: _replace_once(
+        readme_path,
         BADGE_PATTERN,
-        rf"\g<1>{version}\g<3>",
-    )
+        rf"\g<1>{version.replace('-', '--')}\g<3>",
+    )}
 
     package_path = root / "src" / "archon_horizon" / "frontend" / "package.json"
     lock_path = package_path.with_name("package-lock.json")
     package = json.loads(package_path.read_text("utf-8"))
     package["version"] = version
-    package_path.write_text(json.dumps(package, indent=2) + "\n", "utf-8")
+    updates[package_path] = json.dumps(package, indent=2) + "\n"
     lock = json.loads(lock_path.read_text("utf-8"))
     lock["version"] = version
     lock.setdefault("packages", {}).setdefault("", {})["version"] = version
-    lock_path.write_text(json.dumps(lock, indent=2) + "\n", "utf-8")
+    updates[lock_path] = json.dumps(lock, indent=2) + "\n"
+    for path, content in updates.items():
+        path.write_text(content, "utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

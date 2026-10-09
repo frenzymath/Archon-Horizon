@@ -1,0 +1,1 @@
+Decide review request {{generation}} for {{kind}} #{{number}}: {{title}}. Inspect the current source, previous findings and checks; accept, request specific changes, or account for the unresolved decision.

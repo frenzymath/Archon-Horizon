@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy import insert, update
 
 from archon_horizon.pipeline.auth import issue_credential
-from archon_horizon.pipeline.connectors import ConnectorFailure, ForgejoClient
-from archon_horizon.pipeline.records import create
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ForgejoClient
+from archon_horizon.pipeline.persistence.records import create
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, auth
 
 
@@ -52,7 +52,7 @@ def test_exact_file_and_paginated_review_inspection_reject_head_race():
 
 def test_inspection_api_scopes_credentials_and_rechecks_current_auth(api, monkeypatch):
     client, database, world, run, operator_token, _ = api
-    from archon_horizon.pipeline import forge_inspection
+    from archon_horizon.pipeline.integrations import forge_inspection
 
     calls = []
     revoke = []

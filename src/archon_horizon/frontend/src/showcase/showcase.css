@@ -1,0 +1,6 @@
+.showcase-banner { min-height: 42px; padding: 8px 20px; background: #e9effa; color: #233451; font: 13px system-ui, sans-serif; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.showcase-banner a { margin-left: auto; color: #234c96; }
+.showcase-dashboard .platform-shell { height: calc(100dvh - 42px); min-height: 400px; }
+/* Account permissions enforce read-only views; hide the irrelevant sign-out action. */
+.showcase-dashboard .platform-top-actions .platform-text-button { display: none; }
+@media (max-width: 700px) { .showcase-banner span { display: none; } }

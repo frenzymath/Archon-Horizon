@@ -18,12 +18,13 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 
-from archon_horizon.pipeline import cli, storage
-from archon_horizon.pipeline.artifacts import ArtifactStore
-from archon_horizon.pipeline.client import AgentClient
+from archon_horizon.pipeline import cli
+from archon_horizon.pipeline.operations import storage
+from archon_horizon.pipeline.persistence.artifacts import ArtifactStore
+from archon_horizon.pipeline.client import AgentClient, RetryDeferred
 from archon_horizon.pipeline.config import PipelineConfig, StoragePolicy, load_config
-from archon_horizon.pipeline.records import create
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import create
+from archon_horizon.pipeline.persistence.schema import tables
 from archon_horizon.pipeline.worker_config import WorkerConfig, private_text
 from test_pipeline_service import service_database, world
 
@@ -115,7 +116,7 @@ def test_interactive_init_prompts_only_missing_fields_and_never_connects(tmp_pat
 
 def test_worker_diagnostics_and_claim_reconciliation_are_scoped(tmp_path, monkeypatch):
     import fcntl
-    from archon_horizon.pipeline.diagnostics import worker_checks
+    from archon_horizon.pipeline.operations.diagnostics import worker_checks
     from archon_horizon.pipeline.worker_config import open_journal
     host_id, harness_id = uuid4(), uuid4()
     token = tmp_path / "host-token"
@@ -168,7 +169,7 @@ def test_worker_diagnostics_and_claim_reconciliation_are_scoped(tmp_path, monkey
 
 
 def test_database_diagnostics_reports_stuck_work_without_modifying_it(world):
-    from archon_horizon.pipeline.diagnostics import database_checks
+    from archon_horizon.pipeline.operations.diagnostics import database_checks
     world.run()
     from uuid import UUID
     execution = {"id": UUID(world.claim()["execution_id"])}
@@ -259,7 +260,7 @@ def test_worker_environment_rejects_credential_overrides_and_unsafe_paths(tmp_pa
                       tmp_path / "scratch", unrestricted=True, environment=environment)
 
 
-def test_agent_uncertain_intent_survives_restart_and_reuses_identity(tmp_path):
+def test_agent_uncertain_intent_survives_restart_and_reuses_identity(tmp_path, monkeypatch):
     keys = []
     available = False
     def handler(request):
@@ -274,6 +275,10 @@ def test_agent_uncertain_intent_survives_restart_and_reuses_identity(tmp_path):
         client.close()
         available = True
         restarted = AgentClient("https://horizon.invalid", "fresh-secret", "execution", tmp_path, client=transport)
+        with pytest.raises(RetryDeferred):
+            restarted.request("POST", "/api/v3/commands", {"action": "test"})
+        retry_at = restarted.pending()[0]["retry_at"]
+        monkeypatch.setattr("archon_horizon.pipeline.client.time.time", lambda: retry_at + 1)
         assert restarted.request("POST", "/api/v3/commands", {"action": "test"})["id"] == keys[0]
         assert len(set(keys)) == 1
         with restarted.connect() as conn:
@@ -388,7 +393,7 @@ def test_cleanup_preserves_protected_data_and_rechecks_pin(tmp_path):
 
 
 def test_external_watchdog_uses_liveness_threshold_and_restart_cooldown(tmp_path):
-    from archon_horizon.pipeline.watchdog import check
+    from archon_horizon.pipeline.operations.watchdog import check
     config = PipelineConfig(database_url="postgresql+psycopg://a:b@127.0.0.1/test", state_root=tmp_path)
     healthy = False
     restarts = []
@@ -476,7 +481,7 @@ def test_backup_rotation_keeps_newest_verified_and_rechecks_corruption(tmp_path)
 
 
 def test_database_retention_preserves_unsettled_live_and_referenced_history(world):
-    from archon_horizon.pipeline.records import get
+    from archon_horizon.pipeline.persistence.records import get
     old = datetime.now(timezone.utc) - timedelta(days=40)
     run = world.run()
     assignment = world.assignment(run)
@@ -508,7 +513,7 @@ def test_database_retention_preserves_unsettled_live_and_referenced_history(worl
 
 
 def resolved_project_recipe():
-    from archon_horizon.pipeline.bootstrap import ProjectRecipe
+    from archon_horizon.pipeline.projects.bootstrap import ProjectRecipe
     raw = json.loads((Path(__file__).parents[1] / "deploy/pipeline/project.example.json").read_bytes())
     raw["id"] = str(uuid4())
     for record in raw["records"]:
@@ -522,7 +527,7 @@ def resolved_project_recipe():
 
 
 def test_project_recipe_preview_expands_optional_phase_reviewers_without_io():
-    from archon_horizon.pipeline import bootstrap
+    from archon_horizon.pipeline.projects import bootstrap
     recipe = resolved_project_recipe()
     result = bootstrap.preview(recipe)
     assert result["external_effects"] == [] and not result["starts_runs"]
@@ -535,7 +540,7 @@ def test_project_recipe_preview_expands_optional_phase_reviewers_without_io():
 
 
 def test_project_bootstrap_is_atomic_idempotent_and_launch_is_separate(world):
-    from archon_horizon.pipeline import bootstrap
+    from archon_horizon.pipeline.projects import bootstrap
     from archon_horizon.pipeline.errors import DomainError
     recipe = resolved_project_recipe()
     first = bootstrap.apply(world.conn, world.actor, world.service, recipe)
@@ -549,14 +554,14 @@ def test_project_bootstrap_is_atomic_idempotent_and_launch_is_separate(world):
     changed.records[0].values["title"] = "Different recipe"
     with pytest.raises(DomainError, match="different contents"):
         bootstrap.apply(world.conn, world.actor, world.service, changed)
-    launch = bootstrap.RunRecipe(id=uuid4(), run={"mission_id": world.mission["id"],
+    launch = bootstrap.RunRecipe(id=uuid4(), run={"orchestration": "legacy", "mission_id": world.mission["id"],
         "phase": {"kind": "preprocessing", "roadmap_document_id": world.document["id"]}, "host_ids": [world.host["id"]]})
     run = bootstrap.launch(world.conn, world.actor, world.scheduler, launch)
     assert bootstrap.launch(world.conn, world.actor, world.scheduler, launch)["id"] == run["id"]
 
 
 def test_invalid_bootstrap_rolls_back_all_created_records(world):
-    from archon_horizon.pipeline import bootstrap
+    from archon_horizon.pipeline.projects import bootstrap
     from archon_horizon.pipeline.errors import DomainError
     recipe = resolved_project_recipe()
     recipe.records[0].values["slug"] = "invalid_bootstrap"
@@ -570,8 +575,8 @@ def test_invalid_bootstrap_rolls_back_all_created_records(world):
 
 def test_local_workspace_verification_checks_git_without_mutating_files(world, tmp_path):
     from archon_horizon.pipeline.auth import issue_credential
-    from archon_horizon.pipeline.records import get
-    from archon_horizon.pipeline.workspace_setup import verify
+    from archon_horizon.pipeline.persistence.records import get
+    from archon_horizon.pipeline.execution.workspace_setup import verify
     root = Path(world.host["workspace_root"])
     checkout = root / "initial"
     checkout.mkdir(parents=True)

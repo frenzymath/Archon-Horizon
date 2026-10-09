@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
-from .intent_reconciliation import INTENT_REPAIR_PREFIX, repair_command
+from .execution.intent_reconciliation import INTENT_REPAIR_PREFIX, repair_command
 
 
 RETRYABLE_OPERATION_CODES = {
@@ -190,14 +190,34 @@ class AgentClient:
                 db.execute("INSERT OR IGNORE INTO intent (id,execution_id,fingerprint,method,path,body,status,response,created_at,attempts,retry_at) VALUES (?,?,?,?,?,?,'pending',NULL,?,0,NULL)",
                            (key, self.execution_id, fingerprint, method, path, encoded, time.time()))
         headers = {"Authorization": f"Bearer {self.token}"}
+        upload = None
+        if isinstance(body, dict) and "_horizon_file_upload" in body:
+            # The journal retains an immutable disk snapshot, not a caller path
+            # whose bytes might change before a retry or a resumed execution.
+            from .projects.reference_files_client import upload_snapshot
+            upload = upload_snapshot(self, method, path, body)
+            headers.update({"Content-Type": "application/octet-stream", "X-Content-SHA256": body["_horizon_file_upload"]["sha256"]})
         if key:
             headers["Idempotency-Key"] = key
         response = None
-        for attempt in Retrying(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=0.2, max=2),
-                                retry=retry_if_exception_type(httpx.TransportError), reraise=True):
-            with attempt:
-                response = self.client.request(method, self.base_url + path, json=body if method != "GET" else None,
-                                               headers=headers)
+        try:
+            for attempt in Retrying(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=0.2, max=2),
+                                    retry=retry_if_exception_type(httpx.TransportError), reraise=True):
+                with attempt:
+                    if upload:
+                        with upload.open("rb") as source:
+                            response = self.client.request(method, self.base_url + path, content=source, headers=headers,
+                                                           timeout=httpx.Timeout(120, connect=5))
+                    else:
+                        response = self.client.request(method, self.base_url + path, json=body if method != "GET" else None,
+                                                       headers=headers)
+        except httpx.TransportError:
+            if method != "GET":
+                # A missing response is still an uncertain write. Persist its
+                # backoff before propagating the original transport exception,
+                # so separate CLI invocations cannot hot-loop the same intent.
+                self._defer_intent(key, "transport_unavailable")
+            raise
         assert response is not None
         # Every mutating response must settle the local intent journal.  A
         # server-side failure is still a durable pending intent with a retry
@@ -205,16 +225,13 @@ class AgentClient:
         # backoff and can duplicate pressure on an already unhealthy API.
         if method != "GET":
             with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
                 if response.is_success:
                     status, retry_at = "completed", None
                 elif invalid_request(response):
                     status, retry_at = "invalid", None
                 elif retryable_operation(response):
-                    previous = db.execute("SELECT attempts FROM intent WHERE id=?", (key,)).fetchone()
-                    attempts = (previous[0] if previous else 0) + 1
-                    delay = min(300, 2 ** min(attempts, 8))
-                    status, retry_at = "pending", time.time() + delay
-                    db.execute("UPDATE intent SET attempts=?,retry_at=? WHERE id=?", (attempts, retry_at, key))
+                    status, retry_at = "pending", self._defer_intent_in(db, key)
                 else:
                     status, retry_at = "rejected", None
                 db.execute("UPDATE intent SET status=?,response=?,retry_at=? WHERE id=?",
@@ -227,6 +244,20 @@ class AgentClient:
                 raise RetryDeferred(message)
             raise RuntimeError(message)
         return response.json()
+
+    @staticmethod
+    def _defer_intent_in(db, key):
+        previous = db.execute("SELECT attempts FROM intent WHERE id=?", (key,)).fetchone()
+        attempts = (previous[0] if previous else 0) + 1
+        retry_at = time.time() + min(300, 2 ** min(attempts, 8))
+        db.execute("UPDATE intent SET attempts=?,retry_at=? WHERE id=?", (attempts, retry_at, key))
+        return retry_at
+
+    def _defer_intent(self, key, error):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            retry_at = self._defer_intent_in(db, key)
+            db.execute("UPDATE intent SET status='pending',response=?,retry_at=? WHERE id=?", (error, retry_at, key))
 
     def pending(self, *, limit: int = 100):
         if not 1 <= limit <= 100:

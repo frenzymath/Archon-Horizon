@@ -9,7 +9,7 @@ from archon_horizon.pipeline.worker.provider import HeadlessAdapter
 from archon_horizon.pipeline.worker.transport import WorkerTransport
 from archon_horizon.pipeline.worker.storage_guard import inspect_storage
 from archon_horizon.pipeline.config import StoragePolicy
-from archon_horizon.pipeline import storage
+from archon_horizon.pipeline.operations import storage
 
 
 class Usage:

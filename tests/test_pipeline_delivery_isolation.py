@@ -5,9 +5,9 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from archon_horizon.pipeline.connectors import ConnectorFailure, ForgejoClient
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ForgejoClient
 from archon_horizon.pipeline.models import ForgeCreate
-from archon_horizon.pipeline.records import create, get
+from archon_horizon.pipeline.persistence.records import create, get
 from test_pipeline_connectors import connector_world, manager
 
 

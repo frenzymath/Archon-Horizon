@@ -4,8 +4,8 @@ import pytest
 from sqlalchemy import insert, select
 
 from archon_horizon.pipeline import models
-from archon_horizon.pipeline.records import change, create, get, snapshot
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get, snapshot
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 
@@ -141,7 +141,7 @@ def test_waiting_for_a_producer_does_not_reserve_its_pr(world, existing, wait_ki
 
 def test_review_handoff_can_include_a_terminal_trusted_job():
     from uuid import uuid4
-    from archon_horizon.pipeline.review_backlog import _terminal_review_dependencies
+    from archon_horizon.pipeline.review.backlog import _terminal_review_dependencies
     reviewer_id = uuid4()
     condition = models.Condition.model_validate({'expression': {'op': 'all', 'args': [
         {'op': 'status_in', 'target': {'kind': 'assignment', 'id': str(reviewer_id)},

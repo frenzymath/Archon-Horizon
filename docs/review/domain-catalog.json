@@ -1,0 +1,3442 @@
+{
+  "schema_version": 1,
+  "scope": "pipeline/projects, operations, dashboard, migrations and bundled Lean measurement comparison script",
+  "reviewed_at": "2026-10-08",
+  "method": "Read every module contract and complete function body, including validators, methods, nested helpers and frozen SQL DDL. Evaluate necessity, contracts, failure handling, comments, efficiency and shared abstractions; then record source-bound dispositions. Metrics do not establish review.",
+  "hash_contract": "File SHA-256 uses exact file bytes; function SHA-256 uses UTF-8 source lines source_start_line through end_line inclusive, including decorators and original newline bytes. line is the AST definition line.",
+  "summary": {
+    "files": 62,
+    "functions": 259,
+    "findings_fixed": 8
+  },
+  "findings": {
+    "D01": {
+      "status": "fixed",
+      "summary": "Falsy YAML scalar/sequence metadata bypassed object validation; nested NaN/infinity reached JSON serialization.",
+      "tests": [
+        "test_frontmatter_rejects_nonobjects_and_nonfinite_numbers"
+      ]
+    },
+    "D02": {
+      "status": "fixed",
+      "summary": "Nonobject diagnostic retention markers and backup manifests crashed cleanup preview instead of preserving unrecognized state.",
+      "tests": [
+        "test_malformed_retention_records_are_preserved_without_breaking_cleanup"
+      ]
+    },
+    "D03": {
+      "status": "fixed",
+      "summary": "Health evidence accepted contradictory run and assignment scopes in the same project and nonfinite JSON values; snapshot contract exposed unsupported assignment storage scope.",
+      "tests": [
+        "test_health_scope_rejects_an_assignment_from_another_run_in_the_same_project",
+        "test_health_payload_rejects_nonfinite_json_before_database_write",
+        "test_snapshot_contract_excludes_assignment_scope_not_supported_by_storage"
+      ]
+    },
+    "D04": {
+      "status": "fixed",
+      "summary": "Window queue ranks changed after cursor/session filtering; one shared full-run pending queue subquery now supplies absolute positions.",
+      "tests": [
+        "test_queue_positions_survive_pagination_and_individual_session_filtering"
+      ]
+    },
+    "D05": {
+      "status": "fixed",
+      "summary": "Primary session usage sums discarded the uncertainty flag from constituent threads.",
+      "tests": [
+        "test_session_usage_keeps_the_uncertainty_of_primary_threads"
+      ]
+    },
+    "D06": {
+      "status": "fixed",
+      "summary": "Nonstring UUID cursor identities raised AttributeError instead of an invalid_cursor domain response.",
+      "tests": [
+        "test_malformed_cursor_id_returns_a_domain_error"
+      ]
+    },
+    "D07": {
+      "status": "fixed",
+      "summary": "Project workflow changes treated stopping runs as idle even though their ownership was not settled.",
+      "tests": [
+        "test_workflow_change_waits_for_a_stopping_run_to_settle"
+      ]
+    },
+    "D08": {
+      "status": "fixed",
+      "summary": "Failed search generation deletion left cleanup fences stuck; readiness was exposed before final cleanup and failed entries retained loaded indexes.",
+      "tests": [
+        "test_failed_search_retirement_releases_cleanup_fence_and_failed_index"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/__init__.py",
+      "sha256": "a04a78eb8b98809f8d128b816196476ce494217f365589e64d052f850264eefb",
+      "module_review": "reviewed",
+      "assessment": "Import-free package marker; preserving lightweight concrete module imports prevents worker/client dependency leakage.",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/activity_display.py",
+      "sha256": "91bb54ac24957b555d30cbbe5754630263f75710a0d0647cdc78fd35a3026d9e",
+      "module_review": "reviewed",
+      "assessment": "Provider-independent bounded public display; visible messages/tools are selected separately from native reasoning/prompt data. Redaction is best effort, not a guarantee for arbitrary secrets.",
+      "functions": [
+        {
+          "name": "safe_text",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display.safe_text",
+          "line": 21,
+          "end_line": 32,
+          "source_start_line": 21,
+          "sha256": "ec447b776911cc2ddab0711fc66b1e407617733f6225edb76cd3b52674f83a82",
+          "status": "reviewed",
+          "assessment": "Bound redaction input and display output, remove controls and redact common credential/header/private-key formats before clipping; this is best-effort presentation filtering.",
+          "findings": []
+        },
+        {
+          "name": "normalize_skills",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display.normalize_skills",
+          "line": 35,
+          "end_line": 40,
+          "source_start_line": 35,
+          "sha256": "a93cebe3288187cb2b9f541892839b78f0599124c771cb193b226c654024504a",
+          "status": "reviewed",
+          "assessment": "Bound and deduplicate nonblank skill-name telemetry; do not expose arbitrary containers or unlimited provider labels.",
+          "findings": []
+        },
+        {
+          "name": "skills_referenced",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display.skills_referenced",
+          "line": 43,
+          "end_line": 57,
+          "source_start_line": 43,
+          "sha256": "2114127beefcd131f622ea7d7738837cfbfa879af26b59ed86f100396541dde4",
+          "status": "reviewed",
+          "assessment": "Infer only explicit grouped SKILL.md command references before exit output; arbitrary tool result text must not imply skill use.",
+          "findings": []
+        },
+        {
+          "name": "_json",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display._json",
+          "line": 60,
+          "end_line": 61,
+          "source_start_line": 60,
+          "sha256": "2021e6db5b9a4b1e6a1a93e2f007f93db0711492967ca88c3349610cccacb660",
+          "status": "reviewed",
+          "assessment": "Shared structured tool rendering uses safe_text after serialization, keeping public activity bounded and redacted.",
+          "findings": []
+        },
+        {
+          "name": "display_event",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display.display_event",
+          "line": 64,
+          "end_line": 128,
+          "source_start_line": 64,
+          "sha256": "83625a517772603532abcd636d48262006a3889db40018f501a4e2025a435f7d",
+          "status": "reviewed",
+          "assessment": "Select visible agent messages and tool lifecycle/results, excluding reasoning and user prompt narration; malformed optional provider containers are ignored and Claude fragments dedupe by content.",
+          "findings": []
+        },
+        {
+          "name": "activity_identity",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display.activity_identity",
+          "line": 131,
+          "end_line": 133,
+          "source_start_line": 131,
+          "sha256": "336464492f89e261e9203fdbfd957229b173928a18a8a793cd4591a8ae91d3f3",
+          "status": "reviewed",
+          "assessment": "Stable provider item keys deduplicate replayed display events; missing keys retain journal operation identity.",
+          "findings": []
+        },
+        {
+          "name": "select_provider_event",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_display.select_provider_event",
+          "line": 136,
+          "end_line": 143,
+          "source_start_line": 136,
+          "sha256": "6fa01a96ca3a3125ce512c60a9e83f72560452dab2716716126a8b7d28683b52",
+          "status": "reviewed",
+          "assessment": "Combine normalized native event with optional public display without coupling provider schema to dashboard persistence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/activity_readmodel.py",
+      "sha256": "15b5274bd7619d09756bfc0234cdcd5a611716c7d0fa459a1a0743584adca371",
+      "module_review": "reviewed",
+      "assessment": "Assignment timeline joins metadata only and enriches one bounded page; occurrence and journal recording time remain distinct.",
+      "functions": [
+        {
+          "name": "timeline",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_readmodel.timeline",
+          "line": 15,
+          "end_line": 37,
+          "source_start_line": 15,
+          "sha256": "2715ffaf2841d6ed0b8915fc7f794de3173c5ccd33962e2602e3fc1c8677d7ee",
+          "status": "reviewed",
+          "assessment": "Union bounded assignment activity/API/integration metadata, with occurrence plus recorded timestamps for deterministic replay pagination; never load API request bodies.",
+          "findings": []
+        },
+        {
+          "name": "enrich",
+          "qualified_name": "archon_horizon.pipeline.dashboard.activity_readmodel.enrich",
+          "line": 40,
+          "end_line": 88,
+          "source_start_line": 40,
+          "sha256": "e939f0bfc30d365d23c11d3b233d7e3edc2bae194254497eba351900c69c7dff",
+          "status": "reviewed",
+          "assessment": "Batch usage and artifact display lookups for one page; only small blob evidence is read, failures degrade to summaries and trusted usage keeps unknown counters unknown.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/dashboard_activity.py",
+      "sha256": "8781eaffbbc7a2f177eb80b5ce5105fc00b3770cb4415078b7796b87fe95de07",
+      "module_review": "reviewed",
+      "assessment": "Original desktop projections share authorization, admissions and usage evidence with current domain. Full-queue ranking is a useful shared abstraction for compact/full pages.",
+      "functions": [
+        {
+          "name": "_profile",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._profile",
+          "line": 21,
+          "end_line": 23,
+          "source_start_line": 21,
+          "sha256": "bc03f3ae17ff24e43ff6c0b1eae0228cdeffebd0ef9d17037572b740b5df40ff",
+          "status": "reviewed",
+          "assessment": "Legacy operational function projection preserves orchestrator profile visibility for retained runs; it does not enable new orchestration.",
+          "findings": []
+        },
+        {
+          "name": "_status",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._status",
+          "line": 26,
+          "end_line": 29,
+          "source_start_line": 26,
+          "sha256": "01f41d13c3725bc4d1ba42d195f13ed668d9923bcef8b5d768e8632507349ef9",
+          "status": "reviewed",
+          "assessment": "Small central mapping maintains desktop vocabulary across durable lifecycle states.",
+          "findings": []
+        },
+        {
+          "name": "_seconds",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._seconds",
+          "line": 32,
+          "end_line": 33,
+          "source_start_line": 32,
+          "sha256": "3a29208c0d4bf42421ffe1dd78fb625e5495c1ebd897e040844681e9f335f149",
+          "status": "reviewed",
+          "assessment": "Clamp elapsed time to zero, handle not-started work and use explicit observation time for unfinished executions.",
+          "findings": []
+        },
+        {
+          "name": "_usage",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._usage",
+          "line": 36,
+          "end_line": 39,
+          "source_start_line": 36,
+          "sha256": "efc5e4d787e22e02225327600909bd81c101f19434b647d070119e41a07a614d",
+          "status": "reviewed",
+          "assessment": "Project nullable measured totals and separate uncertainty flag; absent cost remains unknown.",
+          "findings": []
+        },
+        {
+          "name": "_run_views",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._run_views",
+          "line": 42,
+          "end_line": 89,
+          "source_start_line": 42,
+          "sha256": "a4043635fcad5a5f1646c12a0c10d5e20a14b9ad63985d3bc33204bee050e6d5",
+          "status": "reviewed",
+          "assessment": "Batch run/session/native child/usage/capacity aggregates; compact reads deliberately omit expensive history and mark metrics pending.",
+          "findings": []
+        },
+        {
+          "name": "runs",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity.runs",
+          "line": 92,
+          "end_line": 107,
+          "source_start_line": 92,
+          "sha256": "cddd3c0cb74e7a0a4571aaa1fa739021592786ca651f4d6386d0a81d28b57d03",
+          "status": "reviewed",
+          "assessment": "Use visible-project query and explicit status vocabulary before stable descending run pagination; selected project access is checked.",
+          "findings": []
+        },
+        {
+          "name": "_run_columns",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._run_columns",
+          "line": 110,
+          "end_line": 112,
+          "source_start_line": 110,
+          "sha256": "dce708ac188b48a49179728e1a5fb5188c35b22ed64a4fbe091518bd5015e702",
+          "status": "reviewed",
+          "assessment": "Explicit summary column list avoids copying large orchestration and phase-history metadata into directory reads.",
+          "findings": []
+        },
+        {
+          "name": "_pending_queue",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._pending_queue",
+          "line": 115,
+          "end_line": 120,
+          "source_start_line": 115,
+          "sha256": "cc7c7959c9dba921bade316efa5eee0aa2774f9369ef6eb7402a6bf1d10ec9ca",
+          "status": "repaired",
+          "assessment": "Shared ranked subquery computes the full pending run queue once before cursor/session filtering; both compact and full projections preserve absolute position.",
+          "findings": [
+            "D04"
+          ]
+        },
+        {
+          "name": "_session_summary_page",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._session_summary_page",
+          "line": 123,
+          "end_line": 141,
+          "source_start_line": 123,
+          "sha256": "77346b0c93c4a91b4f5f3a1721b7cede09db63979c5d54e9b2524b9067704cd9",
+          "status": "repaired",
+          "assessment": "Keep compact mission-title/retained-context projection without loading provider history; use full queue rank subquery and stable assignment pagination.",
+          "findings": [
+            "D04"
+          ]
+        },
+        {
+          "name": "_session_summaries",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._session_summaries",
+          "line": 144,
+          "end_line": 145,
+          "source_start_line": 144,
+          "sha256": "df1f91697efeddeeba1f4893c0d2392f6186a67095955817ca9c857de3e58371",
+          "status": "reviewed",
+          "assessment": "Thin internal first-page adapter remains useful to callers needing only summary rows.",
+          "findings": []
+        },
+        {
+          "name": "_sessions_page",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._sessions_page",
+          "line": 148,
+          "end_line": 255,
+          "source_start_line": 148,
+          "sha256": "856ae0eb846b9d05db4f534a419b16ededbb773066dcf24dc9d620121146bc7f",
+          "status": "repaired",
+          "assessment": "Batch attempts, threads, bounded descriptor instructions, requests, usage and skills. Preserve uncertainty across all primary thread totals; child usage remains separate.",
+          "findings": [
+            "D04",
+            "D05"
+          ]
+        },
+        {
+          "name": "_sessions",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._sessions",
+          "line": 258,
+          "end_line": 259,
+          "source_start_line": 258,
+          "sha256": "903cc66f8fef3fb9eb8c5c71c137138ddd1e70b74d60ed08da2eced200b59524",
+          "status": "reviewed",
+          "assessment": "Thin internal first-page adapter shares full projection and selected-assignment filtering with the paginated implementation.",
+          "findings": []
+        },
+        {
+          "name": "run_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity.run_detail",
+          "line": 262,
+          "end_line": 289,
+          "source_start_line": 262,
+          "sha256": "368bcc6ea53fff0860d7507c858f2e088a5d39892ffc349bc74cd563d28f6dcb",
+          "status": "reviewed",
+          "assessment": "Authenticate project before compact/metrics/queue/full reads; queue admission reads only page-visible pending owners and full sessions retain continuation cursor.",
+          "findings": []
+        },
+        {
+          "name": "_resolve",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._resolve",
+          "line": 292,
+          "end_line": 301,
+          "source_start_line": 292,
+          "sha256": "b24f4f4663691126911e254fef4fddf18dad8a254507d1cd8d7da678748df33d",
+          "status": "reviewed",
+          "assessment": "Resolve durable or native child session then check owning assignment project; a primary provider-thread ID is not a public native session.",
+          "findings": []
+        },
+        {
+          "name": "_event",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._event",
+          "line": 304,
+          "end_line": 316,
+          "source_start_line": 304,
+          "sha256": "3659779b19c79cab13fdd9d44c6f4924cf89775dab2dbc700cde86cc1c20c9a7",
+          "status": "reviewed",
+          "assessment": "Map normalized public categories to desktop event shapes and preserve occurrence/recording timestamps and owner provenance.",
+          "findings": []
+        },
+        {
+          "name": "events",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity.events",
+          "line": 319,
+          "end_line": 336,
+          "source_start_line": 319,
+          "sha256": "afbe3d1a44b5db4e8784368d66c97a938997cb458aead6fd3c182fcf5cc5bbd3",
+          "status": "reviewed",
+          "assessment": "Authorize owner, page native versus durable timeline correctly and trim preview bytes with lazy scoped detail links.",
+          "findings": []
+        },
+        {
+          "name": "event_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity.event_detail",
+          "line": 339,
+          "end_line": 350,
+          "source_start_line": 339,
+          "sha256": "09eeb3520a947ebcefa246a041c3b886fe9498792d26f14fe4312ac20b0aa0e9",
+          "status": "reviewed",
+          "assessment": "Exact assignment/native ownership filters prevent an unrelated event detail lookup through another session path.",
+          "findings": []
+        },
+        {
+          "name": "session_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity.session_detail",
+          "line": 353,
+          "end_line": 365,
+          "source_start_line": 353,
+          "sha256": "bf1f4a5f659b86e9126984be9abfaaffda01364e686cb006afe94861bb8aed30",
+          "status": "reviewed",
+          "assessment": "Shared resolution and full/session/report views avoid unnecessary transcript work for compact/reports requests; native child descriptions use pinned evidence.",
+          "findings": []
+        },
+        {
+          "name": "_reports",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity._reports",
+          "line": 368,
+          "end_line": 389,
+          "source_start_line": 368,
+          "sha256": "93a89763aa787dfb539578a75150a43091789c6831533553461b7fb521bf019d",
+          "status": "reviewed",
+          "assessment": "Bound ledger rows and last comments, distinguish native children, redact rendered Markdown and retain structured acceptance criteria.",
+          "findings": []
+        },
+        {
+          "name": "logs",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_activity.logs",
+          "line": 392,
+          "end_line": 395,
+          "source_start_line": 392,
+          "sha256": "6db8ef0405a5525938a2cf29f3ab3b00c679b1f45b9ee9fa0ac9b712cae9ab50",
+          "status": "reviewed",
+          "assessment": "Use the already authorized bounded event projection instead of reading host log files or provider home transcripts.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/dashboard_conditions.py",
+      "sha256": "655e813ccc365562b876c87e14d1dee6a52e58d455748d79753b45c551dd4534",
+      "module_review": "reviewed",
+      "assessment": "Human-readable conditions reuse the authoritative scheduler; narration never becomes a parallel readiness evaluator.",
+      "functions": [
+        {
+          "name": "condition_names",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_conditions.condition_names",
+          "line": 14,
+          "end_line": 27,
+          "source_start_line": 14,
+          "sha256": "3e6b1b55b05e496e54185d83a4b8a7e3b49aed1dbf06696a513cad5408821703",
+          "status": "reviewed",
+          "assessment": "Batch typed object references into readable labels rather than issuing one lookup per expression leaf.",
+          "findings": []
+        },
+        {
+          "name": "describe",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_conditions.describe",
+          "line": 30,
+          "end_line": 80,
+          "source_start_line": 30,
+          "sha256": "7783de61792826cdf10596638db50182ef3a231713a0b84140a685f6c86048c6",
+          "status": "reviewed",
+          "assessment": "Readable condition rendering is separate from evaluation; unsupported versions/operators are labelled, not interpreted as ready.",
+          "findings": []
+        },
+        {
+          "name": "describe.name",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_conditions.describe.name",
+          "line": 36,
+          "end_line": 37,
+          "source_start_line": 36,
+          "sha256": "2a67513c0d9026ffea25304f0324b59eb5a38817c89cceac6ba6f7a782d3b164",
+          "status": "reviewed",
+          "assessment": "Stable fallback labels cover absent names without exposing additional record detail.",
+          "findings": []
+        },
+        {
+          "name": "describe.visit",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_conditions.describe.visit",
+          "line": 39,
+          "end_line": 78,
+          "source_start_line": 39,
+          "sha256": "214dc718d9aaf2ba18c211302be6e58afae368fe9544ca9f7f34dc30e4ec499e",
+          "status": "reviewed",
+          "assessment": "Recursive traversal mirrors validated logical/time/status/Forge condition vocabulary and preserves conjunction/disjunction semantics in descriptions.",
+          "findings": []
+        },
+        {
+          "name": "admissions",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_conditions.admissions",
+          "line": 83,
+          "end_line": 99,
+          "source_start_line": 83,
+          "sha256": "e9b60aec842f6b4a74e084a06fc090a6d5a99618eb0c281770858e000811e9d7",
+          "status": "reviewed",
+          "assessment": "Reuse scheduler readiness and admission observations for pending rows; the dashboard must not invent a parallel queue policy.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/dashboard_projects.py",
+      "sha256": "af46f72f443c9abdbdb5b1958a8681e9446ea84c419c695e0681c74fcefe35ae",
+      "module_review": "reviewed",
+      "assessment": "Bounded authorized graph/document/mission projections preserve exact source commit and chosen target repository semantics.",
+      "functions": [
+        {
+          "name": "_source_query",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects._source_query",
+          "line": 17,
+          "end_line": 26,
+          "source_start_line": 17,
+          "sha256": "1aaccefb64712b5cccdc7ea2ad65365940f981a2d7405f038fb5b13809ec8408",
+          "status": "reviewed",
+          "assessment": "Exact repository/path/commit projection join prevents mismatched Markdown; content is loaded only for explicit detail views.",
+          "findings": []
+        },
+        {
+          "name": "_view",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects._view",
+          "line": 29,
+          "end_line": 46,
+          "source_start_line": 29,
+          "sha256": "34137758d8a451fdc10fd6d18f5374313c59af34854b47058084c051e4b90bb3",
+          "status": "reviewed",
+          "assessment": "Source metadata, progress overlay, lifecycle and public commit URL form one consistent node/document view, with internal integration fields removed.",
+          "findings": []
+        },
+        {
+          "name": "_relations",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects._relations",
+          "line": 49,
+          "end_line": 78,
+          "source_start_line": 49,
+          "sha256": "dfaa4542b7d96a763a6118e258d40a9361dc95f8e1e49cade08705511667ff1d",
+          "status": "reviewed",
+          "assessment": "Batch graph dependency IDs and target-specific implementation overrides; dependent edges derive from the same scoped source metadata.",
+          "findings": []
+        },
+        {
+          "name": "overview",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.overview",
+          "line": 81,
+          "end_line": 88,
+          "source_start_line": 81,
+          "sha256": "eea07a36c5e5337717e7fc920f81ca2f632cdcbf3c4ebf8e66e664accac34aeb",
+          "status": "reviewed",
+          "assessment": "Authorize one project and count active nodes/missions/documents explicitly; small count queries are proportionate.",
+          "findings": []
+        },
+        {
+          "name": "nodes",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.nodes",
+          "line": 91,
+          "end_line": 109,
+          "source_start_line": 91,
+          "sha256": "83f37e35ca404b139af18d55ad90c8e247936c0fcab90d3e77a3a136d2556d9d",
+          "status": "reviewed",
+          "assessment": "Bound page selection/search, require indexed projections and cap postprojection label filtering to 10,000 nodes.",
+          "findings": []
+        },
+        {
+          "name": "node_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.node_detail",
+          "line": 112,
+          "end_line": 134,
+          "source_start_line": 112,
+          "sha256": "56203a6e040efc007b3fdbfba98cdab890a7267a44a4bb3d640cdcfe15880bb1",
+          "status": "reviewed",
+          "assessment": "Resolve ID or stable source label uniquely within the project, then include adjacent scoped nodes and target relations.",
+          "findings": []
+        },
+        {
+          "name": "node_summaries",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.node_summaries",
+          "line": 137,
+          "end_line": 153,
+          "source_start_line": 137,
+          "sha256": "f8c3944deb82a39bb059149e141ed327ef539d176c5a981fce34ee68d04d3a9b",
+          "status": "reviewed",
+          "assessment": "Bound reference resolution to 100 inputs/results and active authorized project nodes; ambiguity is not silently promoted to one canonical identity.",
+          "findings": []
+        },
+        {
+          "name": "objectives",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.objectives",
+          "line": 156,
+          "end_line": 166,
+          "source_start_line": 156,
+          "sha256": "402d8b07acb269a1e0ff0aee8f864c185be37e4cc8ff0625a7dbf30496dfafe8",
+          "status": "reviewed",
+          "assessment": "Read only active roadmap documents, load body for one detail request and provide a meaningful not-found result.",
+          "findings": []
+        },
+        {
+          "name": "graph",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.graph",
+          "line": 169,
+          "end_line": 190,
+          "source_start_line": 169,
+          "sha256": "c977f40d372fc5000dd5e9e6db3bda7f9af42a5e81e1dfda34cffdd81bc83c87",
+          "status": "reviewed",
+          "assessment": "Cap interactive graph size, apply target-specific relations and traverse prerequisites with a visited set; reject unknown focus before traversal.",
+          "findings": []
+        },
+        {
+          "name": "missions",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.missions",
+          "line": 193,
+          "end_line": 223,
+          "source_start_line": 193,
+          "sha256": "92a014a2851639f2f7728b4b0971c4ec50d8f7c1f24b71d4bc2198683fb1d60b",
+          "status": "reviewed",
+          "assessment": "Page matches while retaining ancestor hierarchy, cap returned ancestry and batch child counts/latest runs; large objectives/closure notes stay out of directory rows.",
+          "findings": []
+        },
+        {
+          "name": "mission_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.dashboard_projects.mission_detail",
+          "line": 226,
+          "end_line": 232,
+          "source_start_line": 226,
+          "sha256": "fe2e653dc9f576c9c6df2953c36ebd5eb9829ac69e40e0b2bb9d1f75ebb55aaa",
+          "status": "reviewed",
+          "assessment": "Authorize project and verify mission containment before returning full objective/parent title.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/readmodels.py",
+      "sha256": "a17d1e3d62bc8cc653d6ad4e5902248872ed00eb2fccb46aff4bb684985b11e9",
+      "module_review": "reviewed",
+      "assessment": "Keyset pagination, scoped directories and batch enrichment. Invalid cursor identity now fails as an explicit domain request error.",
+      "functions": [
+        {
+          "name": "replay_window",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.replay_window",
+          "line": 22,
+          "end_line": 27,
+          "source_start_line": 22,
+          "sha256": "f2854520e5ead8daf930f6f38216214125e7fdbc58742ce5bc7fe90d3282d602",
+          "status": "reviewed",
+          "assessment": "Retained semantic events cannot widen reconnect replay indefinitely; cutoff-bound earliest sequence and overall latest provide a consistent replay window.",
+          "findings": []
+        },
+        {
+          "name": "page",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.page",
+          "line": 30,
+          "end_line": 70,
+          "source_start_line": 30,
+          "sha256": "6d710530d0361bbcb9fb183447f5505f11ade8afb2594201c9a86dc0fe7be901",
+          "status": "repaired",
+          "assessment": "Keep bounded keyset pagination with UUID tie-breakers and timezone-aware timestamp cursors. Reject nonstring identities before UUID construction so malformed cursors produce 422.",
+          "findings": [
+            "D06"
+          ]
+        },
+        {
+          "name": "visible_projects",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.visible_projects",
+          "line": 73,
+          "end_line": 82,
+          "source_start_line": 73,
+          "sha256": "271245feda7c9cb33afa98e81565954bf7e2c2f57126994a3bdb9417c7052e98",
+          "status": "reviewed",
+          "assessment": "Installation admins see all projects; agents see only live execution project and humans retain grant filtering.",
+          "findings": []
+        },
+        {
+          "name": "runs",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.runs",
+          "line": 85,
+          "end_line": 89,
+          "source_start_line": 85,
+          "sha256": "61be249c4b00551ece5518af1472939a049633f6929b510d7fd6ea6edde37a84",
+          "status": "reviewed",
+          "assessment": "Explicit selected-project authorization precedes paginated mission-joined run directory.",
+          "findings": []
+        },
+        {
+          "name": "run_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.run_detail",
+          "line": 92,
+          "end_line": 100,
+          "source_start_line": 92,
+          "sha256": "4b8d00d67b3e6b747678582f4345af9b963d1249e439fed72bf4d3c0f4d9828d",
+          "status": "reviewed",
+          "assessment": "Read persisted run/mission and shared admission budget reason; do not infer run state from dashboard counters.",
+          "findings": []
+        },
+        {
+          "name": "assignment_query",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.assignment_query",
+          "line": 103,
+          "end_line": 106,
+          "source_start_line": 103,
+          "sha256": "febbd5c068547ce6892862d3b4aaaefeeaf526e4c6b7936b293b268383f3828b",
+          "status": "reviewed",
+          "assessment": "Reusable explicit join gives assignments their actual run number and mission title without eager service imports.",
+          "findings": []
+        },
+        {
+          "name": "enrich_assignments",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.enrich_assignments",
+          "line": 109,
+          "end_line": 136,
+          "source_start_line": 109,
+          "sha256": "8dc8896f3d2312853e92f20459eb31d432ad9c019228db9ced6684b3fb5da0e2",
+          "status": "reviewed",
+          "assessment": "Batch last activity/host and shared scheduler observations before per-owner readiness; only pending work displays admission blockers.",
+          "findings": []
+        },
+        {
+          "name": "assignments",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.assignments",
+          "line": 139,
+          "end_line": 163,
+          "source_start_line": 139,
+          "sha256": "6feca6748c9bd2c80b98353346bddddc0b9f6603146acd24dd75980081b2348a",
+          "status": "reviewed",
+          "assessment": "Validate lifecycle filter vocabulary, resolve display IDs and escaped source/mission search, then paginate queue order and enrich one bounded page.",
+          "findings": []
+        },
+        {
+          "name": "assignment_detail",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.assignment_detail",
+          "line": 166,
+          "end_line": 180,
+          "source_start_line": 166,
+          "sha256": "8cc385f9532859a43f06b9bee7ad19c04ae34c3c75f60981d03771cf14a2dc03",
+          "status": "reviewed",
+          "assessment": "Reuse service context for authorization/domain records, bound publications and enrich current public activity; show adopted baseline rather than newest snapshot.",
+          "findings": []
+        },
+        {
+          "name": "assignment_activity",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.assignment_activity",
+          "line": 183,
+          "end_line": 186,
+          "source_start_line": 183,
+          "sha256": "e162bc9625f46cc48507bd065cac35a10998d88bc73605138dae2881fe85c72b",
+          "status": "reviewed",
+          "assessment": "Project containment guard precedes shared assignment-scoped timeline.",
+          "findings": []
+        },
+        {
+          "name": "_pattern",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels._pattern",
+          "line": 189,
+          "end_line": 190,
+          "source_start_line": 189,
+          "sha256": "4c8bd4e119d2666312d4ea28eb695c97e066fadd59498030790a7f31fae7e928",
+          "status": "reviewed",
+          "assessment": "One bounded escaped ILIKE helper treats percent/underscore/backslash as literal search input.",
+          "findings": []
+        },
+        {
+          "name": "roadmap",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.roadmap",
+          "line": 193,
+          "end_line": 287,
+          "source_start_line": 193,
+          "sha256": "5aaaa1d47fbef3030e581c7d41946c6f0b5539f06de75265e88d5d7f0aa2efe0",
+          "status": "reviewed",
+          "assessment": "Project/run/target scope and exact projection metadata drive progress/dependencies/source URLs; batch related IDs, bound objectives and preserve adopted run baseline.",
+          "findings": []
+        },
+        {
+          "name": "publication_view",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.publication_view",
+          "line": 290,
+          "end_line": 306,
+          "source_start_line": 290,
+          "sha256": "2c6b5b9e572d474f9658e7bce67462c9cdef63528b7627eb00d29cabc3e6616b",
+          "status": "reviewed",
+          "assessment": "Derive public commit/repository links from immutable artifact content and configured integration, distinguish managed recovery refs, preserve delivery failure diagnostics.",
+          "findings": []
+        },
+        {
+          "name": "_publication_views",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels._publication_views",
+          "line": 309,
+          "end_line": 319,
+          "source_start_line": 309,
+          "sha256": "a9a5b91cd0d012d3d98c2ae9c34e1c217b20e419e3cb3b52eb2fc481dbab3324",
+          "status": "reviewed",
+          "assessment": "Batch artifact/repository/integration lookup before per-publication presentation to avoid directory N+1 queries.",
+          "findings": []
+        },
+        {
+          "name": "changes",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.changes",
+          "line": 322,
+          "end_line": 340,
+          "source_start_line": 322,
+          "sha256": "872766e52b5d0f724933ab296681b6d6c30de3c37f118d87e5fac3b0aeafadb3",
+          "status": "reviewed",
+          "assessment": "Scope through artifact project, paginate publications and independently aggregate unsettled managed preservation state.",
+          "findings": []
+        },
+        {
+          "name": "forge_items",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.forge_items",
+          "line": 343,
+          "end_line": 363,
+          "source_start_line": 343,
+          "sha256": "a29a20434cef95bd8b75f527cb5c9f759c2c1a75cb5f64a8fc2fb70645d9b69a",
+          "status": "reviewed",
+          "assessment": "Authorize and page scoped Forge metadata, map public URLs, then attach existing gates and PR readiness; review domain remains authoritative.",
+          "findings": []
+        },
+        {
+          "name": "discussions",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.discussions",
+          "line": 366,
+          "end_line": 397,
+          "source_start_line": 366,
+          "sha256": "74932094d10d2c38042609473279a52b06873cd4bb62cc756f2e17e01bb7e6f3",
+          "status": "reviewed",
+          "assessment": "Bound topic directory without message bodies, validate optional assignment project and batch subscriptions/exact-revision unread counts.",
+          "findings": []
+        },
+        {
+          "name": "discussion_messages",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.discussion_messages",
+          "line": 400,
+          "end_line": 430,
+          "source_start_line": 400,
+          "sha256": "13f773f0d65533920e2bf685035425cede2e62609322ff8748e829403f4786db",
+          "status": "reviewed",
+          "assessment": "Authorize discussion/assignment and use shared unread scope/fingerprint; cap message bodies at 20 and expose exact fetched revisions for acknowledgement.",
+          "findings": []
+        },
+        {
+          "name": "resources",
+          "qualified_name": "archon_horizon.pipeline.dashboard.readmodels.resources",
+          "line": 433,
+          "end_line": 480,
+          "source_start_line": 433,
+          "sha256": "33e2f56e62347a092d9961db3e06c9b7d139a6f094e2faeff9f51154522fee03",
+          "status": "reviewed",
+          "assessment": "Admin-only resource observations aggregate enabled capacity, physical occupancy, provider circuit/cooldown and evidence bytes; unavailable disk stat yields unknown free bytes.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/dashboard/record_queries.py",
+      "sha256": "064882e0ed2ef7cfbe222b1fc9693d8c0055575f87f63a0fef65e347cbfdafab",
+      "module_review": "reviewed",
+      "assessment": "One typed containment expression drives generic query execution and filter discovery; repeated/unknown query keys fail early.",
+      "functions": [
+        {
+          "name": "scope_expression",
+          "qualified_name": "archon_horizon.pipeline.dashboard.record_queries.scope_expression",
+          "line": 13,
+          "end_line": 32,
+          "source_start_line": 13,
+          "sha256": "5ea0a73d303d72df9a13ec23b4385744ab576e3b86fd6f1cc42a362099b2334c",
+          "status": "reviewed",
+          "assessment": "Shared recursive typed containment handles direct columns and indirect publication/outbox principal execution scope; unsupported filters fail explicitly.",
+          "findings": []
+        },
+        {
+          "name": "supported_filters",
+          "qualified_name": "archon_horizon.pipeline.dashboard.record_queries.supported_filters",
+          "line": 35,
+          "end_line": 45,
+          "source_start_line": 35,
+          "sha256": "32aa00b22ad75b7e266a35e43239dc664f21f6724899ba2b55d3c2a5938029fe",
+          "status": "reviewed",
+          "assessment": "Derive discoverable scope filters from the same expression logic and only expose status for records with that column.",
+          "findings": []
+        },
+        {
+          "name": "validate_query",
+          "qualified_name": "archon_horizon.pipeline.dashboard.record_queries.validate_query",
+          "line": 48,
+          "end_line": 53,
+          "source_start_line": 48,
+          "sha256": "f8e68c921a835f1daf18dad8575d47bc5500a371155c3c90cd7c2e20f75b436e",
+          "status": "reviewed",
+          "assessment": "Reject unknown/repeated query keys before read evaluation, returning explicit supported filter names.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/__init__.py",
+      "sha256": "4a2d1de6933878c6c4268c2ba3a757a8bcfcb95508661b0f578c22a0712b0125",
+      "module_review": "reviewed",
+      "assessment": "Import-free package marker; preserving lightweight concrete module imports prevents worker/client dependency leakage.",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/env.py",
+      "sha256": "ca304052811b7f6786cefa05db76efcc4fe856631bb89eab361560a7543af328",
+      "module_review": "reviewed",
+      "assessment": "Alembic entrypoint only accepts explicitly supplied database connection/schema; migration execution remains an operator command.",
+      "functions": [
+        {
+          "name": "run_migrations",
+          "qualified_name": "archon_horizon.pipeline.migrations.env.run_migrations",
+          "line": 6,
+          "end_line": 18,
+          "source_start_line": 6,
+          "sha256": "4509d5d576a8fa03178c0538463d26ea041e8bf26991113311ebea74dec0c6b3",
+          "status": "reviewed",
+          "assessment": "Require an explicit Database.migrate connection/schema and one Alembic transactional run; importing installed API does not implicitly mutate operator databases.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/__init__.py",
+      "sha256": "5384bfdb2df380b6557cc7a71d16891415bccaa87699406e236f752c6415389f",
+      "module_review": "reviewed",
+      "assessment": "Import-free package marker; preserving lightweight concrete module imports prevents worker/client dependency leakage.",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0001_pipeline.py",
+      "sha256": "46dea75c6715b553f67fdbe0ec0a5ac00b81438b9cd9bf02191c35c35470df95",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Install frozen normalized DDL, deferred foreign keys, revision triggers and immutable evidence triggers; current metadata must not rewrite initial history.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0001_pipeline.upgrade",
+          "line": 1849,
+          "end_line": 1918,
+          "source_start_line": 1849,
+          "sha256": "e8f26d5518503635d5575f0b98610f3c2c9c4862e0dcbe1f59a5dcc9d23c1b7a",
+          "status": "reviewed",
+          "assessment": "Install frozen normalized DDL, deferred foreign keys, revision triggers and immutable evidence triggers; current metadata must not rewrite initial history.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0001_pipeline.downgrade",
+          "line": 1921,
+          "end_line": 1922,
+          "source_start_line": 1921,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0002_immutable_fields.py",
+      "sha256": "b77c0dfc26beadb480b82f4b2e7798fcc4a574d8fa3988dd714d8736ad2d4d87",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add immutable identity/ownership/provenance field triggers with distinct-value comparison and check-violation error code.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0002_immutable_fields.upgrade",
+          "line": 42,
+          "end_line": 62,
+          "source_start_line": 42,
+          "sha256": "a41c998c4cf19e983c8c4064eabcaa985063972c569b79fdf32890603b7211f7",
+          "status": "reviewed",
+          "assessment": "Add immutable identity/ownership/provenance field triggers with distinct-value comparison and check-violation error code.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0002_immutable_fields.downgrade",
+          "line": 65,
+          "end_line": 66,
+          "source_start_line": 65,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0003_resolution_checks.py",
+      "sha256": "8fc079d4495439df675d1a1a7f76a5730b3d475ae75bed0272309be799ee96af",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Make phase and obligation JSON lifecycle checks reject SQL NULL explicitly.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0003_resolution_checks.upgrade",
+          "line": 13,
+          "end_line": 27,
+          "source_start_line": 13,
+          "sha256": "a973348663f9f760ff348d402707c3eacdc3a59aff30f8a546f5d08d3c553c9c",
+          "status": "reviewed",
+          "assessment": "Make phase and obligation JSON lifecycle checks reject SQL NULL explicitly.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0003_resolution_checks.downgrade",
+          "line": 30,
+          "end_line": 31,
+          "source_start_line": 30,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0004_inline_command_response.py",
+      "sha256": "a5926ce4ba5c40b801f7063b0cc261416a10c7b21d4d7f9cd164e2758b661b94",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Allow bounded inline response objects while requiring exactly one completed response storage form.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0004_inline_command_response.upgrade",
+          "line": 15,
+          "end_line": 21,
+          "source_start_line": 15,
+          "sha256": "cfea5e256013a8b2c6aab97b45f4c72deb2a6a1b223bd192d85b3f0cfc28adc1",
+          "status": "reviewed",
+          "assessment": "Allow bounded inline response objects while requiring exactly one completed response storage form.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0004_inline_command_response.downgrade",
+          "line": 24,
+          "end_line": 25,
+          "source_start_line": 24,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0005_forge_outbox.py",
+      "sha256": "7d78829ddfd155c7b2869b6ffe51c9b9379bfef3aa5e499a9e30016520a780b3",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Extend immutable historical outbox kind check to Forge review and merge intents.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0005_forge_outbox.upgrade",
+          "line": 13,
+          "end_line": 17,
+          "source_start_line": 13,
+          "sha256": "f735ba1f5db579e72f0f9e3ca009136ca0414386e88a49c94e9124292159fef1",
+          "status": "reviewed",
+          "assessment": "Extend immutable historical outbox kind check to Forge review and merge intents.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0005_forge_outbox.downgrade",
+          "line": 20,
+          "end_line": 21,
+          "source_start_line": 20,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0006_sparse_references.py",
+      "sha256": "861b685c3c6981ee15cd2345778fcb0554acc173044e05e136d6d3d8eaeac67c",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Replace dense nullable typed-reference indexes with sparse unique populated-arm indexes.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0006_sparse_references.upgrade",
+          "line": 21,
+          "end_line": 26,
+          "source_start_line": 21,
+          "sha256": "c9c9a2b30189fc110e2805d631b73af16996a4fea25edbf88d66bcc24c840e4d",
+          "status": "reviewed",
+          "assessment": "Replace dense nullable typed-reference indexes with sparse unique populated-arm indexes.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0006_sparse_references.downgrade",
+          "line": 29,
+          "end_line": 30,
+          "source_start_line": 29,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0007_idempotency_scope.py",
+      "sha256": "25c6e9661538d81e20e8b6f8b7047a6ff7d79f319fa0570e54d6eea64a70c967",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add nullable project scope to saved command receipts with FK and index, retaining old installation receipts.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0007_idempotency_scope.upgrade",
+          "line": 15,
+          "end_line": 18,
+          "source_start_line": 15,
+          "sha256": "871c25f7a8932e7df220e3121c6a1f1afa2dbf645d5821a12f20f42befb0f394",
+          "status": "reviewed",
+          "assessment": "Add nullable project scope to saved command receipts with FK and index, retaining old installation receipts.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0007_idempotency_scope.downgrade",
+          "line": 21,
+          "end_line": 22,
+          "source_start_line": 21,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0008_forge_creation.py",
+      "sha256": "85051df9a08f1d8fbf26047c6b3ea7c6924001f01a4a60ca335ba88b5ff67aa7",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add Forge creation/comment delivery kinds and write-once origin association without relaxing identity.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0008_forge_creation.upgrade",
+          "line": 11,
+          "end_line": 30,
+          "source_start_line": 11,
+          "sha256": "37b6510e34d75344ab631745fd1e1e7dc4db9c7045fb1843475c1d6613416f4d",
+          "status": "reviewed",
+          "assessment": "Add Forge creation/comment delivery kinds and write-once origin association without relaxing identity.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0008_forge_creation.downgrade",
+          "line": 33,
+          "end_line": 34,
+          "source_start_line": 33,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0009_native_background.py",
+      "sha256": "cb67a9cbff262b7f08754cbc080fd6bd0f507714671577f0e0b29ca5e3ae5793",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add nullable native-background mode and write-once trigger for observed invocation semantics.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0009_native_background.upgrade",
+          "line": 12,
+          "end_line": 25,
+          "source_start_line": 12,
+          "sha256": "07ef0deeca02766dc18cfde97e173966826fc5a410b45f37025a7b695667df94",
+          "status": "reviewed",
+          "assessment": "Add nullable native-background mode and write-once trigger for observed invocation semantics.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0009_native_background.downgrade",
+          "line": 28,
+          "end_line": 29,
+          "source_start_line": 28,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0010_child_capacity.py",
+      "sha256": "a6755ca049b115488621545f891aca8948baa0b4bd8b652183031fb4d8cf32d0",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add child request claims and distinct active parent/child reservation uniqueness, plus cancelled outbox lifecycle.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0010_child_capacity.upgrade",
+          "line": 12,
+          "end_line": 23,
+          "source_start_line": 12,
+          "sha256": "618f02b5406066d449482c7ffa9c827594023f3ed336c1c29f7fcb6591dcc187",
+          "status": "reviewed",
+          "assessment": "Add child request claims and distinct active parent/child reservation uniqueness, plus cancelled outbox lifecycle.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0010_child_capacity.downgrade",
+          "line": 26,
+          "end_line": 27,
+          "source_start_line": 26,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0011_maintainer_identity.py",
+      "sha256": "393b0eb933c293b766c943bf3e6d30c536fceb947c32bc3f75f57795534ccb7d",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add policy-selected integration identity FK/index independently from publication authorship.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0011_maintainer_identity.upgrade",
+          "line": 12,
+          "end_line": 15,
+          "source_start_line": 12,
+          "sha256": "2aeb8fc2827ac9d38b5fc0023c466831eff45cf62141d8859deb84ff3e2f4196",
+          "status": "reviewed",
+          "assessment": "Add policy-selected integration identity FK/index independently from publication authorship.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0011_maintainer_identity.downgrade",
+          "line": 18,
+          "end_line": 19,
+          "source_start_line": 18,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0012_reference_identity.py",
+      "sha256": "fd590506999e1af7711fcd5680da35d3b58fbef2c0ceb283ae4c97b9e258b457",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Make normalized bibliographic identity project-unique, grouping arXiv versions and redundant subject tags.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0012_reference_identity.upgrade",
+          "line": 11,
+          "end_line": 18,
+          "source_start_line": 11,
+          "sha256": "e01319dc15e41a6b7724ea17393d2ed85249b13db0218359e9a922fea57cfd3c",
+          "status": "reviewed",
+          "assessment": "Make normalized bibliographic identity project-unique, grouping arXiv versions and redundant subject tags.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0012_reference_identity.downgrade",
+          "line": 21,
+          "end_line": 22,
+          "source_start_line": 21,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0013_reviewer_assignment.py",
+      "sha256": "dce82d58484eb3133c04d205d54200f8e39541daf9a7337af4cf3137352e9315",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add evidence/reviewer-manifest purpose, unique pinned assignment review manifest and immutable-update trigger.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0013_reviewer_assignment.upgrade",
+          "line": 11,
+          "end_line": 18,
+          "source_start_line": 11,
+          "sha256": "3f5cab99f28e38192e0cda689b3988c732e42147e48779fbff92ce9570751d32",
+          "status": "reviewed",
+          "assessment": "Add evidence/reviewer-manifest purpose, unique pinned assignment review manifest and immutable-update trigger.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0013_reviewer_assignment.downgrade",
+          "line": 21,
+          "end_line": 22,
+          "source_start_line": 21,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0014_stop_confirmation.py",
+      "sha256": "de209cd4bfac24bef3c1246cdc2d9c6fbc1162bdb2df953914ef9dc756a15258",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Track observed physical process stop separately from lease status and index unconfirmed host occupancy.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0014_stop_confirmation.upgrade",
+          "line": 11,
+          "end_line": 14,
+          "source_start_line": 11,
+          "sha256": "c26dd1e43122b11b40590984fab0a8bb5058d7add5f5bff887861151e0457660",
+          "status": "reviewed",
+          "assessment": "Track observed physical process stop separately from lease status and index unconfirmed host occupancy.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0014_stop_confirmation.downgrade",
+          "line": 17,
+          "end_line": 18,
+          "source_start_line": 17,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0015_forge_change.py",
+      "sha256": "9a458b32bd8c60888301ec0493af8a060b88250aa2795f8ed128993910622d1d",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Extend typed outbox kinds to deterministic scoped Forge source changes.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0015_forge_change.upgrade",
+          "line": 11,
+          "end_line": 15,
+          "source_start_line": 11,
+          "sha256": "bd839dc34a5588dd1973eff630b03b992880c202c8a78c54d2a63b85226d617a",
+          "status": "reviewed",
+          "assessment": "Extend typed outbox kinds to deterministic scoped Forge source changes.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0015_forge_change.downgrade",
+          "line": 18,
+          "end_line": 19,
+          "source_start_line": 18,
+          "sha256": "5f5a943c26378385b6dc7429850ffbfbd159f1951a510136ed64c38097d7def9",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0016_source_projection.py",
+      "sha256": "2d68c038e3f170d26bd0d73fb92653608eac339cc32f058a5d24c34c77828c38",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Create rebuildable exact-commit repository/path Markdown metadata projection.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0016_source_projection.upgrade",
+          "line": 13,
+          "end_line": 20,
+          "source_start_line": 13,
+          "sha256": "b0feb1ea8d8abfde8985444a66af53a8823236a816b0f1a494962b4acf3b9709",
+          "status": "reviewed",
+          "assessment": "Create rebuildable exact-commit repository/path Markdown metadata projection.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0016_source_projection.downgrade",
+          "line": 23,
+          "end_line": 24,
+          "source_start_line": 23,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0017_host_health.py",
+      "sha256": "f0c07f2de4c6273f35841f8debcaff7caf47f94e1116a9490a7279a8aae0f515",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add optional object-shaped health evidence while preserving hosts without observations.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0017_host_health.upgrade",
+          "line": 13,
+          "end_line": 16,
+          "source_start_line": 13,
+          "sha256": "5a5427efddd14d91f5cea116354fbb069f5fa5aaaaf977a1c9d9a5f4116718e3",
+          "status": "reviewed",
+          "assessment": "Add optional object-shaped health evidence while preserving hosts without observations.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0017_host_health.downgrade",
+          "line": 19,
+          "end_line": 20,
+          "source_start_line": 19,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0018_subagent_description.py",
+      "sha256": "0feab31329a83d3df5fb2ab81cd4b6d69403693706c14e71e991b87cddc07544",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Store bounded native child label/description without overloading model settings.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0018_subagent_description.upgrade",
+          "line": 12,
+          "end_line": 14,
+          "source_start_line": 12,
+          "sha256": "911bb1e6416859687ea45dc73cab266b07612a672e9566fa6341245757a1b0e8",
+          "status": "reviewed",
+          "assessment": "Store bounded native child label/description without overloading model settings.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0018_subagent_description.downgrade",
+          "line": 17,
+          "end_line": 18,
+          "source_start_line": 17,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0019_assignment_checkpoint.py",
+      "sha256": "9e0da5a068033d206176f2abd4aaa13e58c7cffae2c0f622709353a4c9f4f985",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Store checkpoint request time and support Forge edit intent kind for retained session work.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0019_assignment_checkpoint.upgrade",
+          "line": 12,
+          "end_line": 17,
+          "source_start_line": 12,
+          "sha256": "aca1065874b6e40f23c5afb96dda43219408ac14781a23ac0a33a48a5e636a78",
+          "status": "reviewed",
+          "assessment": "Store checkpoint request time and support Forge edit intent kind for retained session work.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0019_assignment_checkpoint.downgrade",
+          "line": 20,
+          "end_line": 21,
+          "source_start_line": 20,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0020_milestone_contracts.py",
+      "sha256": "793466d2d17c5f26ed13fa3005cb68b384a1030763ba0c46de031fc816a34a93",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Create explicit legacy workflow/check/acceptance/job schema, immutable receipt triggers and revisioned fenced job storage.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0020_milestone_contracts.upgrade",
+          "line": 13,
+          "end_line": 70,
+          "source_start_line": 13,
+          "sha256": "8ba3e6729b5fb911f708e89c09b00446785d6be7e45585955073b799cbf17ed5",
+          "status": "reviewed",
+          "assessment": "Create explicit legacy workflow/check/acceptance/job schema, immutable receipt triggers and revisioned fenced job storage.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0020_milestone_contracts.downgrade",
+          "line": 73,
+          "end_line": 74,
+          "source_start_line": 73,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0021_usage_observations.py",
+      "sha256": "928d3716b643decf2d0f65dd83c4a8601c35c117259b59f7458b041b7ca602e6",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Keep optional raw counter accounting evidence and index stable identity/epoch lookup.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0021_usage_observations.upgrade",
+          "line": 13,
+          "end_line": 16,
+          "source_start_line": 13,
+          "sha256": "adb1efc94e682ecd62a05991fd35de33abcbb74c80be4a7f6585f1420bf747a9",
+          "status": "reviewed",
+          "assessment": "Keep optional raw counter accounting evidence and index stable identity/epoch lookup.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0021_usage_observations.downgrade",
+          "line": 19,
+          "end_line": 20,
+          "source_start_line": 19,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0022_parallel_automation_batches.py",
+      "sha256": "f86d51a3bfe0a853ee7ad3348d9e84c0579e9707b7c25b19caa0fee230b6a80a",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Replace live automation mutex with a nonunique partial index, allowing independently bounded queued batches.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0022_parallel_automation_batches.upgrade",
+          "line": 13,
+          "end_line": 25,
+          "source_start_line": 13,
+          "sha256": "6e64516829835893dbac6d429389587f925e3ddbeca730740a9e00aa8d5865d6",
+          "status": "reviewed",
+          "assessment": "Replace live automation mutex with a nonunique partial index, allowing independently bounded queued batches.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0022_parallel_automation_batches.downgrade",
+          "line": 28,
+          "end_line": 29,
+          "source_start_line": 28,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0023_run_coordination.py",
+      "sha256": "38c9a0d639c86ab393b45e4b85045300a45a0d36f00d00c1e4372ff37524d442",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Persist frontier/progress/audit ownership across process restarts using scoped FKs.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0023_run_coordination.upgrade",
+          "line": 13,
+          "end_line": 21,
+          "source_start_line": 13,
+          "sha256": "54f775ded8c318f3f92a74f6daf49b35e86605619e58395e7c4d72e1fa0f4837",
+          "status": "reviewed",
+          "assessment": "Persist frontier/progress/audit ownership across process restarts using scoped FKs.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0023_run_coordination.downgrade",
+          "line": 24,
+          "end_line": 25,
+          "source_start_line": 24,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0024_mission_contracts.py",
+      "sha256": "d66b1f1466c62065d730bc026bd3db016e00f37fe9992464a9c3633b6fcbe804",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Add scope/acceptance/delegation and positive child budget defaults while retaining old missions.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0024_mission_contracts.upgrade",
+          "line": 13,
+          "end_line": 22,
+          "source_start_line": 13,
+          "sha256": "9feb2c2e4f44ba05cb04c6a620690fe45d462411fc9fc65b703418dd649b64c0",
+          "status": "reviewed",
+          "assessment": "Add scope/acceptance/delegation and positive child budget defaults while retaining old missions.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0024_mission_contracts.downgrade",
+          "line": 25,
+          "end_line": 26,
+          "source_start_line": 25,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0025_review_work_keys.py",
+      "sha256": "7b0192f755e1e82cb88b11450075d54c22ebe658eb917144c8d9c498e55d37f8",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Persist one exact-head/descriptor/policy/target review owner with exclusive native versus durable ownership.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0025_review_work_keys.upgrade",
+          "line": 13,
+          "end_line": 27,
+          "source_start_line": 13,
+          "sha256": "a0083ccfdca76cb00923fff1e282ca5822771e0a1356fae09b0cbfddf591c8b5",
+          "status": "reviewed",
+          "assessment": "Persist one exact-head/descriptor/policy/target review owner with exclusive native versus durable ownership.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0025_review_work_keys.downgrade",
+          "line": 30,
+          "end_line": 31,
+          "source_start_line": 30,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0026_orchestrator_health.py",
+      "sha256": "fd73b5a2f752f109b067db34e641fba7caacbfa3030ff7cc02fe03b23acd78ad",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Create scoped deduplicated health issues/snapshots and revision/frontier-bound nonexecuting control plans.",
+      "functions": [
+        {
+          "name": "_scope_check",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0026_orchestrator_health._scope_check",
+          "line": 14,
+          "end_line": 18,
+          "source_start_line": 14,
+          "sha256": "b07cfded85ad49289dd50e491592c8ab7319150ea4b4cd6d90ead5bd3bd3de24",
+          "status": "reviewed",
+          "assessment": "Shared check constructor requires at least one populated health target; SQL containment is validated by domain services rather than this presence check.",
+          "findings": []
+        },
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0026_orchestrator_health.upgrade",
+          "line": 21,
+          "end_line": 97,
+          "source_start_line": 21,
+          "sha256": "54bb5ae66f9672ced7469225158830a3b34f105992f7b4b95c35fb1675a660df",
+          "status": "reviewed",
+          "assessment": "Create scoped deduplicated health issues/snapshots and revision/frontier-bound nonexecuting control plans.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0026_orchestrator_health.downgrade",
+          "line": 100,
+          "end_line": 101,
+          "source_start_line": 100,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0027_review_retry_recovery.py",
+      "sha256": "2de84e2b6a120f523ea2717f36d1332488ed9b8f08539a9d8df1a725601b5295",
+      "module_review": "reviewed",
+      "assessment": "Applied history retained unchanged. Permit explicitly repaired review retries while keeping positive attempts; no lifetime hard ceiling remains.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0027_review_retry_recovery.upgrade",
+          "line": 12,
+          "end_line": 14,
+          "source_start_line": 12,
+          "sha256": "4955e4642dbb336cc23b540b45c14e01b381ea977096a3679f615a0e38700516",
+          "status": "reviewed",
+          "assessment": "Permit explicitly repaired review retries while keeping positive attempts; no lifetime hard ceiling remains.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0027_review_retry_recovery.downgrade",
+          "line": 17,
+          "end_line": 18,
+          "source_start_line": 17,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0028_objective_queues.py",
+      "sha256": "8b639b0a3960aebe20dfd72df149659d69470997128027178c1c661fd4d35e43",
+      "module_review": "reviewed",
+      "assessment": "New versioned additive migration. Add objective queues, bounded recurrence/review demand, library receipts and host/workspace accounting while defaults retain saved operator policy.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0028_objective_queues.upgrade",
+          "line": 13,
+          "end_line": 62,
+          "source_start_line": 13,
+          "sha256": "d5e8273aeee8b3dd44900a2e6d5df185ecbd160ef5cb7de3c59883c3d0d09b16",
+          "status": "reviewed",
+          "assessment": "Add objective queues, bounded recurrence/review demand, library receipts and host/workspace accounting while defaults retain saved operator policy.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0028_objective_queues.downgrade",
+          "line": 65,
+          "end_line": 66,
+          "source_start_line": 65,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/migrations/versions/v0029_agent_planning.py",
+      "sha256": "b0cf80247af50aa8c9b69d09d5f15a4fc3a4ecb2127abeee8cca7b7038aa0759",
+      "module_review": "reviewed",
+      "assessment": "New versioned additive migration. Default new projects to graph without rewriting existing rows; phase transitions require pending accepted objective decision and consistent phase history.",
+      "functions": [
+        {
+          "name": "upgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0029_agent_planning.upgrade",
+          "line": 12,
+          "end_line": 52,
+          "source_start_line": 12,
+          "sha256": "824b81fcd56b9f4bb94920b9d6516aa37bf4cd6f862f14d828cb83c18dde58cc",
+          "status": "reviewed",
+          "assessment": "Default new projects to graph without rewriting existing rows; phase transitions require pending accepted objective decision and consistent phase history.",
+          "findings": []
+        },
+        {
+          "name": "downgrade",
+          "qualified_name": "archon_horizon.pipeline.migrations.versions.v0029_agent_planning.downgrade",
+          "line": 55,
+          "end_line": 56,
+          "source_start_line": 55,
+          "sha256": "5d9e58347c8f5ffbdd8fd8e10987a9cfe811fb3a511ab470bc5b1d037cedce85",
+          "status": "reviewed",
+          "assessment": "Intentional explicit refusal: destructive downgrade is unsupported; recovery uses a reviewed backup rather than deleting durable evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/__init__.py",
+      "sha256": "2b4cba8620e52340947abd493474ceac54b0ae0711b49e9b826c101d89a9f66a",
+      "module_review": "reviewed",
+      "assessment": "Import-free package marker; preserving lightweight concrete module imports prevents worker/client dependency leakage.",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/diagnostics.py",
+      "sha256": "4b91551f3776c93cc83babb780bd64375552bd761bb331d46b44a2371e1d2820",
+      "module_review": "reviewed",
+      "assessment": "Read-only explicitly selected installation checks distinguish local evidence from unprobed online authentication; no operator state repair occurs.",
+      "functions": [
+        {
+          "name": "database_checks",
+          "qualified_name": "archon_horizon.pipeline.operations.diagnostics.database_checks",
+          "line": 12,
+          "end_line": 36,
+          "source_start_line": 12,
+          "sha256": "22040635578d620fa762769647da5cca61ef2dd7e86cfbc5e3a0d9cc75ca1e67",
+          "status": "reviewed",
+          "assessment": "Read-only counts separate expired ownership and unconfirmed physical stops, with bounded grouped transport state; no diagnostic attempts repair or changes operator data.",
+          "findings": []
+        },
+        {
+          "name": "worker_checks",
+          "qualified_name": "archon_horizon.pipeline.operations.diagnostics.worker_checks",
+          "line": 39,
+          "end_line": 83,
+          "source_start_line": 39,
+          "sha256": "bdb73abd6909319f2ded21d61a71f678af22185bc8611b801ded89492185d81b",
+          "status": "reviewed",
+          "assessment": "Read only explicitly selected config, private credentials, directories, binaries and pinned container image presence; online provider authentication is accurately not inferred.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/health_control.py",
+      "sha256": "af44dbb9fde475826c2171b9d278c6cc636dd667b45490af3ef8beed7f298182",
+      "module_review": "reviewed",
+      "assessment": "Scoped durable evidence and nonexecuting CAS plans; JSON/scope checks reject contradictions before persistence. Snapshot assignment scope is excluded because schema has no assignment field.",
+      "functions": [
+        {
+          "name": "supervision_activity",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.supervision_activity",
+          "line": 25,
+          "end_line": 55,
+          "source_start_line": 25,
+          "sha256": "b00076b9d494a9145f43590d40a8cbc5efaa569c7fdd34c7aa1737a5c954a232",
+          "status": "reviewed",
+          "assessment": "Selected-run owner aggregates distinguish journal housekeeping from actual completed work; grouped queries avoid one query per assignment.",
+          "findings": []
+        },
+        {
+          "name": "Scope.requires_target",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.Scope.requires_target",
+          "line": 65,
+          "end_line": 68,
+          "source_start_line": 64,
+          "sha256": "2d9a29be9371db8c75693b7ae6626d97be2bfc9cd7946b5dedc5e7e97f6fa1c8",
+          "status": "reviewed",
+          "assessment": "Reject unscoped health records at model construction rather than allowing installation-wide ambiguity.",
+          "findings": []
+        },
+        {
+          "name": "Scope.ids",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.Scope.ids",
+          "line": 70,
+          "end_line": 74,
+          "source_start_line": 70,
+          "sha256": "99ed795ecfd3d1ccc9ad5a06a6be16ff3227884616ab4ef83c016a542513ce8c",
+          "status": "reviewed",
+          "assessment": "Expose only populated UUID keys for storage/dedupe; the defensive empty check also protects callers using unvalidated model copies.",
+          "findings": []
+        },
+        {
+          "name": "HealthSnapshotSpec.supported_scope",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.HealthSnapshotSpec.supported_scope",
+          "line": 96,
+          "end_line": 99,
+          "source_start_line": 95,
+          "sha256": "06c1a0b71045e124e18022f184809bf7ceeb85d3dd27cea59a2ba94dd2c1dce4",
+          "status": "repaired",
+          "assessment": "Reject assignment-only snapshot scope at validation because immutable snapshot storage supports project/run/host; assignment observations use health issues.",
+          "findings": [
+            "D03"
+          ]
+        },
+        {
+          "name": "_scope_key",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control._scope_key",
+          "line": 113,
+          "end_line": 114,
+          "source_start_line": 113,
+          "sha256": "c8a8a9fd79bed5f2fd54232ef732642b934b1832ef543cd0e85654087cd0794f",
+          "status": "reviewed",
+          "assessment": "Sort explicit IDs for stable dedupe across equivalent model field ordering.",
+          "findings": []
+        },
+        {
+          "name": "_dedupe",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control._dedupe",
+          "line": 117,
+          "end_line": 121,
+          "source_start_line": 117,
+          "sha256": "bec2e03cf44a0dd9f76363d3306b67f82eeb9b93690406b95f3aa3719169cb3c",
+          "status": "reviewed",
+          "assessment": "Bound scope/code/external fingerprints into a fixed SHA-256 database key; retain kind separation.",
+          "findings": []
+        },
+        {
+          "name": "_validate_json_object",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control._validate_json_object",
+          "line": 124,
+          "end_line": 128,
+          "source_start_line": 124,
+          "sha256": "80c9e11b37161b7c88e06d9efd692438bf74284f9dfe0b3634ac7f5b286974e6",
+          "status": "repaired",
+          "assessment": "Reject unserializable and nonfinite nested payload values before database mutation instead of relying on PostgreSQL JSON errors.",
+          "findings": [
+            "D03"
+          ]
+        },
+        {
+          "name": "_validate_scope",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control._validate_scope",
+          "line": 131,
+          "end_line": 147,
+          "source_start_line": 131,
+          "sha256": "4e322c180e0f59af50ceac3b9051b93b939834e3325fef16ee13ef54b27b5e97",
+          "status": "repaired",
+          "assessment": "Retain project containment and reject an assignment from another run even in the same project, preventing contradictory scoped evidence.",
+          "findings": [
+            "D03"
+          ]
+        },
+        {
+          "name": "upsert_health_issue",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.upsert_health_issue",
+          "line": 150,
+          "end_line": 174,
+          "source_start_line": 150,
+          "sha256": "6625afd928c68642aa1b278add52ba136b1a1c9636711b001da22f7db412cc07",
+          "status": "reviewed",
+          "assessment": "Transaction lock and row lock preserve one revisioned observation count; resolved issues reopen and explicit suppression remains durable.",
+          "findings": []
+        },
+        {
+          "name": "capture_health_snapshot",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.capture_health_snapshot",
+          "line": 177,
+          "end_line": 191,
+          "source_start_line": 177,
+          "sha256": "fa84020466c5b46c95e99daf7207ceb6699329086b5a1514e27cd2d3cf3f18ba",
+          "status": "reviewed",
+          "assessment": "Immutable dedupe replays the first snapshot for a scope/key; validate payload/scope before using the database and keep caller capture time.",
+          "findings": []
+        },
+        {
+          "name": "propose_control_plan",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.propose_control_plan",
+          "line": 194,
+          "end_line": 213,
+          "source_start_line": 194,
+          "sha256": "c25ce87f53ab2afd986fcfe0b8d81432b78739c48b6ee49180094d37fd4866c3",
+          "status": "reviewed",
+          "assessment": "Explicit project/run containment, stable proposal identity and expected revision prevent stale initial plans; repeated proposal returns prior durable intent.",
+          "findings": []
+        },
+        {
+          "name": "accept_control_plan",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.accept_control_plan",
+          "line": 216,
+          "end_line": 223,
+          "source_start_line": 216,
+          "sha256": "b309c35d2db19f9e295ff62354c50cc5264f4a6e517e42d018d174fcf2643134",
+          "status": "reviewed",
+          "assessment": "Only proposed plans can be accepted under revision CAS; authorization remains the caller service responsibility, consistent with these nonexecuting helpers.",
+          "findings": []
+        },
+        {
+          "name": "apply_control_plan",
+          "qualified_name": "archon_horizon.pipeline.operations.health_control.apply_control_plan",
+          "line": 226,
+          "end_line": 248,
+          "source_start_line": 226,
+          "sha256": "79b29ad0b0c5fa1e2851eb320680986b3e7b3c4620aac435b8a1fdeed55b177b",
+          "status": "reviewed",
+          "assessment": "Guard both run revision and optional frontier before marking applied; the caller must execute domain mutations in the same transaction.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/storage.py",
+      "sha256": "0af0722798e766069a545712f96d680ade9022582d04f6bd8188d46cb6fbe011",
+      "module_review": "reviewed",
+      "assessment": "Conservative owned cleanup, explicit retention and snapshot/blob-consistent backups. Unrecognized metadata stays protected; backup integrity checks are not a restore proof.",
+      "functions": [
+        {
+          "name": "service_logging",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.service_logging",
+          "line": 28,
+          "end_line": 73,
+          "source_start_line": 27,
+          "sha256": "b5c6356e374bedb70d7a281d0d2c1fd0f88d958058435a52a0aec18aa64cab65",
+          "status": "reviewed",
+          "assessment": "Bound only owned diagnostic files, preserve previous logger configuration and close handler on exit; explicit zero disables service log storage.",
+          "findings": []
+        },
+        {
+          "name": "service_logging.BoundedHandler.format",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.service_logging.BoundedHandler.format",
+          "line": 43,
+          "end_line": 48,
+          "source_start_line": 43,
+          "sha256": "6023168eeb615cb787cab74e4fbf0b60fb957d5bd55ce7e57f59b77a7f27d3ec",
+          "status": "reviewed",
+          "assessment": "UTF-8 byte truncation keeps a single record below its rotation chunk, including multibyte messages.",
+          "findings": []
+        },
+        {
+          "name": "service_logging.BoundedHandler.shouldRollover",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.service_logging.BoundedHandler.shouldRollover",
+          "line": 50,
+          "end_line": 53,
+          "source_start_line": 50,
+          "sha256": "3b633587c33a1138a11efebe34bd8f19b1c411a61f7115798152122e8b20cf37",
+          "status": "reviewed",
+          "assessment": "Byte-size rollover is necessary because text character counts do not match encoded on-disk size.",
+          "findings": []
+        },
+        {
+          "name": "pressure",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.pressure",
+          "line": 76,
+          "end_line": 94,
+          "source_start_line": 76,
+          "sha256": "d65aeb15c2ec71c9ace70d4327a2e33ea3aab28bb7aae6e4edb4f15824265a8e",
+          "status": "reviewed",
+          "assessment": "Keep cleanup target separate from admission byte floor/emergency percentage; calculate from nearest existing ancestor and return an observation timestamp.",
+          "findings": []
+        },
+        {
+          "name": "StorageManager.__init__",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.StorageManager.__init__",
+          "line": 98,
+          "end_line": 100,
+          "source_start_line": 98,
+          "sha256": "3ca3af40a050a842c9c1065d1f25a4852dc0a1f718b2f67ec1337724ec528d3b",
+          "status": "reviewed",
+          "assessment": "Store explicit service state root and policy; no implicit directory creation or operator-state discovery.",
+          "findings": []
+        },
+        {
+          "name": "StorageManager.cleanup_preview",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.StorageManager.cleanup_preview",
+          "line": 102,
+          "end_line": 150,
+          "source_start_line": 102,
+          "sha256": "42d36a93d53e201ad99fb8ab8aaa67560fc406427633817c1873e8418d43e9c3",
+          "status": "repaired",
+          "assessment": "Only marked resolved terminal unpinned nonsymlink diagnostics qualify. Malformed nonobject JSON now remains protected instead of crashing maintenance.",
+          "findings": [
+            "D02"
+          ]
+        },
+        {
+          "name": "StorageManager.backup_preview",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.StorageManager.backup_preview",
+          "line": 152,
+          "end_line": 180,
+          "source_start_line": 152,
+          "sha256": "6a47eb6adaad7597f72509aa099d93d360bffd8c9933a13f2feeb0082203a17b",
+          "status": "reviewed",
+          "assessment": "Verify checksums, reject symlink trees and preserve the newest verified backup even if over budget; corrupt/unrecognized candidates remain untouched.",
+          "findings": []
+        },
+        {
+          "name": "StorageManager.cleanup",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.StorageManager.cleanup",
+          "line": 182,
+          "end_line": 201,
+          "source_start_line": 182,
+          "sha256": "3ebbb78dd2c7de1271ed07318ccd171b4c048836da437995168248f0ac605e16",
+          "status": "reviewed",
+          "assessment": "Exclusive lock and recomputed marker digests revalidate reviewed candidates before rename/delete; operator repinning wins over an earlier preview.",
+          "findings": []
+        },
+        {
+          "name": "database_retention_preview",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.database_retention_preview",
+          "line": 204,
+          "end_line": 226,
+          "source_start_line": 204,
+          "sha256": "6feca34fa4127e8a88d6e1a9959b696f17d17607c27f5c710975a5897e3ae136",
+          "status": "reviewed",
+          "assessment": "Bound transport-only deletion candidates and protect live receipts, bootstrap/launch IDs, semantic events and notification references.",
+          "findings": []
+        },
+        {
+          "name": "apply_database_retention",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.apply_database_retention",
+          "line": 229,
+          "end_line": 241,
+          "source_start_line": 229,
+          "sha256": "2e1a933a2d67ac07b53dabef72ef13b876172fd9b4a4b237821de9dabd679dbc",
+          "status": "reviewed",
+          "assessment": "Recompute eligibility under transactional serialization and intersect IDs/revisions with the reviewed batch; no unrelated history is eligible.",
+          "findings": []
+        },
+        {
+          "name": "postgres_environment",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.postgres_environment",
+          "line": 244,
+          "end_line": 254,
+          "source_start_line": 244,
+          "sha256": "78fa1fd8e0329ed7353d3a0db22917638bb3b33a552095ffedaa427f72b90702",
+          "status": "reviewed",
+          "assessment": "Remove ambient PostgreSQL settings before populating explicit URL connection/SSL options; subprocess credentials remain in environment rather than arguments.",
+          "findings": []
+        },
+        {
+          "name": "backup",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.backup",
+          "line": 257,
+          "end_line": 321,
+          "source_start_line": 257,
+          "sha256": "33ebc284f7d4bbb5df72b18b900f8cd26f996c8ff8c7c39bef7ef98f10e13638",
+          "status": "reviewed",
+          "assessment": "Keep exported repeatable-read snapshot alive through pg_dump and blob copy, fsync before atomic publish, redact config and retain partial diagnostic output on failure.",
+          "findings": []
+        },
+        {
+          "name": "verify_backup",
+          "qualified_name": "archon_horizon.pipeline.operations.storage.verify_backup",
+          "line": 324,
+          "end_line": 339,
+          "source_start_line": 324,
+          "sha256": "0459b00017a5346005d0c74b664ee89504661a6ec33687e8bbf73607ff8d8791",
+          "status": "repaired",
+          "assessment": "Require a manifest object before accessing fields, verify database digest and each artifact size/digest; this is integrity validation, not a substitute for restore testing.",
+          "findings": [
+            "D02"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/telemetry.py",
+      "sha256": "08fee074c94836f0ba68c414fedfa1ab0dbab3de49653e3751a545226290796c",
+      "module_review": "reviewed",
+      "assessment": "Bounded ASGI tracing excludes bodies, credential text and raw unmatched URLs; exporter availability is optional.",
+      "functions": [
+        {
+          "name": "make_tracer_provider",
+          "qualified_name": "archon_horizon.pipeline.operations.telemetry.make_tracer_provider",
+          "line": 15,
+          "end_line": 21,
+          "source_start_line": 15,
+          "sha256": "f0f571895e6bd0084b864f6eef13026bef4ccf54c40fc9449099afe3633311bc",
+          "status": "reviewed",
+          "assessment": "Bound request span attributes/events/links and leave exporters opt-in, so API availability never depends on a collector.",
+          "findings": []
+        },
+        {
+          "name": "RequestTelemetry.__init__",
+          "qualified_name": "archon_horizon.pipeline.operations.telemetry.RequestTelemetry.__init__",
+          "line": 25,
+          "end_line": 27,
+          "source_start_line": 25,
+          "sha256": "40ecb49e610845e83054e60f3b3568525cb0d9ee6e096d29ba65125bc06e50cc",
+          "status": "reviewed",
+          "assessment": "Bind middleware app and explicitly supplied provider; no global tracer/exporter side effects.",
+          "findings": []
+        },
+        {
+          "name": "RequestTelemetry.__call__",
+          "qualified_name": "archon_horizon.pipeline.operations.telemetry.RequestTelemetry.__call__",
+          "line": 29,
+          "end_line": 68,
+          "source_start_line": 29,
+          "sha256": "0076d1fab8e0e20575381ee173bbbe842af5c2a136c8616b7652b15167fde851",
+          "status": "reviewed",
+          "assessment": "Trace only HTTP method/template/status/request ID and duration; suppress raw exception messages, request bodies and raw URLs while preserving failures.",
+          "findings": []
+        },
+        {
+          "name": "RequestTelemetry.__call__.tracked_send",
+          "qualified_name": "archon_horizon.pipeline.operations.telemetry.RequestTelemetry.__call__.tracked_send",
+          "line": 40,
+          "end_line": 47,
+          "source_start_line": 40,
+          "sha256": "0339b92bc2a9fe5d04991d68acf8cb27a631110c833552e77069bc08fe80b660",
+          "status": "reviewed",
+          "assessment": "Record response status and replace existing request-ID header with generated ID before forwarding the ASGI message.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/watchdog.py",
+      "sha256": "aff2916c39a91a1265070a06ab4a048a4a7253c4034a3a7709432e62daf80e0f",
+      "module_review": "reviewed",
+      "assessment": "External supervision is opt-in with exact user service names, atomic counters and cooldown; worker monotonic progress differs from API liveness.",
+      "functions": [
+        {
+          "name": "check",
+          "qualified_name": "archon_horizon.pipeline.operations.watchdog.check",
+          "line": 18,
+          "end_line": 39,
+          "source_start_line": 18,
+          "sha256": "23d67a9bc06771ef3252f2313c9ffa4ad55cc1efdfb2e353e1b78a44857f7e84",
+          "status": "reviewed",
+          "assessment": "Probe only local liveness, validate exact user service pattern and bounded threshold/cooldown; malformed/failed HTTP responses count as unhealthy.",
+          "findings": []
+        },
+        {
+          "name": "check_worker",
+          "qualified_name": "archon_horizon.pipeline.operations.watchdog.check_worker",
+          "line": 42,
+          "end_line": 85,
+          "source_start_line": 42,
+          "sha256": "2dc866d8bfdcf87d55b911a34b6b4e01e595f56262352520b154e01d35647cd1",
+          "status": "reviewed",
+          "assessment": "Process identity, boot ID, monotonic component deadlines and progress-writer age distinguish live progress from deadlock; storage admission blockage remains responsive health.",
+          "findings": []
+        },
+        {
+          "name": "_record_check",
+          "qualified_name": "archon_horizon.pipeline.operations.watchdog._record_check",
+          "line": 88,
+          "end_line": 129,
+          "source_start_line": 88,
+          "sha256": "2cd253767cdcb5aa9509aa9a07dedda252b1951f64a7d1d70e8e760b8c3df90d",
+          "status": "reviewed",
+          "assessment": "Lock and atomically fsync failure/cooldown counters before optional try-restart; corrupt counters reset conservatively and stopped operator services remain stopped.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/operations/workspace_retention.py",
+      "sha256": "f1278a64a0fe98ffed151cebac523091b5e3d0930d13fe624f967c6814b8d043",
+      "module_review": "reviewed",
+      "assessment": "Managed checkout deletion authorization is a settled ownership operation; suspended contexts and unresolved source/delivery state remain pinned.",
+      "functions": [
+        {
+          "name": "retire",
+          "qualified_name": "archon_horizon.pipeline.operations.workspace_retention.retire",
+          "line": 12,
+          "end_line": 40,
+          "source_start_line": 12,
+          "sha256": "d904c71044b96e48ec7b2588342e1616c7fb8e549c5216a88e684e252898b690",
+          "status": "reviewed",
+          "assessment": "Retire only managed assignment directories with settled owners/processes/ledger/delivery/publication and unpinned phase inputs; revision CAS precedes worker deletion authorization.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/__init__.py",
+      "sha256": "3212dc6798eb81d09b18aeef509367155ba3d900be32f8527e17f878f3552dac",
+      "module_review": "reviewed",
+      "assessment": "Import-free package marker; preserving lightweight concrete module imports prevents worker/client dependency leakage.",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/bootstrap.py",
+      "sha256": "923501fd61c330d03caaa778d615d606e0767ec7f401e86ba7b98ece82b37f75",
+      "module_review": "reviewed",
+      "assessment": "Declarative explicit project/setup recipes; optional historical reviewer presets are configuration, not dispatched run instructions. Local atomic application and separate launch receipt are intentional.",
+      "functions": [
+        {
+          "name": "RecipeRecord.known_kind",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.RecipeRecord.known_kind",
+          "line": 65,
+          "end_line": 68,
+          "source_start_line": 63,
+          "sha256": "6ea8b4ccd3225a1654c7010da7d47633771db147b243a8d6aa87724cee45680c",
+          "status": "reviewed",
+          "assessment": "Retain the explicit setup-kind whitelist; lifecycle-owned records need their service commands, and invalid kinds fail model validation.",
+          "findings": []
+        },
+        {
+          "name": "launch",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.launch",
+          "line": 94,
+          "end_line": 109,
+          "source_start_line": 94,
+          "sha256": "cdcecf692595a5b0226867cf55687fb6d35b9a529cde93cfb538dbe626a66d40",
+          "status": "reviewed",
+          "assessment": "Retain admin authorization, transaction serialization and recipe hash replay; the durable receipt prevents one launch ID starting a second differently configured run.",
+          "findings": []
+        },
+        {
+          "name": "expanded",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.expanded",
+          "line": 112,
+          "end_line": 132,
+          "source_start_line": 112,
+          "sha256": "ec95964feff9307dc3fe0113d390bbce4aa66ef090aba54ee1a5583530693061",
+          "status": "reviewed",
+          "assessment": "Preset expansion is useful explicit setup composition; generated reviewer/policy keys are checked together for duplicates and reserved operator identity before mutation.",
+          "findings": []
+        },
+        {
+          "name": "resolve",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.resolve",
+          "line": 135,
+          "end_line": 145,
+          "source_start_line": 135,
+          "sha256": "b84049f05953131e7d775e6027f4fb80369e840f63a250ebc22c59078259d2fa",
+          "status": "reviewed",
+          "assessment": "Recursive earlier-record references keep recipes declarative; unknown references fail before creating dependent records, with linear traversal of the recipe payload.",
+          "findings": []
+        },
+        {
+          "name": "preview",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.preview",
+          "line": 148,
+          "end_line": 166,
+          "source_start_line": 148,
+          "sha256": "8ac8d8975f06cd3557f8d028e3af20e759709b6e6d86f9e79f38ad2c8d4734f6",
+          "status": "reviewed",
+          "assessment": "Keep deterministic dry validation, full OID and opaque credential-reference checks; the plan describes atomic local effects and deliberately starts no run.",
+          "findings": []
+        },
+        {
+          "name": "operator",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.operator",
+          "line": 169,
+          "end_line": 176,
+          "source_start_line": 169,
+          "sha256": "66cbf3a5fc0f3582297080e304ebf4e48776eeb690a089c6875d6ef31ac92b40",
+          "status": "reviewed",
+          "assessment": "Local setup must resolve a live human administrator; keep the disabled-principal and installation-grant checks rather than inventing a privileged actor.",
+          "findings": []
+        },
+        {
+          "name": "apply",
+          "qualified_name": "archon_horizon.pipeline.projects.bootstrap.apply",
+          "line": 179,
+          "end_line": 212,
+          "source_start_line": 179,
+          "sha256": "c49825a91e50cd69e8ed34a58eaa5ce1d3cf083d13a6663af14b2ce5deafd6c6",
+          "status": "reviewed",
+          "assessment": "Retain reviewed digest replay and shared catalog/lifecycle services inside the caller transaction; preset repository-purpose checks can roll back all prior recipe records.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/catalog.py",
+      "sha256": "b02c2609b0c8ee3cc60e1d88c4955b7f67ed55449e06b10665b07884b7486bee",
+      "module_review": "reviewed",
+      "assessment": "Shared typed catalog mutation and normalized relations. Identity/lifecycle fields stay with domain services; revision and transactional ownership boundaries remain explicit.",
+      "functions": [
+        {
+          "name": "_claim_attached_limits",
+          "qualified_name": "archon_horizon.pipeline.projects.catalog._claim_attached_limits",
+          "line": 42,
+          "end_line": 66,
+          "source_start_line": 42,
+          "sha256": "d2d941ee0bb6cd9390b5653a25bd05a6deb78e88e9c86146bfd1bde399943ef0",
+          "status": "reviewed",
+          "assessment": "Reservations account real unconfirmed executions and live native children; ordered row locks and existing-claim lookup protect limit reattachment without assuming processes stopped.",
+          "findings": []
+        },
+        {
+          "name": "configure_host_harness",
+          "qualified_name": "archon_horizon.pipeline.projects.catalog.configure_host_harness",
+          "line": 69,
+          "end_line": 99,
+          "source_start_line": 69,
+          "sha256": "84ab483c3dd39fb6f1730f556246a7ee31043f0c9637796736b907bd1c2ca6bf",
+          "status": "reviewed",
+          "assessment": "Keep host-revision CAS across normalized harness links, resource-limit row locks and occupancy backfill; detaching a limit cannot release a still-live process reservation.",
+          "findings": []
+        },
+        {
+          "name": "validate_references",
+          "qualified_name": "archon_horizon.pipeline.projects.catalog.validate_references",
+          "line": 102,
+          "end_line": 139,
+          "source_start_line": 102,
+          "sha256": "e975afcd767bc9a874567474d80a84e26fe2ee4d5b749725ed97109bb19d77f2",
+          "status": "reviewed",
+          "assessment": "Catalog writes need explicit same-project relationships, bibliographic uniqueness, policy identity/perspective scope and DAG checks. The branches enforce separate domain invariants.",
+          "findings": []
+        },
+        {
+          "name": "update_catalog",
+          "qualified_name": "archon_horizon.pipeline.projects.catalog.update_catalog",
+          "line": 142,
+          "end_line": 190,
+          "source_start_line": 142,
+          "sha256": "b9bf4cfad9c31bae3cb42bfa86d454f2dcb1174155ea442833f454cd5a655d33",
+          "status": "repaired",
+          "assessment": "Keep immutable-field whitelist, complete create-contract revalidation, revision checks and relation snapshots. Workflow transitions require a human and idle project, including settled stopping runs; read-dependent writes stay transactional.",
+          "findings": [
+            "D07"
+          ]
+        },
+        {
+          "name": "create_catalog",
+          "qualified_name": "archon_horizon.pipeline.projects.catalog.create_catalog",
+          "line": 193,
+          "end_line": 245,
+          "source_start_line": 193,
+          "sha256": "359c23c45f31b83cbb1b0befd2559992e70d4e8d436d094e0251d890e759f1b0",
+          "status": "reviewed",
+          "assessment": "Shared creation is necessary for API and recipes; retain authorization, typed references, workspace-root boundary, normalized joins, JSON conversion and source revision snapshots.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/content.py",
+      "sha256": "0c8afe18d07e9339479f4e07b106b6795350a50180d01b7ff07ecd728c1820f3",
+      "module_review": "reviewed",
+      "assessment": "Authenticated immutable evidence ingestion, keeping content-addressed blob writes separate from database artifact attribution.",
+      "functions": [
+        {
+          "name": "BlobUpload.one_content",
+          "qualified_name": "archon_horizon.pipeline.projects.content.BlobUpload.one_content",
+          "line": 27,
+          "end_line": 30,
+          "source_start_line": 26,
+          "sha256": "d03cc309d039ba4a5b7fcb4b358868bfe2ad50bf685177dbd85e2ce1a1fba0a9",
+          "status": "reviewed",
+          "assessment": "Exactly one JSON or base64 source avoids ambiguous upload identity; null JSON is intentionally treated as absent by this contract.",
+          "findings": []
+        },
+        {
+          "name": "upload",
+          "qualified_name": "archon_horizon.pipeline.projects.content.upload",
+          "line": 33,
+          "end_line": 59,
+          "source_start_line": 33,
+          "sha256": "59a050f38c8ba11d26e644699c02876c09cbaed581187a25c10d07a341e4a7a1",
+          "status": "reviewed",
+          "assessment": "Preserve worker project scope, live execution attribution and disk admission check; content-addressed blobs reuse existing project evidence and assignment links without duplicating storage.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/documents.py",
+      "sha256": "db93d9e7a1cbb1f4255d801b3199d7433d499e491fedb5c1fcd78680df746230",
+      "module_review": "reviewed",
+      "assessment": "Portable safe front matter parsing and JSON metadata normalization. Body preservation and rejection of falsy nonobjects/nonfinite numbers are covered by regressions.",
+      "functions": [
+        {
+          "name": "_json_value",
+          "qualified_name": "archon_horizon.pipeline.projects.documents._json_value",
+          "line": 11,
+          "end_line": 29,
+          "source_start_line": 11,
+          "sha256": "99689b163e3f242bbf4e78fb4f52fc4d11ce811ff4ed81c15c020f8087f15b1e",
+          "status": "repaired",
+          "assessment": "Retain date normalization, string-key checking and active-container cycle detection. Reject nonfinite floats before PostgreSQL/JSON serialization; repeated nonrecursive aliases remain valid.",
+          "findings": [
+            "D01"
+          ]
+        },
+        {
+          "name": "parse_document",
+          "qualified_name": "archon_horizon.pipeline.projects.documents.parse_document",
+          "line": 32,
+          "end_line": 69,
+          "source_start_line": 32,
+          "sha256": "ccabb601f2e39258dd3060c654098f1e9d0ecc9e71b2068d4948596efe782369",
+          "status": "repaired",
+          "assessment": "Keep safe YAML constructors, optional JSON fallback and original body line endings. Falsy scalar/sequence metadata must fail the object contract instead of becoming an empty object.",
+          "findings": [
+            "D01"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/lean_checks.py",
+      "sha256": "88102342e105adf9343ad256e552ba53b975b82a164603e6308c58930c5a5cdf",
+      "module_review": "reviewed",
+      "assessment": "Planning-neutral compiler receipts retain old table/hash identities for saved evidence. Generic library proof closure is separate from legacy milestone contract semantics.",
+      "functions": [
+        {
+          "name": "digest",
+          "qualified_name": "archon_horizon.pipeline.projects.lean_checks.digest",
+          "line": 26,
+          "end_line": 28,
+          "source_start_line": 26,
+          "sha256": "635e26baccc59fc20dc868de448ca43d4e0eac6df1e2ff6609afc374f5c6d9d1",
+          "status": "reviewed",
+          "assessment": "Canonical hash serialization is an immutable evidence compatibility boundary; retain existing separators/key order rather than replacing it with a different shared hash.",
+          "findings": []
+        },
+        {
+          "name": "register_check",
+          "qualified_name": "archon_horizon.pipeline.projects.lean_checks.register_check",
+          "line": 80,
+          "end_line": 125,
+          "source_start_line": 80,
+          "sha256": "eba9be6abdfd05f29e8ebb377520908e8849b33c97bc72be76c22f32020ebbd4",
+          "status": "reviewed",
+          "assessment": "Keep host authority, ready workspace and repository-kind checks, compiled/axiom validation, proof evidence provenance and content hash deduplication. Library receipts require no milestone graph.",
+          "findings": []
+        },
+        {
+          "name": "head_check",
+          "qualified_name": "archon_horizon.pipeline.projects.lean_checks.head_check",
+          "line": 129,
+          "end_line": 133,
+          "source_start_line": 129,
+          "sha256": "4587eaf1b9f79081844fd76c5897f4a647442c2e94e0a1b2fc327b11f126a68e",
+          "status": "reviewed",
+          "assessment": "This narrow query selects the latest nonproof immutable receipt for one repository and exact PR head; proof receipts must not replace statement/graph evidence.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/milestone_jobs.py",
+      "sha256": "71a250ed5cd1d013ee919105b0ef998b6d354aea7e0eaa81286acb96d59d3291",
+      "module_review": "reviewed",
+      "assessment": "Retained explicit compatibility imports only; old integration entrypoint delegates to planning-neutral verification service and duplicates no business logic.",
+      "functions": []
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/milestone_sources.py",
+      "sha256": "1655c78c8fc47f0bf957d0ac1e215c1710effa7e8b58d96cefcc4ff037776b3e",
+      "module_review": "reviewed",
+      "assessment": "Legacy portable source-contract parsing never executes repository code. Its strict milestone schema belongs to explicitly retained workflows.",
+      "functions": [
+        {
+          "name": "Milestone.accepted_contract",
+          "qualified_name": "archon_horizon.pipeline.projects.milestone_sources.Milestone.accepted_contract",
+          "line": 48,
+          "end_line": 51,
+          "source_start_line": 47,
+          "sha256": "a440b8c6b33d7d1e8032c06cb9f4c6ce7c87df06e4998a343353fc0ca2dc19d9",
+          "status": "reviewed",
+          "assessment": "Explicit legacy accepted statement claims require a contract and precise citations; the validator protects claims without choosing an agent plan.",
+          "findings": []
+        },
+        {
+          "name": "digest",
+          "qualified_name": "archon_horizon.pipeline.projects.milestone_sources.digest",
+          "line": 54,
+          "end_line": 55,
+          "source_start_line": 54,
+          "sha256": "336a0523c43979c14b099f09fdb397f493c57403258ddd2cbbe0605818c742de",
+          "status": "reviewed",
+          "assessment": "Keep canonical source manifest digest stable for existing immutable comparisons; this serialization contract matches receipt hashing without speculative consolidation.",
+          "findings": []
+        },
+        {
+          "name": "validate_edges",
+          "qualified_name": "archon_horizon.pipeline.projects.milestone_sources.validate_edges",
+          "line": 58,
+          "end_line": 75,
+          "source_start_line": 58,
+          "sha256": "4528c2085e4135623dfb0c76a479bdd7adf6880e38f032694a99531dd559dab3",
+          "status": "reviewed",
+          "assessment": "Kahn traversal validates missing targets and cycles in O(V+E), deduplicating repeated edges; retain it instead of recursive traversal of large source graphs.",
+          "findings": []
+        },
+        {
+          "name": "source_manifest",
+          "qualified_name": "archon_horizon.pipeline.projects.milestone_sources.source_manifest",
+          "line": 78,
+          "end_line": 161,
+          "source_start_line": 78,
+          "sha256": "1fea09a3d81b1ea7e8d51b2f5d8e0b8f0bcf11acad339f0820d78a71227b8cec",
+          "status": "reviewed",
+          "assessment": "Retain nonexecuting parsing, objective-root/declaration/module/definition invariants and full Lean input freezing for explicit milestone workflows. Generated proof/status claims are excluded from contract identity.",
+          "findings": []
+        },
+        {
+          "name": "milestone_table",
+          "qualified_name": "archon_horizon.pipeline.projects.milestone_sources.milestone_table",
+          "line": 164,
+          "end_line": 172,
+          "source_start_line": 164,
+          "sha256": "4ed7d5e767ed598f44682eb46aaa294cb71b22400d8946e036e9516589b17900",
+          "status": "reviewed",
+          "assessment": "Small deterministic legacy status renderer escapes table separators/newlines and excludes retired claims; no shared rendering abstraction is needed for this one format.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/milestones.py",
+      "sha256": "365f0ff331b0a8b8592b07e0420f59cdefbd72974f15b3dd4fb57f4f49866fd7",
+      "module_review": "reviewed",
+      "assessment": "Legacy strict baseline acceptance remains opt-in; existing review/receipt provenance is preserved. Long acceptance/view functions coordinate separate real invariants and do not justify mechanical splitting.",
+      "functions": [
+        {
+          "name": "enabled",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.enabled",
+          "line": 33,
+          "end_line": 34,
+          "source_start_line": 33,
+          "sha256": "26b3c8d56a96a2a4bbc548e5e2c849fad223f56d9d3dba87bf7b30d77ff63c6f",
+          "status": "reviewed",
+          "assessment": "The explicit project workflow guard is necessary to keep strict milestone acceptance away from graph-default projects.",
+          "findings": []
+        },
+        {
+          "name": "projected_manifest",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.projected_manifest",
+          "line": 37,
+          "end_line": 44,
+          "source_start_line": 37,
+          "sha256": "958bcccb0b60acbe9582d2fcc9acda502bd45ee529bd6b1a9a3c312a1f6e5d94",
+          "status": "reviewed",
+          "assessment": "Only a complete exact-commit source projection can support acceptance; reject partial/stale rows rather than mixing repository revisions.",
+          "findings": []
+        },
+        {
+          "name": "review_panel",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.review_panel",
+          "line": 47,
+          "end_line": 105,
+          "source_start_line": 47,
+          "sha256": "a13acc0a47cfb84ba60bf6ffd560854e0c7343a15908b019c42866e5a0dc5b19",
+          "status": "reviewed",
+          "assessment": "Retain explicit legacy compiler, route and perspective coverage checks, current review provenance and advisory-policy escape. Latest review lookup is bounded by configured descriptors; it does not invent mathematical acceptance.",
+          "findings": []
+        },
+        {
+          "name": "accepted_gate",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.accepted_gate",
+          "line": 108,
+          "end_line": 123,
+          "source_start_line": 108,
+          "sha256": "459c14b12bca0435bf9b91c1de410dd4e09bf229e187a8beeebda122a051ed6f",
+          "status": "reviewed",
+          "assessment": "Accepted ancestor evidence must bind repository, merged head, gate, receipt kind and current policy revision; keep these checks before baseline freezing.",
+          "findings": []
+        },
+        {
+          "name": "accept_baseline",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.accept_baseline",
+          "line": 126,
+          "end_line": 202,
+          "source_start_line": 126,
+          "sha256": "e67c5bf7834f4727ddfe43523117677550cb1373c8783764f616e257daa97bde",
+          "status": "reviewed",
+          "assessment": "Legacy baseline acceptance coordinates human/automatic authority, exact indexed manifest, citations, target compiler evidence and reviewed route/contract provenance. Keep the full transaction and separate immutable evidence records.",
+          "findings": []
+        },
+        {
+          "name": "require_baseline",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.require_baseline",
+          "line": 205,
+          "end_line": 211,
+          "source_start_line": 205,
+          "sha256": "00fe77942dae55f4c89eb66c3b36346e2c927e03b9ae5bdb2b0b209d1e066fb7",
+          "status": "reviewed",
+          "assessment": "Formalization baseline enforcement belongs only to explicit milestone projects; retain frozen/acceptance checks and early graph-workflow return.",
+          "findings": []
+        },
+        {
+          "name": "_initial_baseline_readiness",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones._initial_baseline_readiness",
+          "line": 214,
+          "end_line": 264,
+          "source_start_line": 214,
+          "sha256": "251a6be0f120de13c0d8f3d01cef8861060542ba76b5af2b9c2cc015ee7d2544",
+          "status": "reviewed",
+          "assessment": "This diagnostic reports indexed-source receipt availability, not full acceptance or human approval. Keep exact source/digest matching and clearly scoped next-action templates.",
+          "findings": []
+        },
+        {
+          "name": "objective_view",
+          "qualified_name": "archon_horizon.pipeline.projects.milestones.objective_view",
+          "line": 267,
+          "end_line": 328,
+          "source_start_line": 267,
+          "sha256": "846a4f24f42cc320cfd2e63aca7892a25ac3fae5a33a7407814a453cfe496cf3",
+          "status": "reviewed",
+          "assessment": "Read view derives proof/statement status from exact manifest-linked receipts and reviewed gates, with bounded evidence lists and authorization; source claims alone cannot prove completion.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/reference_cache.py",
+      "sha256": "fca4d86b9fbb3c5392584bd7aaf4320fb93c1d62f4c7f16d12c9c5798692574d",
+      "module_review": "reviewed",
+      "assessment": "Worker-portable bounded disposable bibliographic cache. Endpoint auth revalidation, local revision monotonicity, symlink boundaries and GPFS access clock are purposeful.",
+      "functions": [
+        {
+          "name": "CachedReference.text",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.CachedReference.text",
+          "line": 38,
+          "end_line": 39,
+          "source_start_line": 37,
+          "sha256": "621f84bb14d655208a4a8d08271ad07b1f3e7606defdf11491fa5508af78e82a",
+          "status": "reviewed",
+          "assessment": "UTF-8 decoding convenience is appropriate for already verified export bytes; invalid stored/network UTF-8 is rejected earlier.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache.__init__",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache.__init__",
+          "line": 43,
+          "end_line": 64,
+          "source_start_line": 43,
+          "sha256": "03d8363e78543e5f0b86a2c15641283053b7eca85063cbcd07f8d62d76520fc4",
+          "status": "reviewed",
+          "assessment": "Keep explicit endpoint/credential validation, local-HTTP exception, token-scoped cache identity and bounded owned HTTP client. It never fetches publication metadata URLs.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._ensure_directory",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._ensure_directory",
+          "line": 66,
+          "end_line": 72,
+          "source_start_line": 66,
+          "sha256": "53ecd6df0334db2a65841c8474dc7b25f0220e572dd1c81f47ebaa420e29d8d1",
+          "status": "reviewed",
+          "assessment": "Cache directories must remain nonsymlink directories inside the resolved workspace; preserve these checks before reads and lock acquisition.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._lock",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._lock",
+          "line": 75,
+          "end_line": 82,
+          "source_start_line": 74,
+          "sha256": "700285ef84dfc851c786adad342d065dab50508510707b4b6c4002adc8ebcc00",
+          "status": "reviewed",
+          "assessment": "Cross-process flock and O_NOFOLLOW serialize local cache mutation; fd cleanup occurs even after failed acquisition or caller errors.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._key",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._key",
+          "line": 84,
+          "end_line": 85,
+          "source_start_line": 84,
+          "sha256": "3e29ed9ae84788a9a4d19301cfdabc540a5cdca42305df2aa8fab9ea346d85ca",
+          "status": "reviewed",
+          "assessment": "Scope plus UUID hashing separates endpoints/credentials without storing token text in filenames.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._paths",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._paths",
+          "line": 87,
+          "end_line": 88,
+          "source_start_line": 87,
+          "sha256": "374792a6f5772919875ce931f0b53e37b6e69d1692498ae698e50bf7a12e7442",
+          "status": "reviewed",
+          "assessment": "Fixed digest-derived metadata/body filenames are sufficient; do not generalize to arbitrary caller paths.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._etag",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._etag",
+          "line": 91,
+          "end_line": 92,
+          "source_start_line": 90,
+          "sha256": "ca7fc77fc6884a6b53f29d2351ac18ff5879353b38a57c9c20e45ff1c73fd7d6",
+          "status": "reviewed",
+          "assessment": "Restrict validators to bounded single-line weak/strong ETags; invalid remote metadata cannot become request headers.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._read_file",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._read_file",
+          "line": 94,
+          "end_line": 102,
+          "source_start_line": 94,
+          "sha256": "08698034f4c29b6e690c74b6e83614caa3d0a5e30c9175e51543c3eb1d126ea5",
+          "status": "reviewed",
+          "assessment": "Bound bytes both from stat and read while refusing symlink files, because corrupt disposable cache content is not trusted input.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._load",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._load",
+          "line": 104,
+          "end_line": 121,
+          "source_start_line": 104,
+          "sha256": "63a398a2d2a58c412d54ab6d31b7a094f1221365208a54da84eb4795b9e71c8e",
+          "status": "reviewed",
+          "assessment": "Validate schema/scope/UUID/revision/ETag/size/hash/UTF-8 and discard invalid pairs. Local permission failures may still surface while deleting an unusable cache.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._replace",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._replace",
+          "line": 123,
+          "end_line": 132,
+          "source_start_line": 123,
+          "sha256": "f7f777a8ef3f48ef600657b6b9c58911f4bbca7733b1cf3b4bb6210c46bc72e3",
+          "status": "reviewed",
+          "assessment": "Same-directory temporary write, fsync and atomic replace protect each cache component; finally removes an unfinished incoming file.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._access_clock",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._access_clock",
+          "line": 134,
+          "end_line": 151,
+          "source_start_line": 134,
+          "sha256": "7e757ac42224f7daa77fed6b696c8f008fdffb242dc5e7e50ed877fb4cb900ac",
+          "status": "reviewed",
+          "assessment": "Logical access timestamps are necessary on GPFS; scanning bounded metadata under the cache lock avoids tied or stale filesystem mtimes affecting eviction order.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._prune",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._prune",
+          "line": 153,
+          "end_line": 187,
+          "source_start_line": 153,
+          "sha256": "dad2111f75e1b974f0fe4799f4c108d3b4b2312ac6989ed04f1076289c7d46dd",
+          "status": "reviewed",
+          "assessment": "Retain cleanup of incoming/orphan/symlink pairs and oldest-access eviction under count/byte bounds; the just-verified requested entry is protected.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache.get",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache.get",
+          "line": 189,
+          "end_line": 236,
+          "source_start_line": 189,
+          "sha256": "e58cc2b3eb51c88468a2327e2b374bc34a3b2c5febf2e81db2ed0647d96a0733",
+          "status": "reviewed",
+          "assessment": "Every hit revalidates authorization remotely, handles revoked/missing records, retries inconsistent 304 once and streams a bounded UTF-8 export. No offline fallback bypasses access checks.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache._store",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache._store",
+          "line": 238,
+          "end_line": 254,
+          "source_start_line": 238,
+          "sha256": "517b6ef529ce8d125168f7709a55a570dd9088543477813579003de7011aa841",
+          "status": "reviewed",
+          "assessment": "Monotonic revisions and same-revision digest checks prevent stale network completion overwriting newer content; atomically save bytes/metadata then enforce quota.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache.close",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache.close",
+          "line": 256,
+          "end_line": 258,
+          "source_start_line": 256,
+          "sha256": "3b0a6ecba7f4055ee2979b26467ac66cee1345ed73c52153787206b1fae5b8f3",
+          "status": "reviewed",
+          "assessment": "Close only the client this cache owns, preserving injected shared transport ownership.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache.__enter__",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache.__enter__",
+          "line": 260,
+          "end_line": 261,
+          "source_start_line": 260,
+          "sha256": "5a571a5f1a9d6bfbd712e78ad2044c539f573df484340d1f1d7493afa025b2f5",
+          "status": "reviewed",
+          "assessment": "Context-manager entry returns the configured cache without additional effects.",
+          "findings": []
+        },
+        {
+          "name": "ReferenceCache.__exit__",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_cache.ReferenceCache.__exit__",
+          "line": 263,
+          "end_line": 264,
+          "source_start_line": 263,
+          "sha256": "da946be4c0673cfe742f828ee8980338f07868dfcfbb37b4d8bfeee8d42b425f",
+          "status": "reviewed",
+          "assessment": "Context-manager exit delegates owned transport release and preserves exceptions.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/reference_identifiers.py",
+      "sha256": "36a78310169664d815dfaf19c5cd21acde691cf827d085c458e81ab41bcca614",
+      "module_review": "reviewed",
+      "assessment": "Pure canonical identifier parsing with no network side effects. ISBN uses an established checksum dependency; arXiv version grouping is identity policy.",
+      "functions": [
+        {
+          "name": "_input",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers._input",
+          "line": 9,
+          "end_line": 12,
+          "source_start_line": 9,
+          "sha256": "966c3b66b52e1ddfe651a9c274198ca7bc027e2ab8443589aef0cd8fc08ef0aa",
+          "status": "reviewed",
+          "assessment": "Single bounded nonblank UTF-8 input guard is a useful shared boundary for all normalizers.",
+          "findings": []
+        },
+        {
+          "name": "_resolver_path",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers._resolver_path",
+          "line": 15,
+          "end_line": 19,
+          "source_start_line": 15,
+          "sha256": "8a666c4eda2edd04f52adc457cd6680d86e2a8c286e7efaf5032b4e202d90172",
+          "status": "reviewed",
+          "assessment": "Recognized public HTTP(S) resolver hosts with no userinfo prevent arbitrary URL interpretation; parsing performs no network I/O.",
+          "findings": []
+        },
+        {
+          "name": "normalize_doi",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.normalize_doi",
+          "line": 22,
+          "end_line": 28,
+          "source_start_line": 22,
+          "sha256": "869887ae13fa58c5493bbb1e9ac6ca3efd99865d45dc02fa8490603badef9f8b",
+          "status": "reviewed",
+          "assessment": "Retain resolver/prefix handling and canonical lowercase DOI validation; suffix punctuation is part of DOI identity rather than stripped heuristically.",
+          "findings": []
+        },
+        {
+          "name": "normalize_arxiv",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.normalize_arxiv",
+          "line": 31,
+          "end_line": 56,
+          "source_start_line": 31,
+          "sha256": "4317e841ea6a594b354370c5ba79c02ffb27998577718976c1e3fdf4926ea370",
+          "status": "reviewed",
+          "assessment": "Modern/legacy publication periods, sequence lengths and version syntax serve distinct identity formats; retain precise validation rather than one permissive regex.",
+          "findings": []
+        },
+        {
+          "name": "arxiv_key",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.arxiv_key",
+          "line": 59,
+          "end_line": 63,
+          "source_start_line": 59,
+          "sha256": "5e655c9ce8cf4865ebe981df4d318703404cf0da1e9b5bb4883eb0210f5b2065",
+          "status": "reviewed",
+          "assessment": "Catalog identity groups versions and redundant legacy category tags while preserving the versioned identifier in metadata.",
+          "findings": []
+        },
+        {
+          "name": "normalize_isbn",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.normalize_isbn",
+          "line": 66,
+          "end_line": 74,
+          "source_start_line": 66,
+          "sha256": "b34e4d7bc3e888f044112f16797f62652de4837ff77f5c80fb3149fab90a632f",
+          "status": "reviewed",
+          "assessment": "Use the maintained checksum library and canonical conversion; translate its validation exception into the model boundary error.",
+          "findings": []
+        },
+        {
+          "name": "normalize_pmid",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.normalize_pmid",
+          "line": 77,
+          "end_line": 84,
+          "source_start_line": 77,
+          "sha256": "a651107a48b8c5b433ebaae0162139c3afbfdeee53f7899c55c3256ccbb72bd9",
+          "status": "reviewed",
+          "assessment": "Strip recognized prefixes/resolvers and canonicalize positive bounded integer identifiers, rejecting zero and unrelated URLs.",
+          "findings": []
+        },
+        {
+          "name": "normalize_identifier",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.normalize_identifier",
+          "line": 90,
+          "end_line": 93,
+          "source_start_line": 90,
+          "sha256": "a576d50bf95a4f1f187c781bd34937ddbf1baa2ee1046f7820fdfb337fdf8a96",
+          "status": "reviewed",
+          "assessment": "Whitelist dispatch avoids unsupported identifier kinds and keeps validation centralized.",
+          "findings": []
+        },
+        {
+          "name": "identifier_key",
+          "qualified_name": "archon_horizon.pipeline.projects.reference_identifiers.identifier_key",
+          "line": 96,
+          "end_line": 97,
+          "source_start_line": 96,
+          "sha256": "30cf0aec77e0343f1788966bd99b508e77a5eeffe0c091d8e24452e6ec947ce0",
+          "status": "reviewed",
+          "assessment": "The arXiv identity exception is deliberate; all other identifiers share their canonical normalized value.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/references.py",
+      "sha256": "92936dfa1d1e349ffb3bab34b86a3d165bf3c1e1d9bb9a0ee1cd7b119b4ba597",
+      "module_review": "reviewed",
+      "assessment": "Project bibliographic identity, usage and structured BibTeX export; fixed SQL expression operands preserve indexed lookup with prepared plans.",
+      "functions": [
+        {
+          "name": "identifier_expression",
+          "qualified_name": "archon_horizon.pipeline.projects.references.identifier_expression",
+          "line": 19,
+          "end_line": 28,
+          "source_start_line": 19,
+          "sha256": "1dd31bb3a5cc1485cdc916bde4b210bf3021aea4cb0ae7547671ec83f66871fb",
+          "status": "reviewed",
+          "assessment": "Fixed PostgreSQL expression operands preserve expression-index matching under prepared generic plans; the identifier kind is whitelisted before SQL construction.",
+          "findings": []
+        },
+        {
+          "name": "reject_duplicate",
+          "qualified_name": "archon_horizon.pipeline.projects.references.reject_duplicate",
+          "line": 31,
+          "end_line": 43,
+          "source_start_line": 31,
+          "sha256": "853fb7433d3d7caa5a133244048dbdebd29d32e70e4e0b0684c4700c8737c162",
+          "status": "reviewed",
+          "assessment": "Project-scoped citation/identifier conflict lookup is necessary for meaningful 409 diagnostics before immutable catalog identity is reused.",
+          "findings": []
+        },
+        {
+          "name": "record_usage",
+          "qualified_name": "archon_horizon.pipeline.projects.references.record_usage",
+          "line": 52,
+          "end_line": 64,
+          "source_start_line": 52,
+          "sha256": "04c243a63d4fae594643189b70bc78ffcd52e5ba722aada3b94c6709b99e005f",
+          "status": "reviewed",
+          "assessment": "Retain worker authorization and same-project object/path resolution before recording citation usage; immutable citation spelling and structured BibTeX are returned together.",
+          "findings": []
+        },
+        {
+          "name": "bibtex",
+          "qualified_name": "archon_horizon.pipeline.projects.references.bibtex",
+          "line": 67,
+          "end_line": 72,
+          "source_start_line": 67,
+          "sha256": "e5cf82dc743b3e62eec65e53037865550a38735bd400231c609873a3b4b4830f",
+          "status": "reviewed",
+          "assessment": "Translate structured writer failures into useful metadata validation errors; callers need one export boundary instead of handling library exceptions.",
+          "findings": []
+        },
+        {
+          "name": "_bibtex",
+          "qualified_name": "archon_horizon.pipeline.projects.references._bibtex",
+          "line": 75,
+          "end_line": 97,
+          "source_start_line": 75,
+          "sha256": "8aa8a6b843bcce79c4a716f57b6b5b50e19a3b099913286efd984257c1739f55",
+          "status": "reviewed",
+          "assessment": "Map catalog kinds, venue fields, canonical identifiers and structured author names through pybtex; avoid handwritten BibTeX escaping.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/search.py",
+      "sha256": "0d0755a86b9d3cd8c79209fac387d953522700f289e5baa616e457f3b06833d9",
+      "module_review": "reviewed",
+      "assessment": "One owned bounded asynchronous generation cache with pinned sources, active reader protection and explicit shutdown. Retained-size values are estimates, not runtime performance claims.",
+      "functions": [
+        {
+          "name": "_tree_bytes",
+          "qualified_name": "archon_horizon.pipeline.projects.search._tree_bytes",
+          "line": 67,
+          "end_line": 77,
+          "source_start_line": 67,
+          "sha256": "0b4de7544760f9703f5f35f6007f766359c85132007993d3b19009f8fe29f115",
+          "status": "reviewed",
+          "assessment": "Nonsymlink recursive byte accounting is needed for disk admission and Git monitoring; tolerate disappearing files without treating symlinks as owned content.",
+          "findings": []
+        },
+        {
+          "name": "_retained_bytes",
+          "qualified_name": "archon_horizon.pipeline.projects.search._retained_bytes",
+          "line": 80,
+          "end_line": 97,
+          "source_start_line": 80,
+          "sha256": "01e13cbd0861749a077705aae2428b4968f59db68fff1f3f341b24b7775b253a",
+          "status": "reviewed",
+          "assessment": "Recursive retained-size estimate handles shared containers, dataclasses and NumPy buffers once. This is a conservative accounting heuristic, not a measured peak-memory guarantee.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.__init__",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.__init__",
+          "line": 107,
+          "end_line": 165,
+          "source_start_line": 107,
+          "sha256": "2da73e35068be3dbefbe70656d5a9dbd5c63dd835df704989afdeae7b83f5bb0",
+          "status": "reviewed",
+          "assessment": "Retain explicit root/budgets, singleton flock, crash-stage cleanup and engine-versioned cache identity; the owned executor makes expensive work asynchronous to reads.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.validate_source",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.validate_source",
+          "line": 167,
+          "end_line": 186,
+          "source_start_line": 167,
+          "sha256": "b86c9e08a26debef16555b741d4411c2c8cfd8e3a56396008646af2ce954a5e0",
+          "status": "reviewed",
+          "assessment": "Pin full OIDs, canonical relative subdirs and operator-allowlisted origins; local file sources require an explicit root and remote HTTP is disallowed.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.generation_key",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.generation_key",
+          "line": 188,
+          "end_line": 191,
+          "source_start_line": 188,
+          "sha256": "5b6e7e0c4787d914a1a3b7719e5fe4656cbca03a8e2084d242403c91924c4dd7",
+          "status": "reviewed",
+          "assessment": "Include project/source identity and engine generation with the immutable source spec; cross-project or extractor-version cache reuse must not collide.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager._payload",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._payload",
+          "line": 194,
+          "end_line": 198,
+          "source_start_line": 193,
+          "sha256": "dd411a1f64bbdeb358ca0c1a29d8088ae9ae2f5def112ba3b3be5e3b5d57504d",
+          "status": "reviewed",
+          "assessment": "Small state serialization exposes readiness and bounded errors without returning credentials or local filesystem paths.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.prepare",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.prepare",
+          "line": 200,
+          "end_line": 217,
+          "source_start_line": 200,
+          "sha256": "bd8cae2392bcc668eef863947649bdf9045c195e2a223e993b79eb25b574acfd",
+          "status": "reviewed",
+          "assessment": "Short metadata lock deduplicates generations, bounds queued preparation and supports explicit failed retry; never block browser reads on Git/index creation.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.search",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.search",
+          "line": 219,
+          "end_line": 235,
+          "source_start_line": 219,
+          "sha256": "bcae6c7bd16e7031950088c114ed25a485f8a51e8b6f852f1f2a3ddd719acc9f",
+          "status": "reviewed",
+          "assessment": "Validate mode/query/result count, initiate preparation and pin ready generations while querying; truncate public documentation/header snippets.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.pin",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.pin",
+          "line": 238,
+          "end_line": 252,
+          "source_start_line": 237,
+          "sha256": "c17e67fe1fbdffaab354be5cb0c47b1b432fdaf00a5be39405ff139216d686d3",
+          "status": "reviewed",
+          "assessment": "Readers increment/decrement under lock, keeping a queried generation from eviction; absent/not-ready entries yield no index.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager._evict",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._evict",
+          "line": 254,
+          "end_line": 284,
+          "source_start_line": 254,
+          "sha256": "f5cfa828d19aae810d3917e20c224e3e46053c6f81f8e1f13af9770b362a232d",
+          "status": "reviewed",
+          "assessment": "Choose LRU candidates while preserving active readers/builds and reservation accounting; fail explicitly when retained generations prevent satisfying budgets.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager._remove_retired",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._remove_retired",
+          "line": 286,
+          "end_line": 296,
+          "source_start_line": 286,
+          "sha256": "5e0f3517ce34ffc410d632674f5fa80b769ad49ec5a2b9b18320123276b93d3d",
+          "status": "repaired",
+          "assessment": "Disk deletion stays outside the metadata lock; only remove accounting after successful deletion. Release all cleanup fences in finally so transient filesystem failures can be retried.",
+          "findings": [
+            "D08"
+          ]
+        },
+        {
+          "name": "SearchManager._prepare",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._prepare",
+          "line": 298,
+          "end_line": 377,
+          "source_start_line": 298,
+          "sha256": "21060b23b6cf2f576f78e5c9246d6b7c2df0c36933c182940f899804d1eed211",
+          "status": "repaired",
+          "assessment": "Keep staged clone/build/publish/reopen, generation budgets, warmup and shutdown cancellation. Expose readiness only after cleanup succeeds and release any index from failed preparation; completed disk generations survive orderly shutdown.",
+          "findings": [
+            "D08"
+          ]
+        },
+        {
+          "name": "SearchManager._load_generation",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._load_generation",
+          "line": 379,
+          "end_line": 394,
+          "source_start_line": 379,
+          "sha256": "71be3f025205800babab70321777736efb0b47918f855aae1134f116e2bddee5",
+          "status": "reviewed",
+          "assessment": "Manifest, pinned HEAD and clean checkout checks decide cache reuse; unreadable/stale caches rebuild while shutdown cancellation propagates.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager._clone",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._clone",
+          "line": 396,
+          "end_line": 407,
+          "source_start_line": 396,
+          "sha256": "fa57cfd531027edb4486040ca7951d4c8a8961e98cd84c4b7e4646510fbdcb36",
+          "status": "reviewed",
+          "assessment": "Fetch only the exact shallow commit with scoped environment Authorization, then verify detached HEAD; invalid header values fail before fetch.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager._git",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._git",
+          "line": 409,
+          "end_line": 453,
+          "source_start_line": 409,
+          "sha256": "f7a52480973c7bcaa162eea1445b709c066082e78787b4424accad88fbc41f00",
+          "status": "reviewed",
+          "assessment": "No hooks/ambient Git config/interactive credentials/redirects, bounded disk diagnostics, cancellation and process-group kill are purposeful trust/resource boundaries.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager._check_stopping",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager._check_stopping",
+          "line": 455,
+          "end_line": 457,
+          "source_start_line": 455,
+          "sha256": "5105772e64227a858715050be9feed1c4395a5daa4db4fc06bda2190bf2db78a",
+          "status": "reviewed",
+          "assessment": "One explicit cancellation check is shared by Git, extraction and index serialization so shutdown does not masquerade as corruption.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.stats",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.stats",
+          "line": 459,
+          "end_line": 465,
+          "source_start_line": 459,
+          "sha256": "cbbc0f02ace9cf2f6305a435865a9ad167c1793896ec66d5fd19f0e26abf250b",
+          "status": "reviewed",
+          "assessment": "Return aggregate memory/disk/reservation/reader/readiness observations under the metadata lock; these are cache accounting values.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.close",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.close",
+          "line": 467,
+          "end_line": 475,
+          "source_start_line": 467,
+          "sha256": "e8cdacba9c7c9d3851ab0dcffe20890575f117aadff05794fae9c28002c30977",
+          "status": "reviewed",
+          "assessment": "Set shutdown before joining owned executor, then release singleton lock; repeated close is harmless.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.__enter__",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.__enter__",
+          "line": 477,
+          "end_line": 478,
+          "source_start_line": 477,
+          "sha256": "2384e7b82e74150364a30f592093bc069727e11c8545557d0ecdf1cbace8a5cc",
+          "status": "reviewed",
+          "assessment": "Context-manager entry exposes the existing manager and owner lifetime.",
+          "findings": []
+        },
+        {
+          "name": "SearchManager.__exit__",
+          "qualified_name": "archon_horizon.pipeline.projects.search.SearchManager.__exit__",
+          "line": 480,
+          "end_line": 481,
+          "source_start_line": 480,
+          "sha256": "06419c77cb50ec10336a349e127abbafe73b78e3d45ca47bf3d0672e990360ce",
+          "status": "reviewed",
+          "assessment": "Context-manager exit joins work and releases cache ownership through close.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/projects/verification_jobs.py",
+      "sha256": "654fd19c95e0749d8085c055006e9f6e4edcbb242bec4ddcb5e57eaa706eabe2",
+      "module_review": "reviewed",
+      "assessment": "Exact-input leased host checks with separate generic library and explicit legacy milestone admission; receipt persistence retains historical storage names.",
+      "functions": [
+        {
+          "name": "VerificationRequest.proof_inputs",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.VerificationRequest.proof_inputs",
+          "line": 31,
+          "end_line": 37,
+          "source_start_line": 30,
+          "sha256": "0520ea77cfcc4273b305d56658e0e8a8909491ac38d022ea516cdfe4b2da4a7a",
+          "status": "reviewed",
+          "assessment": "Require comparator input trio atomically and prohibit mixing library checks with legacy comparator jobs; this prevents partially specified immutable work.",
+          "findings": []
+        },
+        {
+          "name": "queue_library",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.queue_library",
+          "line": 52,
+          "end_line": 54,
+          "source_start_line": 52,
+          "sha256": "cc2673bff71c3c35ed7a72dc80b0b4394285d1120cf1c4f421e84700fc16ab7c",
+          "status": "reviewed",
+          "assessment": "The typed generic wrapper intentionally omits milestone manifest/baseline requirements and marks only library verification.",
+          "findings": []
+        },
+        {
+          "name": "Finish.outcome",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.Finish.outcome",
+          "line": 66,
+          "end_line": 69,
+          "source_start_line": 65,
+          "sha256": "4cd3c9d59a49a42276033932c73dfd07efc3364ea13cd06d671cb186af773007",
+          "status": "reviewed",
+          "assessment": "Successful report and failure diagnostic are mutually exclusive; validation prevents ambiguous lease settlement.",
+          "findings": []
+        },
+        {
+          "name": "queue",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.queue",
+          "line": 72,
+          "end_line": 103,
+          "source_start_line": 72,
+          "sha256": "a74d0beb4a7ac5125093dc45984b5404dfb13c448c45b521290386ccc6494694",
+          "status": "reviewed",
+          "assessment": "Keep project/workspace/host capability checks, exact JSON input dedupe and separate library versus explicit milestone admission. Solution checkout must share project/host and be ready.",
+          "findings": []
+        },
+        {
+          "name": "claim",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.claim",
+          "line": 106,
+          "end_line": 130,
+          "source_start_line": 106,
+          "sha256": "9f557b76ec50bbec02c6583120f918548b867b9ceac76458312fb0e2fd8b1ce5",
+          "status": "reviewed",
+          "assessment": "Host authority, mode guard, SKIP LOCKED lease selection and three lost-lease bound are necessary; invalidated workspaces fail before dispatch and library-only hosts skip legacy jobs.",
+          "findings": []
+        },
+        {
+          "name": "live_job",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.live_job",
+          "line": 133,
+          "end_line": 139,
+          "source_start_line": 133,
+          "sha256": "15593df89dd69879b2d5d14d39524b4c4a30bf32c7bbe4e3ecffb4faa2596c82",
+          "status": "reviewed",
+          "assessment": "Current token, running status and database-time lease expiry fence worker settlement; a stale worker cannot finish a reclaimed job.",
+          "findings": []
+        },
+        {
+          "name": "heartbeat",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.heartbeat",
+          "line": 142,
+          "end_line": 144,
+          "source_start_line": 142,
+          "sha256": "9ea7ee4d172ea273ebdf1cdcf5ae457b6f3a18b127b9d4bf671a5825bed54e88",
+          "status": "reviewed",
+          "assessment": "Use the common lease guard before extending 300-second ownership from database time.",
+          "findings": []
+        },
+        {
+          "name": "finish",
+          "qualified_name": "archon_horizon.pipeline.projects.verification_jobs.finish",
+          "line": 147,
+          "end_line": 162,
+          "source_start_line": 147,
+          "sha256": "b5a1f6ccb7613a42a4a03208ece21ff9b4b12a325c77b5db59110358316b8679",
+          "status": "reviewed",
+          "assessment": "Receipt kind and all immutable commit inputs must match the live job before registering evidence and recording completed/failed status in the same transaction.",
+          "findings": []
+        }
+      ]
+    },
+    {
+      "path": "src/archon_horizon/pipeline/skills/lean/lean-performance/scripts/compare_measurements.py",
+      "sha256": "f15a503f75038e255dbbe61c4b94250494fbffc98dc5ae37cff3fb16c4d4901a",
+      "module_review": "reviewed",
+      "assessment": "Standalone stdlib numeric comparison of preexisting Radar JSONL. Provenance is supplied by the caller; no benchmark is executed or direction of improvement assumed.",
+      "functions": [
+        {
+          "name": "finite",
+          "qualified_name": "archon_horizon.pipeline.skills.lean.lean-performance.scripts.compare_measurements.finite",
+          "line": 12,
+          "end_line": 21,
+          "source_start_line": 12,
+          "sha256": "28d2babdcb431f9c9dcf1217e5837909c612684aba4bc8e5b74e81b4b5086c35",
+          "status": "reviewed",
+          "assessment": "Reject booleans, nonnumbers, integer conversion overflow and NaN/infinity; finite arithmetic is required for valid exported JSON.",
+          "findings": []
+        },
+        {
+          "name": "read_measurements",
+          "qualified_name": "archon_horizon.pipeline.skills.lean.lean-performance.scripts.compare_measurements.read_measurements",
+          "line": 24,
+          "end_line": 50,
+          "source_start_line": 24,
+          "sha256": "0dd999098c52267e538df786449ee79e9eaa5191297de49ad6f16ae3ffe3f35b",
+          "status": "reviewed",
+          "assessment": "Read existing JSONL only, require metric/unit/value shape, sum repeated compatible units and attach path/line errors; empty/mixed/overflow data fails.",
+          "findings": []
+        },
+        {
+          "name": "compare",
+          "qualified_name": "archon_horizon.pipeline.skills.lean.lean-performance.scripts.compare_measurements.compare",
+          "line": 53,
+          "end_line": 74,
+          "source_start_line": 53,
+          "sha256": "ef611f661d764dfedff29dffbbe759aa747a78c5f7e2672c33379c69482b014b",
+          "status": "reviewed",
+          "assessment": "Preserve missing-side and mismatched-unit metrics rather than invent improvements; zero baseline has no percent and overflow arithmetic fails explicitly.",
+          "findings": []
+        },
+        {
+          "name": "commit_oid",
+          "qualified_name": "archon_horizon.pipeline.skills.lean.lean-performance.scripts.compare_measurements.commit_oid",
+          "line": 77,
+          "end_line": 80,
+          "source_start_line": 77,
+          "sha256": "9cf7a030a3c078bba1ec20075f038e0e20ade92c99a7b342f8bbdeb9f585f4f8",
+          "status": "reviewed",
+          "assessment": "CLI provenance pins require complete lowercase 40/64-character Git identities; caller-supplied provenance is accurately labelled.",
+          "findings": []
+        },
+        {
+          "name": "main",
+          "qualified_name": "archon_horizon.pipeline.skills.lean.lean-performance.scripts.compare_measurements.main",
+          "line": 83,
+          "end_line": 103,
+          "source_start_line": 83,
+          "sha256": "5928e7345dafb420b48db72185d6a2454dd9a27d7c8d5b30e5c6885f0ee7b0b1",
+          "status": "reviewed",
+          "assessment": "Standalone tool validates context and files before numeric report serialization; never executes benchmark code or modifies input measurements.",
+          "findings": []
+        }
+      ]
+    }
+  ]
+}

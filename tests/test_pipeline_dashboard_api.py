@@ -7,10 +7,10 @@ import pytest
 from sqlalchemy import insert, select, update
 
 from archon_horizon.pipeline.auth import issue_credential
-from archon_horizon.pipeline import forge_inspection
-from archon_horizon.pipeline.connectors import ConnectorFailure, ForgejoClient
-from archon_horizon.pipeline.records import create
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.integrations import forge_inspection
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ForgejoClient
+from archon_horizon.pipeline.persistence.records import create
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, auth, mutate  # noqa: F401
 
 
@@ -54,6 +54,31 @@ def test_assignment_status_filter_and_pagination(api):
     history = client.get(path + "&status=history", headers=auth(token))
     assert [row["id"] for row in history.json()["items"]] == [str(ids[0])]
     assert client.get(path + "&status=unknown", headers=auth(token)).status_code == 422
+
+
+def test_node_directory_combines_milestone_type_and_progress_filters(api):
+    from archon_horizon.pipeline.roadmap_index import index_snapshot
+    client, database, world, _, token, _ = api
+    with database.transaction() as conn:
+        index_snapshot(conn, world.actor, world.document["source_repository_id"], "b" * 40, {
+            "nodes/first.md": "---\ntitle: First theorem\ntype: theorem\nlabels: [milestone, formally_stated]\n---\nStatement",
+            "nodes/second.md": "---\ntitle: Second theorem\ntype: theorem\nlabels: [milestone]\n---\nStatement",
+            "nodes/legacy.md": "---\ntitle: Historical milestone\ntype: milestone\n---\nStatement",
+            "nodes/helper.md": "---\ntitle: Helper\ntype: lemma\n---\nStatement",
+        })
+    viewer = scoped_viewer(database, world.project["id"])
+    path = f"/api/v3/projects/{world.project['id']}/dashboard/nodes"
+    assert client.get(path + "?milestone=true&node_type=theorem").status_code == 401
+    response = client.get(path + "?milestone=true&node_type=theorem&offset=1&limit=1", headers=auth(viewer))
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 2
+    assert [row["title"] for row in response.json()["nodes"]] == ["Second theorem"]
+    assert response.json()["types"] == ["lemma", "milestone", "theorem"]
+    progress = client.get(path + "?milestone=true&node_type=theorem&label=formally_stated", headers=auth(token))
+    assert progress.status_code == 200, progress.text
+    assert progress.json()["total"] == 1
+    assert client.get(path + "?milestone=false", headers=auth(viewer)).json()["total"] == 1
+    assert client.get(path + "?milestone=invalid", headers=auth(viewer)).status_code == 422
 
 
 def test_activity_detail_route_retains_public_text_and_authorization(api):

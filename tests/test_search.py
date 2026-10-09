@@ -162,6 +162,42 @@ def test_mcp_header_mode_returns_module_comment_hits(tmp_path, monkeypatch):
     assert "IsCompact.image" in result["result"]["content"][0]["text"]
 
 
+def test_inline_attributes_preserve_declarations_and_their_docstrings():
+    declarations = extract_declarations(
+        "/-- The public result. -/\n@[simp] theorem inline_result : True := trivial\n",
+        library="demo", file="Main.lean")
+    assert len(declarations) == 1
+    assert declarations[0].name == "inline_result" and declarations[0].doc == "The public result."
+    assert declarations[0].line == 2
+
+
+def test_mcp_stdio_recovers_after_invalid_json_and_nonobject_messages(monkeypatch):
+    import io
+    from archon_horizon.search import mcp_server
+    incoming = io.StringIO('[]\n{\n{"jsonrpc":"2.0","id":3,"method":"ping"}\n'
+                           '{"jsonrpc":"2.0","method":"unknown-notification"}\n')
+    outgoing = io.StringIO()
+    monkeypatch.setattr(mcp_server.sys, "stdin", incoming)
+    monkeypatch.setattr(mcp_server.sys, "stdout", outgoing)
+    assert mcp_server.main() == 0
+    responses = [json.loads(line) for line in outgoing.getvalue().splitlines()]
+    assert [response.get("error", {}).get("code") for response in responses[:2]] == [-32600, -32700]
+    assert responses[2] == {"jsonrpc": "2.0", "id": 3, "result": {}}
+    assert len(responses) == 3
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101, True, "10"])
+def test_mcp_rejects_invalid_limits_before_building_an_index(tmp_path, monkeypatch, limit):
+    from archon_horizon.search.mcp_server import _handle
+    def unexpected_build(*args, **kwargs):
+        pytest.fail("Invalid tool options must not trigger an index build")
+    monkeypatch.setattr("archon_horizon.search.workspace.load_or_build_index", unexpected_build)
+    response = _handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "lean_search", "arguments": {"query": "True", "limit": limit}}}, tmp_path)
+    assert response["result"]["isError"] is True
+    assert "limit must be an integer" in response["result"]["content"][0]["text"]
+
+
 def test_search_header_matches_module_comment() -> None:
     hits = _index().search_header("continuous images")
     assert hits

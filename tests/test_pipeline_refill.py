@@ -4,10 +4,10 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from archon_horizon.pipeline.conditions import Truth
-from archon_horizon.pipeline.records import change, create, get, object_ref
-from archon_horizon.pipeline.refill import recheck
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.missions.conditions import Truth
+from archon_horizon.pipeline.persistence.records import change, create, get, object_ref
+from archon_horizon.pipeline.execution.refill import recheck
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 

@@ -5,10 +5,11 @@ from uuid import uuid4
 
 from sqlalchemy import func, select
 
-from archon_horizon.pipeline import models, prompts
-from archon_horizon.pipeline.prompts import LEDGER_PROMPT_ROWS, goal
-from archon_horizon.pipeline.records import change, create, get, json_value
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline import models
+from archon_horizon.pipeline.instructions import prompts
+from archon_horizon.pipeline.instructions.prompts import LEDGER_PROMPT_ROWS, goal
+from archon_horizon.pipeline.persistence.records import change, create, get, json_value
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_reviewer_invocations import review  # noqa: F401
 from test_pipeline_service import service_database, world
 
@@ -164,7 +165,7 @@ def test_initial_and_retained_goals_keep_child_integration_separate_from_root_cl
 
 
 def test_orchestrator_prompt_is_control_plane_only(world):
-    run = world.run()
+    run = world.run(orchestrated=True)
     world.disable_automations(run)
     run = {**run, "phase": {"kind": "preprocessing", "orchestrated": True,
                              "roadmap_document_id": world.document["id"]}}
@@ -249,7 +250,7 @@ def test_orchestrator_does_not_guess_operations_topic_or_expand_context(world):
     assert context["operations_reporting"]["discussion_id"] is None
     assert context["collections"]["assignments"]["truncated"]
     assert "Mathematical discussion" not in json.dumps(context, default=str)
-    from archon_horizon.pipeline.context_briefing import size
+    from archon_horizon.pipeline.execution.context_briefing import size
     assert size(context) <= prompts.ORCHESTRATOR_CONTEXT_BYTES
 
 
@@ -302,7 +303,7 @@ def test_planner_recovery_authority_reaches_initial_and_retained_contexts(world)
 
 
 def test_orchestrator_unicode_context_fits_prompt_and_agent_cli_byte_budgets(world):
-    from archon_horizon.pipeline.notifications import OperatorNotice, operator_notice
+    from archon_horizon.pipeline.execution.notifications import OperatorNotice, operator_notice
 
     run = world.run(orchestrated=True)
     world.disable_automations(run)
@@ -330,7 +331,7 @@ def test_orchestrator_formalization_backlog_uses_adopted_roadmap_repository(worl
     baseline = create(world.conn, "roadmap_snapshot", project_id=world.project["id"],
         roadmap_document_id=world.document["id"], source_commit_oid="a" * 40,
         graph_manifest_artifact_id=artifact["id"])
-    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(mission_id=world.mission["id"],
+    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(orchestration="legacy", mission_id=world.mission["id"],
         phase={"kind": "formalization", "roadmap_snapshot_id": baseline["id"], "orchestrated": True},
         host_ids=[world.host["id"]]))
     world.disable_automations(run)
@@ -393,7 +394,7 @@ def test_orchestrator_context_includes_project_verification_jobs_without_inputs(
 
 
 def test_initial_worker_prompt_keeps_catalogs_and_global_audit_on_demand(world, monkeypatch):
-    from archon_horizon.pipeline import coordination_memory
+    from archon_horizon.pipeline.execution import coordination_memory
 
     def unexpected_memory(*args, **kwargs):
         raise AssertionError("Rendering a worker task must not assemble global coordination history")
@@ -411,7 +412,7 @@ def test_initial_worker_prompt_keeps_catalogs_and_global_audit_on_demand(world, 
 
 
 def test_prepared_reviewer_receives_only_its_packet_and_completion_notices(world, review):
-    from archon_horizon.pipeline.reviewer_invocations import prepare_assignment
+    from archon_horizon.pipeline.review.invocations import prepare_assignment
     from test_pipeline_reviewer_reports import reviewer_account
 
     reviewer_account(world, review)
@@ -434,7 +435,7 @@ def test_prepared_reviewer_receives_only_its_packet_and_completion_notices(world
 
 
 def test_orchestrator_does_not_inherit_math_obligation_completion_gate(world):
-    run = world.run()
+    run = world.run(orchestrated=True)
     world.disable_automations(run)
     assignment = world.assignment(run, role="maintainer", functions=["orchestrator"])
     assert not world.service.completion_findings(world.conn, assignment["id"])

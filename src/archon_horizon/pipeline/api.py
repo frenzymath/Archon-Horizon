@@ -8,7 +8,10 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
+import re
+import tempfile
 import time
 from uuid import UUID
 from urllib.parse import urlencode
@@ -20,26 +23,34 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError, TimeoutError as PoolTimeout
 
-from . import models, readmodels, milestones, milestone_jobs
-from .artifacts import ArtifactStore
+from . import models
+from .dashboard import readmodels
+from .projects import milestones, verification_jobs
+from .persistence.artifacts import ArtifactStore
 from .auth import authenticate, is_admin, live_execution, login, require_admin, require_host, require_project
-from .catalog import CatalogUpdate, UPDATE_FIELDS, configure_host_harness, create_catalog, update_catalog
+from .projects.catalog import CatalogUpdate, UPDATE_FIELDS, configure_host_harness, create_catalog, update_catalog
 from .commands import COMMAND_TARGETS, Command, execute
 from .config import PipelineConfig
-from .database import Database
+from .persistence.database import Database
 from .errors import DomainError
-from .records import canonical, change, create, get, json_value, project_of, save_blob, scoped_query, transaction_lock
-from .scheduler import Scheduler
-from .schema import tables
-from .service import Service
-from .mission_tree import contains_mission, require_mission_authority
-from .telemetry import RequestTelemetry, make_tracer_provider
-from .worker_events import WorkerOperation, handle as handle_worker
+from .persistence.records import canonical, change, create, get, json_value, project_of, save_blob, scoped_query, transaction_lock
+from .execution.scheduler import Scheduler
+from .persistence.schema import tables
+from .missions.service import Service
+from .missions.mission_tree import contains_mission, require_mission_authority
+from .operations.telemetry import RequestTelemetry, make_tracer_provider
+from .execution.worker_events import WorkerOperation, handle as handle_worker
 
 log = logging.getLogger(__name__)
 
 
 def create_app(config: PipelineConfig, *, database: Database | None = None, background: bool = True) -> FastAPI:
+    """Bind one configured installation to authenticated HTTP and background loops.
+
+    Mutation handlers validate contracts, serialize ownership changes, and store
+    idempotent receipts in the transaction. Remote I/O uses subsystem boundaries
+    outside those mutation transactions. Lifespan owns only resources created here.
+    """
     owned = database is None
     db = database or Database(config.database_url.get_secret_value(), pool_size=config.database_pool_size,
         pool_timeout=config.database_pool_timeout_seconds,
@@ -54,7 +65,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     def provision_review_accounts(project_id, *, refresh_access=False):
         if config.reviewer_account_admin_credentials:
-            from .reviewer_accounts import ensure_project_accounts
+            from .review.accounts import ensure_project_accounts
             return ensure_project_accounts(db, service, project_id, refresh_access=refresh_access)
 
     def provision_for_request(request, parent_id):
@@ -107,7 +118,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                 pass
 
     async def retention_loop():
-        from .storage import apply_database_retention, database_retention_preview
+        from .operations.storage import apply_database_retention, database_retention_preview
         def prune_batch():
             with db.transaction() as conn:
                 if not transaction_lock(conn, wait=False):
@@ -130,14 +141,14 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
         await asyncio.to_thread(db.check_revision)
         tasks = []
         if background:
-            from .connectors import ConnectorManager, SecretResolver
+            from .integrations.connectors import ConnectorManager, SecretResolver
             connectors = ConnectorManager(db, service, SecretResolver(config.state_root), should_stop=stop.is_set)
             tasks = [asyncio.create_task(watchdog()), asyncio.create_task(connector_loop("forge")),
                      asyncio.create_task(connector_loop("zulip")),
                      asyncio.create_task(connector_loop(None)), asyncio.create_task(retention_loop())]
         if config.search_enabled:
-            from .search import SearchManager
-            from .connectors import SecretResolver
+            from .projects.search import SearchManager
+            from .integrations.connectors import SecretResolver
             secrets = SecretResolver(config.state_root)
             def search_credential(source):
                 with db.transaction() as conn:
@@ -199,21 +210,26 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.middleware("http")
     async def request_boundary(request, call_next):
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-            length = request.headers.get("content-length")
-            if length and (not length.isdecimal() or int(length) > config.max_request_bytes):
-                return JSONResponse({"error": {"code": "request_too_large", "message": "Request exceeds the upload limit"}}, status_code=413)
-            chunks, count = [], 0
-            async for chunk in request.stream():
-                count += len(chunk)
-                if count > config.max_request_bytes:
-                    return JSONResponse({"error": {"code": "request_too_large", "message": "Request exceeds the upload limit"}}, status_code=413)
-                chunks.append(chunk)
-            request._body = b"".join(chunks)
             origin = request.headers.get("origin")
             if origin is not None and origin.rstrip("/") != config.public_url.rstrip("/"):
                 return JSONResponse({"error": {"code": "invalid_origin", "message": "Cross-origin writes are not permitted"}}, status_code=403)
             if request.cookies.get("horizon_session") and not request.headers.get("authorization") and not origin:
                 return JSONResponse({"error": {"code": "origin_required", "message": "Browser writes require their origin"}}, status_code=403)
+            binary = request.method == "POST" and re.fullmatch(r"/api/v3/references/[0-9a-fA-F-]{36}/files", request.url.path)
+            maximum = config.max_reference_file_bytes if binary else config.max_request_bytes
+            length = request.headers.get("content-length")
+            if length and (not length.isdecimal() or int(length) > maximum):
+                return JSONResponse({"error": {"code": "request_too_large", "message": "Request exceeds the upload limit"}}, status_code=413)
+            # The binary route authenticates before reading and enforces the
+            # byte bound while streaming. Keep ordinary JSON requests buffered.
+            if not binary:
+                chunks, count = [], 0
+                async for chunk in request.stream():
+                    count += len(chunk)
+                    if count > config.max_request_bytes:
+                        return JSONResponse({"error": {"code": "request_too_large", "message": "Request exceeds the upload limit"}}, status_code=413)
+                    chunks.append(chunk)
+                request._body = b"".join(chunks)
         response = await call_next(request)
         response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -240,7 +256,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/instruction-catalog")
     def instruction_catalog(request: Request):
-        from .instruction_catalog import read_catalog
+        from .instructions.instruction_catalog import read_catalog
         with db.transaction() as conn:
             actor = actor_for(conn, request)
             require_admin(conn, actor)
@@ -248,7 +264,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/instruction-catalog/file")
     def instruction_file(request: Request, path: str = Query(min_length=1, max_length=512)):
-        from .instruction_catalog import read_catalog
+        from .instructions.instruction_catalog import read_catalog
         with db.transaction() as conn:
             actor = actor_for(conn, request)
             require_admin(conn, actor)
@@ -324,7 +340,8 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.post("/api/v3/auth/login")
     async def sign_in(request: Request):
         data = await request.json()
-        if set(data) != {"username", "password"} or not all(isinstance(value, str) for value in data.values()):
+        if (not isinstance(data, dict) or set(data) != {"username", "password"}
+                or not all(isinstance(value, str) for value in data.values())):
             raise DomainError("invalid_credentials", "Username and password are required", 422)
         peer = request.client.host if request.client else "unknown"
         now = time.monotonic()
@@ -394,12 +411,18 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                     workspace['project_id'], lambda: milestones.register_check(conn, actor, data))
         return respond(await asyncio.to_thread(work))
 
+    @app.post('/api/v3/lean/verifications')
+    async def request_lean_verification(request: Request, data: verification_jobs.LibraryVerificationRequest):
+        return await project_mutation(request, 'lean_verification', data.model_dump(mode='json'),
+            'workspace', data.workspace_id, lambda conn, actor: verification_jobs.queue_library(conn, actor, data))
+
     @app.post('/api/v3/milestones/verifications')
-    async def request_milestone_verification(request: Request, data: milestone_jobs.VerificationRequest):
+    async def request_milestone_verification(request: Request, data: verification_jobs.VerificationRequest):
         return await project_mutation(request, 'milestone_verification', data.model_dump(mode='json'),
-            'workspace', data.workspace_id, lambda conn, actor: milestone_jobs.queue(conn, actor, data))
+            'workspace', data.workspace_id, lambda conn, actor: verification_jobs.queue(conn, actor, data))
 
     @app.get('/api/v3/milestones/verifications/{identifier}')
+    @app.get('/api/v3/lean/verifications/{identifier}')
     def read_milestone_verification(identifier: UUID, request: Request):
         with db.transaction() as conn:
             row = get(conn, 'milestone_job', identifier)
@@ -407,26 +430,51 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             return respond({key: value for key, value in row.items() if key != 'claim_token'})
 
     @app.get('/api/v3/milestones/checks/{identifier}')
+    @app.get('/api/v3/lean/checks/{identifier}')
     def read_milestone_check(identifier: UUID, request: Request):
         with db.transaction() as conn:
             row = get(conn, 'milestone_check', identifier)
             require_project(conn, actor_for(conn, request), row['project_id'])
             return respond(row)
 
-    @app.post('/api/v3/worker/milestone-jobs/claim')
-    def claim_milestone_job(request: Request, data: milestone_jobs.Claim):
+    @app.get("/api/v3/worker/retired-workspaces")
+    def retired_workspaces(request: Request, host_id: UUID):
+        with db.transaction() as conn:
+            require_host(conn, actor_for(conn, request), host_id)
+            workspace, repo = tables["workspace"], tables["repository"]
+            return respond({"items": list(conn.execute(select(workspace, repo.c.default_branch).join(repo).where(
+                workspace.c.host_id == host_id, workspace.c.status == "retired", workspace.c.cleaned_at.is_(None))
+                .order_by(workspace.c.updated_at, workspace.c.id).limit(50)).mappings())})
+
+    @app.post("/api/v3/worker/retired-workspaces/{identifier}")
+    def cleaned_workspace(identifier: UUID, request: Request, data: dict):
         with db.transaction() as conn:
             transaction_lock(conn)
-            return respond({'job': milestone_jobs.claim(conn, actor_for(conn, request), data)})
+            workspace = get(conn, "workspace", identifier, lock=True)
+            require_host(conn, actor_for(conn, request), workspace["host_id"])
+            if workspace["status"] != "retired":
+                raise DomainError("workspace_retained", "Only retired workspaces can be cleaned", 409)
+            return respond(change(conn, "workspace", identifier,
+                cleaned_at=func.now() if data.get("removed") is True else None,
+                cleanup_error=None if data.get("removed") is True else str(data.get("error", "Cleanup failed"))[:6000]))
+
+    @app.post('/api/v3/worker/milestone-jobs/claim')
+    @app.post('/api/v3/worker/verification-jobs/claim')
+    def claim_milestone_job(request: Request, data: verification_jobs.Claim):
+        with db.transaction() as conn:
+            transaction_lock(conn)
+            return respond({'job': verification_jobs.claim(conn, actor_for(conn, request), data)})
 
     @app.post('/api/v3/worker/milestone-jobs/{identifier}/heartbeat')
-    def heartbeat_milestone_job(identifier: UUID, request: Request, data: milestone_jobs.Lease):
+    @app.post('/api/v3/worker/verification-jobs/{identifier}/heartbeat')
+    def heartbeat_milestone_job(identifier: UUID, request: Request, data: verification_jobs.Lease):
         with db.transaction() as conn:
             transaction_lock(conn)
-            return respond(milestone_jobs.heartbeat(conn, actor_for(conn, request), identifier, data))
+            return respond(verification_jobs.heartbeat(conn, actor_for(conn, request), identifier, data))
 
     @app.post('/api/v3/worker/milestone-jobs/{identifier}/finish')
-    def finish_milestone_job(identifier: UUID, request: Request, data: milestone_jobs.Finish):
+    @app.post('/api/v3/worker/verification-jobs/{identifier}/finish')
+    def finish_milestone_job(identifier: UUID, request: Request, data: verification_jobs.Finish):
         with db.transaction() as conn:
             transaction_lock(conn)
             actor = actor_for(conn, request)
@@ -434,19 +482,20 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             require_host(conn, actor, job['host_id'])
             raw = {'id': str(identifier), **data.model_dump(mode='json')}
             return respond(idempotent(conn, actor, request, 'milestone_job_finish', raw, job['project_id'],
-                lambda: milestone_jobs.finish(conn, actor, identifier, data)))
+                lambda: verification_jobs.finish(conn, actor, identifier, data)))
 
     @app.get("/api/v3/schema")
     def schema(request: Request, section: str | None = None, name: str | None = None):
         from .command_args import COMMAND_ARGS
-        from .record_queries import supported_filters, validate_query
+        from .dashboard.record_queries import supported_filters, validate_query
         from .schema_discovery import canonical_query_name, canonicalize_published_queries, lookup_error
         validate_query(request, {"section", "name"})
-        from .communications import DiscussionRegistration, DiscussionSubjectLink
-        from .notifications import OperatorNotice
-        from .content import BlobUpload
-        from .references import ReferenceUsage
-        from .reviewer_invocations import ReviewerPrepare, ReviewerAttach, ReviewerCancel, ReviewerReport
+        from .integrations.communications import DiscussionRegistration, DiscussionSubjectLink
+        from .execution.notifications import OperatorNotice
+        from .projects.content import BlobUpload
+        from .projects.references import ReferenceUsage
+        from .projects.reference_files import ReferenceFileUpload
+        from .review.invocations import ReviewerPrepare, ReviewerAttach, ReviewerCancel, ReviewerReport
         with db.transaction() as conn:
             actor_for(conn, request)
         openapi = app.openapi()
@@ -470,10 +519,12 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                         "operations": {name: contract.model_json_schema() for name, contract in {
                             "approve_milestones": milestones.AcceptBaseline,
                             "milestone_check": milestones.CheckSubmission,
-                            "milestone_verification": milestone_jobs.VerificationRequest,
+                            "milestone_verification": verification_jobs.VerificationRequest,
+                            "lean_verification": verification_jobs.LibraryVerificationRequest,
                             "register_discussion": DiscussionRegistration, "link_discussion_subject": DiscussionSubjectLink,
                             "operator_notice": OperatorNotice,
                             "upload_blob": BlobUpload, "cite_reference": ReferenceUsage,
+                            "upload_reference_file": ReferenceFileUpload,
                             "prepare_reviewer": ReviewerPrepare, "prepare_reviewer_assignment": ReviewerPrepare,
                             "attach_reviewer": ReviewerAttach, "cancel_reviewer": ReviewerCancel,
                             "reviewer_report": ReviewerReport,
@@ -486,6 +537,9 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                                    "objective_milestones": "GET /api/v3/documents/{id}/milestones",
                                    "approve_milestones": "POST /api/v3/milestones/baselines",
                                    "milestone_verification": "POST /api/v3/milestones/verifications",
+                                   "lean_verification": "POST /api/v3/lean/verifications",
+                                   "lean_verification_status": "GET /api/v3/lean/verifications/{id}",
+                                   "lean_check": "GET /api/v3/lean/checks/{id}",
                                    "milestone_verification_status": "GET /api/v3/milestones/verifications/{id}",
                                    "milestone_check": "GET /api/v3/milestones/checks/{id}",
                                    "list": "GET /api/v3/records/{kind}?project_id=...",
@@ -501,6 +555,10 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                                    "upload_blob": "POST /api/v3/artifacts",
                                    "blob_content": "GET /api/v3/artifacts/{id}/content",
                                    "cite_reference": "POST /api/v3/reference-usages",
+                                   "reference_files": "GET /api/v3/references/{id}/files",
+                                   "upload_reference_file": "POST /api/v3/references/{id}/files?filename=... (binary body)",
+                                   "reference_file_content": "GET /api/v3/references/{id}/files/{file_id}/content",
+                                   "archive_reference_file": "POST /api/v3/references/{id}/files/{file_id}/archive",
                                    "prepare_reviewer": "POST /api/v3/reviewer-invocations",
                                    "prepare_reviewer_assignment": "POST /api/v3/reviewer-assignments",
                                    "forge_change": "POST /api/v3/forge/change", "forge_edit": "POST /api/v3/forge/edit",
@@ -555,7 +613,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/assignments")
     def assignments(request: Request, run_id: UUID, cursor: str | None = None, limit: int = Query(50, ge=1, le=100), q: str = "", status: str | None = None):
-        from .record_queries import validate_query
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"run_id", "cursor", "limit", "q", "status"})
         with db.transaction() as conn:
             actor = actor_for(conn, request)
@@ -575,40 +633,42 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/projects/{project_id}/dashboard/overview")
     def project_dashboard_overview(request: Request, project_id: UUID):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.overview(conn, actor_for(conn, request), project_id))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/nodes")
     def project_dashboard_nodes(request: Request, project_id: UUID, search: str = "", label: str = "",
+                                node_type: str = "", milestone: bool | None = None,
                                 offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), target_repository_id: UUID | None = None):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.nodes(conn, actor_for(conn, request), project_id, config,
-                search=search, label=label, offset=offset, limit=limit, target_repository_id=target_repository_id))
+                search=search, label=label, node_type=node_type, milestone=milestone,
+                offset=offset, limit=limit, target_repository_id=target_repository_id))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/nodes/resolve")
     def project_dashboard_node_summaries(request: Request, project_id: UUID, identifiers: str, target_repository_id: UUID | None = None):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.node_summaries(conn, actor_for(conn, request), project_id,
                 identifiers.split(","), config, target_repository_id=target_repository_id))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/nodes/{identifier}")
     def project_dashboard_node(request: Request, project_id: UUID, identifier: str, target_repository_id: UUID | None = None):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.node_detail(conn, actor_for(conn, request), project_id, identifier, config, target_repository_id))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/objectives")
     def project_dashboard_objectives(request: Request, project_id: UUID):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.objectives(conn, actor_for(conn, request), project_id, config))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/objectives/{identifier}")
     def project_dashboard_objective(request: Request, project_id: UUID, identifier: UUID):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.objectives(conn, actor_for(conn, request), project_id, config, identifier))
 
@@ -622,14 +682,14 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/projects/{project_id}/dashboard/graph")
     def project_dashboard_graph(request: Request, project_id: UUID, focus: UUID | None = None, target_repository_id: UUID | None = None):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.graph(conn, actor_for(conn, request), project_id, config, str(focus) if focus else None, target_repository_id))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/missions")
     def project_dashboard_missions(request: Request, project_id: UUID, search: str = "", status: str = "",
                                   offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.missions(conn, actor_for(conn, request), project_id,
                 search=search, status=status, offset=offset, limit=limit))
@@ -637,7 +697,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.get("/api/v3/dashboard/activity/runs")
     def desktop_activity_runs(request: Request, project_id: UUID | None = None, status: str | None = None,
                               before: str | None = None, limit: int = Query(25, ge=1, le=100), compact: bool = False):
-        from . import dashboard_activity
+        from .dashboard import dashboard_activity
         with db.transaction() as conn:
             return respond(dashboard_activity.runs(conn, actor_for(conn, request), project_id=project_id,
                            status=status, before=before, limit=limit, compact=compact))
@@ -647,7 +707,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                              view: Literal["full", "metrics", "queue"] = "full",
                              sessions_before: str | None = None,
                              sessions_limit: int = Query(100, ge=1, le=100)):
-        from . import dashboard_activity
+        from .dashboard import dashboard_activity
         with db.transaction() as conn:
             return respond(dashboard_activity.run_detail(conn, actor_for(conn, request), identifier,
                            service=service, compact=compact, view=view,
@@ -656,7 +716,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.get("/api/v3/dashboard/activity/sessions/{identifier}")
     def desktop_activity_session(identifier: UUID, request: Request, compact: bool = False,
                                  view: Literal["full", "reports"] = "full"):
-        from . import dashboard_activity
+        from .dashboard import dashboard_activity
         with db.transaction() as conn:
             return respond(dashboard_activity.session_detail(conn, actor_for(conn, request), identifier,
                            store=service.store, service=service, compact=compact, view=view))
@@ -664,33 +724,33 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.get("/api/v3/dashboard/activity/sessions/{identifier}/events")
     def desktop_activity_events(identifier: UUID, request: Request, before: str | None = None,
                                 limit: int = Query(50, ge=1, le=100), compact: bool = False):
-        from . import dashboard_activity
+        from .dashboard import dashboard_activity
         with db.transaction() as conn:
             return respond(dashboard_activity.events(conn, actor_for(conn, request), identifier,
                            store=service.store, before=before, limit=limit, compact=compact))
 
     @app.get("/api/v3/dashboard/activity/sessions/{identifier}/events/{event_id}")
     def desktop_activity_event(identifier: UUID, event_id: UUID, request: Request):
-        from . import dashboard_activity
+        from .dashboard import dashboard_activity
         with db.transaction() as conn:
             return respond(dashboard_activity.event_detail(conn, actor_for(conn, request), identifier,
                            event_id, store=service.store))
 
     @app.get("/api/v3/dashboard/activity/sessions/{identifier}/logs")
     def desktop_activity_logs(identifier: UUID, request: Request, limit: int = Query(50, ge=1, le=100)):
-        from . import dashboard_activity
+        from .dashboard import dashboard_activity
         with db.transaction() as conn:
             return respond(dashboard_activity.logs(conn, actor_for(conn, request), identifier, store=service.store, limit=limit))
 
     @app.get("/api/v3/projects/{project_id}/dashboard/missions/{identifier}")
     def project_dashboard_mission(request: Request, project_id: UUID, identifier: UUID):
-        from . import dashboard_projects
+        from .dashboard import dashboard_projects
         with db.transaction() as conn:
             return respond(dashboard_projects.mission_detail(conn, actor_for(conn, request), project_id, identifier))
 
     @app.get("/api/v3/integrations/{identifier}/browser-identity")
     def integration_browser_identity(identifier: UUID, request: Request):
-        from .browser_integrations import authorize, verify_binding
+        from .integrations.browser_integrations import authorize, verify_binding
         with db.transaction() as conn:
             access = authorize(conn, config, request.cookies.get("horizon_session"), identifier,
                                authorization=request.headers.get("authorization"))
@@ -700,7 +760,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/projects/{project_id}/integrations/{identifier}/web-session")
     async def integration_web_session(project_id: UUID, identifier: UUID, request: Request):
-        from .browser_integrations import establish
+        from .integrations.browser_integrations import establish
         result, cookies = await asyncio.to_thread(establish, db, config, request.cookies.get("horizon_session"),
             identifier, project_id, authorization=request.headers.get("authorization"))
         response = respond(result)
@@ -727,21 +787,21 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/forge-items")
     def forge_items(request: Request, project_id: UUID, cursor: str | None = None, limit: int = Query(50, ge=1, le=100), q: str = ""):
-        from .record_queries import validate_query
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"project_id", "cursor", "limit", "q"})
         with db.transaction() as conn:
             return respond(readmodels.forge_items(conn, actor_for(conn, request), project_id, cursor, limit, q=q, config=config))
 
     @app.get("/api/v3/discussions")
     def discussions(request: Request, project_id: UUID, cursor: str | None = None, limit: int = Query(50, ge=1, le=100), assignment_id: UUID | None = None, q: str = ""):
-        from .record_queries import validate_query
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"project_id", "cursor", "limit", "assignment_id", "q"})
         with db.transaction() as conn:
             return respond(readmodels.discussions(conn, actor_for(conn, request), project_id, cursor, limit, assignment_id, q=q, config=config))
 
     @app.post("/api/v3/discussions")
     async def register_discussion(request: Request):
-        from .communications import DiscussionRegistration, register_discussion as register
+        from .integrations.communications import DiscussionRegistration, register_discussion as register
         raw = await request.json()
         data = DiscussionRegistration.model_validate(raw)
         return await project_mutation(request, "register_discussion", raw, "project", data.project_id,
@@ -749,7 +809,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/discussion-subjects")
     async def link_discussion_subject(request: Request):
-        from .communications import DiscussionSubjectLink, link_subject
+        from .integrations.communications import DiscussionSubjectLink, link_subject
         raw = await request.json()
         data = DiscussionSubjectLink.model_validate(raw)
         return await project_mutation(request, "link_discussion_subject", raw, "discussion", data.discussion_id,
@@ -759,7 +819,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     def discussion_messages(identifier: UUID, request: Request, cursor: str | None = None,
                             limit: int = Query(20, ge=1, le=100), assignment_id: UUID | None = None,
                             unread_only: bool = False):
-        from .record_queries import validate_query
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"cursor", "limit", "assignment_id", "unread_only"})
         with db.transaction() as conn:
             return respond(readmodels.discussion_messages(conn, actor_for(conn, request), identifier, cursor, limit,
@@ -767,9 +827,9 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     def remote_discussion_read(identifier, request, *, search, q, topic, before, limit):
         from urllib.parse import quote
-        from .communications import discussion_channel
-        from .connectors import ConnectorFailure, ConnectorManager, SecretResolver
-        from .integration_views import public_url
+        from .integrations.communications import discussion_channel
+        from .integrations.connectors import ConnectorFailure, ConnectorManager, SecretResolver
+        from .integrations.integration_views import public_url
         with db.transaction() as conn:
             actor = actor_for(conn, request)
             discussion, integration = discussion_channel(conn, actor, identifier)
@@ -798,7 +858,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.get("/api/v3/discussions/{identifier}/topics")
     def discussion_topics(identifier: UUID, request: Request, q: str = Query("", max_length=200),
                           before: int | None = Query(None, ge=1), limit: int = Query(20, ge=1, le=50)):
-        from .record_queries import validate_query
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"q", "before", "limit"})
         return remote_discussion_read(identifier, request, search=False, q=q, topic=None, before=before, limit=limit)
 
@@ -806,7 +866,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     def discussion_search(identifier: UUID, request: Request, q: str = Query(min_length=1, max_length=200),
                           topic: str | None = Query(None, max_length=60), before: int | None = Query(None, ge=1),
                           limit: int = Query(20, ge=1, le=50)):
-        from .record_queries import validate_query
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"q", "topic", "before", "limit"})
         return remote_discussion_read(identifier, request, search=True, q=q, topic=topic, before=before, limit=limit)
 
@@ -818,7 +878,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/projects/{identifier}/integrations")
     def project_integrations(identifier: UUID, request: Request):
-        from .integration_views import project_integrations as present_integrations
+        from .integrations.integration_views import project_integrations as present_integrations
         with db.transaction() as conn:
             return respond(present_integrations(conn, actor_for(conn, request), identifier, config))
 
@@ -832,7 +892,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             integration = get(conn, "integration", repository["integration_id"])
         if search_manager is None:
             raise DomainError("search_disabled", "Search is disabled for this installation", 503)
-        from .search import SourceSpec
+        from .projects.search import SourceSpec
         if not repository["remote_path"] or ".." in repository["remote_path"].split("/"):
             raise DomainError("invalid_source", "Repository has no valid configured Forge path", 422)
         source = SourceSpec(project_id=str(repository["project_id"]), source_id=str(repository_id),
@@ -867,7 +927,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                        "X-Horizon-Reference-Revision": str(reference["revision"])}
             if request.headers.get("if-none-match") == etag:
                 return Response(status_code=304, headers=headers)
-        from .references import bibtex
+        from .projects.references import bibtex
         return Response(bibtex([reference]), media_type="application/x-bibtex", headers=headers)
 
     @app.get("/api/v3/references")
@@ -881,12 +941,12 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             if cite_key:
                 query = query.where(table.c.cite_key == cite_key)
             if doi:
-                from .reference_identifiers import normalize_doi
+                from .projects.reference_identifiers import normalize_doi
                 try:
                     normalized = normalize_doi(doi)
                 except ValueError as error:
                     raise DomainError("invalid_identifier", str(error), 422) from None
-                from .references import identifier_expression
+                from .projects.references import identifier_expression
                 query = query.where(identifier_expression(table, "doi") == normalized)
             if q:
                 query = query.where(table.c.title.icontains(q, autoescape=True) | table.c.cite_key.icontains(q, autoescape=True))
@@ -894,15 +954,93 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/reference-usages")
     async def cite_reference(request: Request):
-        from .references import ReferenceUsage, record_usage
+        from .projects.references import ReferenceUsage, record_usage
         raw = await request.json()
         data = ReferenceUsage.model_validate(raw)
         return await project_mutation(request, "cite_reference", raw, "reference", data.reference_id,
             lambda conn, actor: record_usage(conn, actor, data))
 
+    @app.get("/api/v3/references/{identifier}/files")
+    def reference_files(identifier: UUID, request: Request, cursor: str | None = None,
+                        limit: int = Query(50, ge=1, le=100)):
+        from .projects.reference_files import list_files
+        with db.transaction() as conn:
+            result = list_files(conn, actor_for(conn, request), identifier, cursor, limit)
+        return respond({**result, "max_upload_bytes": config.max_reference_file_bytes})
+
+    @app.post("/api/v3/references/{identifier}/files")
+    async def upload_reference_file(identifier: UUID, request: Request, filename: str,
+                                    description: str = "", source_url: str | None = None):
+        from .projects.reference_files import ReferenceFileUpload, attach, media_type
+        from .operations.storage import pressure
+        data = ReferenceFileUpload(filename=filename, description=description, source_url=source_url)
+        # Reject unauthenticated/unauthorized uploads before reserving disk or
+        # consuming their bodies. Recheck authority after transfer in the mutation.
+        with db.transaction() as conn:
+            actor = actor_for(conn, request)
+            reference = get(conn, "reference", identifier)
+            require_project(conn, actor, reference["project_id"], "worker")
+        key = request.headers.get("idempotency-key")
+        if not key or len(key) > 200:
+            raise DomainError("idempotency_required", "File uploads require an Idempotency-Key", 422)
+        if pressure(config.state_root, config.storage)["status"] == "pause":
+            raise DomainError("storage_pressure", "Reference uploads paused until storage is repaired", 503)
+        config.scratch_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(prefix="reference-", dir=config.scratch_root)
+        staged = Path(name)
+        try:
+            size = 0
+            with os.fdopen(descriptor, "wb") as output:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > config.max_reference_file_bytes:
+                        raise DomainError("request_too_large", "Reference file exceeds the upload limit", 413)
+                    await asyncio.to_thread(output.write, chunk)
+            if not size:
+                raise DomainError("invalid_reference_file", "Reference files must not be empty", 422)
+            # File hashing/copying happens outside the global mutation lock.
+            identity = await asyncio.to_thread(store.put_file, staged, await asyncio.to_thread(media_type, data.filename, staged))
+            expected = request.headers.get("x-content-sha256")
+            if expected and expected != identity["sha256"]:
+                raise DomainError("invalid_reference_file", "Uploaded bytes do not match their declared checksum", 422)
+            raw = {"reference_id": str(identifier), **data.model_dump(), **identity}
+            return await project_mutation(request, "upload_reference_file", raw, "reference", identifier,
+                lambda conn, actor: attach(conn, actor, identifier, data, identity, service))
+        finally:
+            staged.unlink(missing_ok=True)
+
+    @app.get("/api/v3/references/{identifier}/files/{file_id}/content")
+    def reference_file_content(identifier: UUID, file_id: UUID, request: Request, preview: bool = False):
+        from .projects.reference_files import present, read_file
+        from urllib.parse import quote
+        with db.transaction() as conn:
+            actor = actor_for(conn, request)
+            _, row, artifact = read_file(conn, actor, identifier, file_id)
+        file = present(row, artifact)
+        if preview and not file["previewable"]:
+            raise DomainError("preview_unavailable", "Download this file to consult it locally", 422)
+        path = store.verified_path(file["sha256"], file["size_bytes"])
+        etag = '"' + hashlib.sha256(f"reference-file:{actor.id}:{row['revision']}:{file['sha256']}".encode()).hexdigest() + '"'
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache", "Vary": "Cookie, Authorization",
+                   "X-Content-SHA256": file["sha256"], "X-Content-Type-Options": "nosniff",
+                   "Content-Disposition": ("inline" if preview else "attachment") + "; filename*=UTF-8''" + quote(file["filename"], safe=""),
+                   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'self'"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return FileResponse(path, media_type=file["media_type"], headers=headers)
+
+    @app.post("/api/v3/references/{identifier}/files/{file_id}/archive")
+    async def archive_reference_file(identifier: UUID, file_id: UUID, request: Request):
+        from .projects.reference_files import archive
+        raw = await request.json()
+        if raw != {}:
+            raise DomainError("validation_failed", "Archive expects an empty object", 422)
+        return await project_mutation(request, "archive_reference_file", {"reference_id": str(identifier), "file_id": str(file_id)},
+            "reference", identifier, lambda conn, actor: archive(conn, actor, identifier, file_id))
+
     @app.post("/api/v3/artifacts")
     async def upload_blob(request: Request):
-        from .content import BlobUpload, upload
+        from .projects.content import BlobUpload, upload
         raw = await request.json()
         data = BlobUpload.model_validate(raw)
         return await project_mutation(request, "upload_blob", raw, "project", data.project_id,
@@ -968,7 +1106,8 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                 if kind is None:
                     raise DomainError("unknown_command", "Unsupported command", 422)
                 project_id = project_of(conn, kind, data.target_id)
-                require_project(conn, actor, project_id, "maintainer" if kind == "run" else "worker")
+                require_project(conn, actor, project_id,
+                    "maintainer" if kind == "run" and data.operation != "request_maintenance" else "worker")
                 return idempotent(conn, actor, request, "command", raw, project_id, lambda: {
                     "id": request.headers.get("idempotency-key"), "status": "completed",
                     "result": execute(conn, actor, data, service, scheduler)})
@@ -976,7 +1115,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/reviewer-invocations")
     async def prepare_reviewer(request: Request):
-        from .reviewer_invocations import ReviewerPrepare, prepare
+        from .review.invocations import ReviewerPrepare, prepare
         raw = await request.json()
         data = ReviewerPrepare.model_validate(raw)
         await asyncio.to_thread(provision_for_request, request, data.parent_request_id)
@@ -985,7 +1124,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/reviewer-assignments")
     async def prepare_reviewer_assignment(request: Request):
-        from .reviewer_invocations import ReviewerPrepare, prepare_assignment
+        from .review.invocations import ReviewerPrepare, prepare_assignment
         raw = await request.json()
         data = ReviewerPrepare.model_validate(raw)
         await asyncio.to_thread(provision_for_request, request, data.parent_request_id)
@@ -994,13 +1133,13 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/reviewer-invocations/{identifier}")
     def read_reviewer(identifier: UUID, request: Request):
-        from .reviewer_invocations import read
+        from .review.invocations import read
         with db.transaction() as conn:
             return respond(read(conn, actor_for(conn, request), identifier, service))
 
     @app.post("/api/v3/reviewer-invocations/{identifier}/report")
     async def reviewer_report(identifier: UUID, request: Request):
-        from .reviewer_invocations import ReviewerReport, report
+        from .review.invocations import ReviewerReport, report
         raw = await request.json()
         data = ReviewerReport.model_validate(raw)
         return await project_mutation(request, "reviewer_report", {"id": str(identifier), **raw},
@@ -1009,14 +1148,14 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/executions/{identifier}/reviewer-accounts")
     def reviewer_accounts(identifier: UUID, request: Request):
-        from .reviewer_accounts import credentials
+        from .review.accounts import credentials
         with db.transaction() as conn:
             result = credentials(conn, actor_for(conn, request), identifier, service)
         return JSONResponse(json_value(result), headers={"Cache-Control": "private, no-store", "Vary": "Authorization"})
 
     @app.post("/api/v3/reviewer-invocations/{identifier}/attach")
     async def attach_reviewer(identifier: UUID, request: Request):
-        from .reviewer_invocations import ReviewerAttach, attach
+        from .review.invocations import ReviewerAttach, attach
         raw = await request.json()
         data = ReviewerAttach.model_validate(raw)
         return await project_mutation(request, "attach_reviewer", {"id": str(identifier), **raw},
@@ -1024,7 +1163,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/reviewer-invocations/{identifier}/cancel")
     async def cancel_reviewer(identifier: UUID, request: Request):
-        from .reviewer_invocations import ReviewerCancel, cancel
+        from .review.invocations import ReviewerCancel, cancel
         raw = await request.json()
         data = ReviewerCancel.model_validate(raw)
         return await project_mutation(request, "cancel_reviewer", {"id": str(identifier), **raw},
@@ -1032,7 +1171,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/operations/{key}")
     def operation(key: str, request: Request, operation: str = "command"):
-        from .operation_receipts import current_receipt
+        from .integrations.operation_receipts import current_receipt
         with db.transaction() as conn:
             actor = actor_for(conn, request)
             table = tables["api_request"]
@@ -1065,6 +1204,8 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                 transaction_lock(conn)
                 actor = actor_for(conn, request)
                 project_id = getattr(data, "project_id", None)
+                if kind == "run" and data.objective_id:
+                    project_id = project_of(conn, "document", data.objective_id)
                 for parent in ("run", "mission", "assignment"):
                     identifier = getattr(data, f"{parent}_id", None)
                     if identifier:
@@ -1079,11 +1220,15 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                     if kind == "assignment": return service.assignment(conn, actor, data)
                     if kind == "obligation": return service.obligation(conn, actor, data)
                     if kind == "subscription":
-                        from .communications import subscribe
+                        from .integrations.communications import subscribe
                         return subscribe(conn, actor, data, service)
                     if kind == "automation":
                         require_project(conn, actor, project_id, "maintainer")
                         run = get(conn, "run", data.run_id)
+                        if run.get("orchestration") == "objective":
+                            raise DomainError("objective_automation_managed", "Objective planner and review demand own recurrence", 409)
+                        if actor.kind == "agent" and get(conn, "assignment", live_execution(conn, actor)["assignment_id"])["mission_id"] == data.mission_id:
+                            raise DomainError("child_mission_required", "An automation cannot queue the agent's own mission", 422)
                         mission = require_mission_authority(conn, actor, data.mission_id, role="worker")
                         if project_of(conn, "run", run["id"]) != project_id or mission["project_id"] != project_id:
                             raise DomainError("scope_mismatch", "Automation run and mission must belong to the same project", 422)
@@ -1115,7 +1260,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                      run_id: UUID | None = None, repository_id: UUID | None = None, mission_id: UUID | None = None,
                      discussion_id: UUID | None = None, forge_item_id: UUID | None = None, status: str | None = None,
                      cursor: str | None = None, limit: int = Query(50, ge=1, le=100)):
-        from .record_queries import scope_expression, supported_filters, validate_query
+        from .dashboard.record_queries import scope_expression, supported_filters, validate_query
         if kind not in readable:
             raise DomainError("unknown_record", "This record is not publicly readable", 404)
         validate_query(request, supported_filters(kind))
@@ -1292,7 +1437,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             assignment_id: UUID
             messages: list[models.MessageRevision]
         data = Receipts.model_validate(await request.json())
-        from .communications import read_messages
+        from .integrations.communications import read_messages
         return await project_mutation(request, "read_messages", data.model_dump(mode="json"), "assignment", data.assignment_id,
             lambda conn, actor: read_messages(conn, actor, data.assignment_id,
                 [item.model_dump(mode="json") for item in data.messages], service))
@@ -1305,7 +1450,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             read_messages: list[models.MessageRevision] = []
             urgent: bool = False
         data = Reply.model_validate(await request.json())
-        from .communications import queue_reply
+        from .integrations.communications import queue_reply
         return await project_mutation(request, "discussion_reply", {"id": str(identifier), **data.model_dump(mode="json")},
             "discussion", identifier, lambda conn, actor: queue_reply(conn, actor, service, discussion_id=identifier,
                 assignment_id=data.assignment_id, body=data.body,
@@ -1326,7 +1471,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.get("/api/v3/assignments/{identifier}/control-notices")
     def pending_control_notices(identifier: UUID, request: Request):
-        from .notifications import control_summary
+        from .execution.notifications import control_summary
         with db.transaction() as conn:
             actor = actor_for(conn, request)
             require_project(conn, actor, project_of(conn, "assignment", identifier))
@@ -1334,7 +1479,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/assignments/{identifier}/control-notices")
     async def send_control_notice(identifier: UUID, request: Request):
-        from .notifications import OperatorNotice, operator_notice, require_operator
+        from .execution.notifications import OperatorNotice, operator_notice, require_operator
         data = OperatorNotice.model_validate(await request.json())
         def work():
             with db.transaction() as conn:
@@ -1369,14 +1514,14 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     async def review(request: Request):
         raw = await request.json()
         data = models.ForgeReview.model_validate(raw)
-        from .reviews import queue_review
+        from .review.decisions import queue_review
         return await project_mutation(request, "forge_review", raw, "forge_item", data.forge_item_id,
             lambda conn, actor: queue_review(conn, actor, service, scheduler, raw, request.headers.get("idempotency-key")), role="maintainer")
 
     @app.get("/api/v3/repositories/{identifier}/head")
     def repository_head(identifier: UUID, request: Request, branch: str | None = Query(None, min_length=1, max_length=1024)):
-        from .forge_inspection import repository_head as read_head
-        from .record_queries import validate_query
+        from .integrations.forge_inspection import repository_head as read_head
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"branch"})
         return JSONResponse(json_value(read_head(db, config, lambda conn: actor_for(conn, request), identifier, branch)),
                             headers={"Cache-Control": "no-store", "Vary": "Authorization, Cookie"})
@@ -1384,8 +1529,8 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.get("/api/v3/repositories/{identifier}/file")
     def forge_file(identifier: UUID, request: Request, commit_oid: str = Query(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"),
                    path: str = Query(min_length=1, max_length=2000)):
-        from .forge_inspection import inspect
-        from .record_queries import validate_query
+        from .integrations.forge_inspection import inspect
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"commit_oid", "path"})
         result = inspect(db, config, lambda conn: actor_for(conn, request), repository_id=identifier,
                          commit_oid=commit_oid, file_path=path)
@@ -1397,8 +1542,8 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                       expected_head_oid: str | None = Query(None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"),
                       page: int = Query(1, ge=1, le=10000), limit: int = Query(50, ge=1, le=100),
                       review_id: int | None = Query(None, ge=1)):
-        from .forge_inspection import inspect
-        from .record_queries import validate_query
+        from .integrations.forge_inspection import inspect
+        from .dashboard.record_queries import validate_query
         validate_query(request, {"view", "expected_head_oid", "page", "limit", "review_id"})
         if view == "review_comments" and review_id is None:
             raise DomainError("invalid_query", "review_comments requires review_id", 422)
@@ -1411,7 +1556,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
         data = models.ForgeCreate.model_validate(await request.json())
         def perform(conn, actor):
             from .auth import live_execution
-            from .records import same_project
+            from .persistence.records import same_project
             repository = get(conn, "repository", data.repository_id)
             run = same_project(conn, "run", data.origin_run_id, repository["project_id"])
             if actor.kind == "agent" and live_execution(conn, actor)["run_id"] != run["id"]:
@@ -1432,21 +1577,21 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.post("/api/v3/forge/change")
     async def forge_change(request: Request):
-        from .forge_changes import queue
+        from .integrations.forge_changes import queue
         data = models.ForgeChange.model_validate(await request.json())
         return await project_mutation(request, "forge_change", data.model_dump(mode="json"), "repository", data.repository_id,
             lambda conn, actor: queue(conn, actor, data, request.headers.get("idempotency-key")))
 
     @app.post("/api/v3/forge/edit")
     async def forge_edit(request: Request):
-        from .reviews import queue_edit
+        from .review.decisions import queue_edit
         data = models.ForgeEdit.model_validate(await request.json())
         return await project_mutation(request, "forge_edit", data.model_dump(mode="json"), "forge_item", data.forge_item_id,
             lambda conn, actor: queue_edit(conn, actor, data, request.headers.get("idempotency-key")), role="maintainer")
 
     @app.post("/api/v3/forge/comment")
     async def forge_comment(request: Request):
-        from .reviews import queue_comment
+        from .review.decisions import queue_comment
         data = models.ForgeComment.model_validate(await request.json())
         return await project_mutation(request, "forge_comment", data.model_dump(mode="json"), "forge_item", data.forge_item_id,
             lambda conn, actor: queue_comment(conn, actor, data, scheduler, request.headers.get("idempotency-key")))
@@ -1455,7 +1600,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     async def merge(request: Request):
         raw = await request.json()
         data = models.ForgeMerge.model_validate(raw)
-        from .reviews import queue_merge
+        from .review.decisions import queue_merge
         return await project_mutation(request, "forge_merge", raw, "forge_item", data.forge_item_id,
             lambda conn, actor: queue_merge(conn, actor, raw, request.headers.get("idempotency-key")), role="maintainer")
 
@@ -1463,7 +1608,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     async def label(request: Request):
         raw = await request.json()
         data = models.ForgeLabel.model_validate(raw)
-        from .reviews import queue_label
+        from .review.decisions import queue_label
         return await project_mutation(request, "forge_label", raw, "forge_item", data.forge_item_id,
             lambda conn, actor: queue_label(conn, actor, raw, request.headers.get("idempotency-key")))
 
@@ -1475,7 +1620,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
             note: models.Text
         data = Classification.model_validate(await request.json())
         def perform(conn, actor):
-            from .records import emit
+            from .persistence.records import emit
             item = get(conn, "forge_item", identifier)
             scheduler.matching_policy(conn, item["repository_id"], data.phase, required=True)
             row = change(conn, "forge_item", identifier, data.expected_revision, review_phase=data.phase)
@@ -1487,7 +1632,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
     @app.post("/api/v3/worker/executions/{identifier}/heartbeat")
     async def heartbeat(identifier: UUID, request: Request):
         raw = await request.json()
-        if (set(raw) - {"epoch", "provider_thread_id"} or "epoch" not in raw
+        if (not isinstance(raw, dict) or set(raw) - {"epoch", "provider_thread_id"} or "epoch" not in raw
                 or type(raw["epoch"]) is not int or raw["epoch"] < 1
                 or (raw.get("provider_thread_id") is not None and not isinstance(raw["provider_thread_id"], str))):
             raise DomainError("invalid_epoch", "Heartbeat requires a positive epoch", 422)
@@ -1563,7 +1708,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
                         cursor = event["sequence"]
                         resources_by_subject = {"project": ["projects"], "run": ["runs", "assignments", "roadmap"],
                             "mission": ["runs", "assignments"], "node": ["roadmap"], "document": ["roadmap"],
-                            "roadmap_snapshot": ["roadmap"], "publication": ["changes", "assignments"],
+                            "roadmap_snapshot": ["roadmap"], "reference": ["references"], "publication": ["changes", "assignments"],
                             "forge_item": ["changes", "assignments", "roadmap"], "review_gate": ["changes", "roadmap"],
                             "discussion": ["discussions"], "message": ["discussions"],
                             "host": ["resources"], "harness": ["resources"], "execution": ["assignments", "resources"]}
@@ -1585,7 +1730,7 @@ def create_app(config: PipelineConfig, *, database: Database | None = None, back
 
     @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
     def dashboard_entry(request: Request):
-        navigation_keys = {"tab", "project", "view", "node", "objective", "run", "session", "assignment", "q", "mode", "pool"}
+        navigation_keys = {"tab", "project", "view", "project_view", "reference", "node", "objective", "run", "session", "assignment", "q", "mode", "pool"}
         query = urlencode([(key, value) for key, value in request.query_params.multi_items() if key in navigation_keys])
         return RedirectResponse("/pipeline" + ("?" + query if query else ""), status_code=307)
 

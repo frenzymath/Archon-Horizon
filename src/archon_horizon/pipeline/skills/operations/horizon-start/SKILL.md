@@ -35,7 +35,10 @@ when publication or checkout ownership is the blocker.
 
 `recover_context` replaces an unusable provider context only after its assignment
 is pending or failed, execution has stopped and requests have settled. A
-completed assignment cannot be resumed by an ordinary agent: `resume_assignment`
-requires an operator and can fail when its workspace has been reassigned. For
+completed objective session stays settled; queue a different bounded mission for
+new work. A suspended objective session uses `resume_session` after a recorded
+repair and keeps its retry history. Unusable native context can use `recover_context`
+only after physical stop is confirmed. Explicit legacy `resume_assignment` is an
+operator action and can fail when its workspace has been reassigned. For
 planned work after a real external event, keep the current owner through an
 event-conditioned [checkpoint](../horizon-delegation/references/queue.md).

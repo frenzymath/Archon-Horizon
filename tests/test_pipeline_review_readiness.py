@@ -3,12 +3,12 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select, update
 
-from archon_horizon.pipeline.connectors import ConnectorManager
+from archon_horizon.pipeline.integrations.connectors import ConnectorManager
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get, snapshot
-from archon_horizon.pipeline.reviewer_invocations import ReviewerCancel, ReviewerPrepare, ReviewerReport, cancel, prepare, prepare_assignment, read, report
-from archon_horizon.pipeline.reviews import queue_review, review_readiness
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get, snapshot
+from archon_horizon.pipeline.review.invocations import ReviewerCancel, ReviewerPrepare, ReviewerReport, cancel, prepare, prepare_assignment, read, report
+from archon_horizon.pipeline.review.decisions import queue_review, review_readiness
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_review_assessments import assessment, deliver, invocation, objection, setup
 from test_pipeline_reviewer_invocations import review  # noqa: F401
 from test_pipeline_reviewer_reports import reviewer_account
@@ -22,7 +22,7 @@ def final_approval(world, review):
 
 
 def test_reviewer_ownership_tracks_an_imported_pr_in_run_coordination(world, review):
-    from archon_horizon.pipeline.coordination_memory import frontier, memory
+    from archon_horizon.pipeline.execution.coordination_memory import frontier, memory
 
     item = create(world.conn, "forge_item", repository_id=review["item"]["repository_id"],
         remote_number=2, kind="pull_request", review_phase="preprocessing", target_branch="main",
@@ -291,7 +291,7 @@ def test_completed_missing_report_requires_physical_settlement_before_retry(worl
 @pytest.mark.parametrize("same_invocation", [False, True])
 def test_completed_approval_missing_old_resolutions_can_be_remediated_with_same_pins(world, review, same_invocation):
     from datetime import datetime, timezone
-    from archon_horizon.pipeline.review_contracts import ReviewPlan
+    from archon_horizon.pipeline.review.contracts import ReviewPlan
 
     identity, item, policy = setup(world, review)
     plan = ReviewPlan(base_commit_oid="b" * 40, scope_paths=["Metric.lean"], questions=[

@@ -29,9 +29,9 @@ The baseline needs one PostgreSQL server, one API process with its scheduler and
 connector loops, and one worker daemon per enrolled host. It does not need Redis,
 RabbitMQ, Celery, or a frontend server. Existing Forge and Zulip services are reused.
 
-New default runs use one root maintainer entrypoint and evidence-driven recovery;
-see [coordination recovery](coordination-recovery.md). The following idle-planner
-safeguard applies only to existing runs with separate planner automations.
+New runs use objective-led Work and Maintenance queues; see the
+[orchestration contract](design/objective-orchestration.md). The following idle-planner
+safeguard applies only to explicit legacy runs with separate planner automations.
 `automation_idle_recheck_seconds` defaults to 300. When such a run has usable
 capacity and no queued assignment able to use it, the scheduler can release one
 enabled recurring planner's condition and attach a blocker-triage obligation,
@@ -97,6 +97,21 @@ database, configure its supported TLS verification parameters. The optional
 loopback and requires an operator-selected image digest, storage directory, and
 private password file. It can be used with rootless Podman Compose; starting it is
 an explicit infrastructure action. Existing PostgreSQL is equally supported.
+
+Horizon requires explicit absolute storage paths; it does not automatically choose
+`~/.horizon` or `~/.horizon-pipeline`. Configure these locations for each host:
+
+| Configuration | Contents |
+| --- | --- |
+| Server `state_root` | Artifacts and disk-backed server scratch under `artifacts/` and `tmp/` |
+| Worker `workspace_roots` | Managed project checkouts and session worktrees |
+| Worker `journal_root` and `token_file` | Durable execution/publication journals and the private worker credential |
+| Harness `provider_home` and `scratch_root` | Provider authentication/context and per-execution temporary files |
+| Worker `lean_build.root` | Shared Lean build checkouts and managed compiler caches |
+
+PostgreSQL and Podman image storage are configured separately. Keep workspaces
+separate from worker journals, credentials and provider homes. JSON paths must use
+their absolute spelling; `~` is not expanded.
 
 ```sh
 horizon-pipeline --config /absolute/path/pipeline/server.json init \
@@ -294,6 +309,46 @@ agent the broker's credentials. The selected Forge account must be allowed to
 create proposal branches and PRs; grant final review/merge through the separately
 configured maintainer identity when the destination requires it.
 
+## Dashboard Access
+
+The API listens on `127.0.0.1:8788` by default; the dashboard is at `/pipeline`.
+For the default local installation, open `http://127.0.0.1:8788/pipeline` on the
+control-plane host. The loopback listener is not reachable directly from another
+machine. Local HTTP configuration uses that origin as `public_url` and
+`secure_cookies: false`.
+
+For remote browser access, use an HTTPS reverse proxy and set `public_url` to the
+exact browser-facing origin, without `/pipeline`. Keep `secure_cookies: true` and
+restart the control-plane service after updating its configuration. Browser writes
+must originate from `public_url`; merely forwarding a port does not update that
+setting. Keep the API on loopback when the proxy runs on the same host.
+
+For private access with [Tailscale Serve](https://tailscale.com/kb/1312/serve):
+
+1. Connect the control-plane host and the viewing devices to Tailscale, and enable
+   HTTPS certificates for the tailnet as described in Tailscale’s documentation.
+2. On the control-plane host, proxy the local API with:
+
+   ```sh
+   tailscale serve --bg http://127.0.0.1:8788
+   ```
+
+3. Use the HTTPS origin printed by Serve as Horizon’s `public_url`, enable secure
+   cookies and restart Horizon. Open that address with `/pipeline` appended.
+4. Restrict Tailscale access to the service’s HTTPS port, normally TCP 443. Sign in
+   with a Horizon account whose project permissions match the intended access;
+   use a viewer membership for collaborators who should only monitor work.
+
+[Tailscale device sharing](https://tailscale.com/kb/1084/sharing) lets people outside
+your tailnet reach the shared host using their own Tailscale accounts and clients.
+They also need Horizon accounts, but do not need OS accounts or SSH access on the
+control-plane host. Restrict shared-device access to the dashboard’s HTTPS port;
+sharing a device must not inadvertently expose other listening services.
+
+Forgejo and Zulip embedded views have their own HTTPS and authentication
+requirements; see
+[browser integrations](pipeline-browser-integrations.md).
+
 ## Enroll a Worker
 
 Workers send independent health heartbeats even when storage prevents admission.
@@ -342,8 +397,8 @@ horizon-pipeline worker --worker-config /absolute/path/pipeline/worker.json
 ```
 
 `slots` is this daemon's local execution concurrency. Global admission also checks
-the database's host/harness bindings and shared provider-account limits. A run
-requires at least two effective slots across its enabled hosts. Model and
+the database's host/harness bindings and shared provider-account limits. An objective run
+can use one effective slot; explicit legacy runs require at least two. Model and
 reasoning allowlists are optional and explicit; without them the worker requires
 the server's pinned settings to match its local harness configuration.
 
@@ -357,19 +412,37 @@ horizon-pipeline --config /absolute/path/pipeline/server.json launch-run \
   --operator operator --input /absolute/path/run.json --apply
 ```
 
-Launch IDs are durable idempotency keys. Launch uses ordinary admission checks
-and seeds one root maintainer automation by default. It plans, delegates and
-reviews; workers produce scoped results. Known event waits release execution
-capacity. See [phase workflows](architecture.md#phase-workflows).
-Explicit `phase.orchestrated: true` retains the previous supervisor path for
-deployments that still select it. Existing automations and retained catalogs are
-not converted by a source update. An enabled automation owns at most one
-unfinished assignment.
-Other phases use the same
-command with their typed phase configuration from `/api/v3/schema`; postprocessing
-can begin directly from an existing workspace without a preprocessing/main run.
+Launch IDs are durable idempotency keys. The recipe selects objective mode by
+default; an existing deployment's legacy workflow must specify
+`"orchestration": "legacy"`. The simpler objective-only command defaults to enabled
+hosts and the phases supported by the project repositories:
 
-For milestone preprocessing, clone the roadmap knowledge repository into its
+```sh
+horizon-pipeline --config /absolute/path/pipeline/server.json launch-objective OBJECTIVE_UUID \
+  --operator operator
+horizon-pipeline --config /absolute/path/pipeline/server.json launch-objective OBJECTIVE_UUID \
+  --operator operator --apply
+```
+
+Use repeated `--phase` options for a requested subset beginning with preprocessing,
+`--human-approval` to pause at phase boundaries, and `--queue-policies` for a JSON
+mapping of category slots/bounds/budgets/provider defaults. A run recipe can start
+at formalization with a graph objective directly, or at postprocessing using
+exact workspace source inputs. Explicit compatibility workflows retain typed
+baseline inputs. An
+already-active objective is resumed instead of launching another owner.
+
+Apply migrations through `0030_optional_subagent_limits` explicitly before starting this
+code. Revision 0028 introduced objective queues; 0029 adds default graph planning
+and recorded phase transitions without a compulsory milestone snapshot.
+Revision 0030 allows uncapped native delegation for new harness bindings; existing
+subagent limits, provider quotas and execution reservations are preserved.
+Existing run and policy rows keep their legacy/default-required behavior; no live
+run or pinned instruction bundle is converted. Review a new objective launch
+separately before changing existing automation ownership. No destructive downgrade
+is provided; recovery uses a verified backup.
+
+For explicit `workflow: milestones` compatibility preprocessing, clone the roadmap knowledge repository into its
 registered host path and check out the registered branch and pinned head, then
 run `verify-workspaces --apply`. Automatic assignment worktree provisioning does
 not prepare persistent knowledge-repository checkouts. Verification workers need
@@ -391,11 +464,37 @@ daemon starts; unattended jobs must not depend on interactive login or upgrades.
 The current Codex adapter accepts `deny` with `read_only`/`workspace_write`, or
 `preauthorized` with an externally isolated rootless sandbox. The Claude adapter
 accepts read-only tools or externally isolated execution with the supported tool
-allowlist. Unsupported settings fail closed. Claude native subagent concurrency
-cannot be bounded reliably by this adapter, so its host/harness binding must set
-`max_parallel_subagents` to zero; Codex can enforce the configured bound. Disabled
-auto-compaction and unsupported approval/tool settings are rejected rather than
-silently ignored.
+allowlist. Unsupported settings fail closed. Native subagents have no
+Horizon-imposed cap by default: omit `max_parallel_subagents` from the host/harness
+binding, or set it to `null`. Provider-native limits and tool permissions still
+apply. Zero explicitly disables native delegation; a positive value opts into a
+Codex cap and reserves bounded child capacity alongside the parent. Planners and
+one-slot hosts retain native delegation when the setting is uncapped. Claude’s
+adapter supports uncapped delegation or disabling it, but rejects a positive cap
+because it cannot reliably enforce one. Explicit shared provider quotas still
+govern admission, and uncapped children are accounted for as they are observed.
+New objective launches without a provider quota create an outage guard with no
+normal concurrency cap. After a provider failure, it allows one recovery probe
+at a time; repeated failures still open the circuit.
+Existing bindings keep their settings after migration; set their value to `null`
+explicitly to opt into uncapped delegation. Existing provider quotas are separate:
+set their `max_concurrent` to `null` to retain outage protection without a quota.
+Build pools always require a positive concurrency bound. Disabled auto-compaction and
+unsupported approval/tool settings are rejected rather than silently ignored.
+
+Native capabilities are enabled in the normal container profile. Codex uses the
+newer multi-agent mode and live web search; Claude loads its native settings,
+plugins, hooks and MCP configuration, with the provider's current default tools.
+Configure these in the dedicated provider home or workspace. For an explicit
+override, harness `settings` accepts `codex_multi_agent_v2: false`,
+`codex_web_search: "cached"` or `"disabled"`, and
+`claude_native_configuration: false`. Read-only Claude runs retain restricted
+settings and MCP discovery. An explicit Claude tool list selects native tools
+without Horizon maintaining a separate catalog for writable runs.
+Claude's idle background-helper ceiling is disabled inside the supervised run;
+Horizon still enforces the execution deadline and lease.
+See [native provider capabilities](agent-context.md#native-provider-capabilities)
+for the audited defaults and remaining execution bounds.
 
 Each local harness may specify an `environment` object for tool visibility. Only
 `PATH`, `ELAN_HOME`, `LAKE_HOME`, `LEAN_PATH`, `LEAN_SRC_PATH`, `XDG_CACHE_HOME`,
@@ -606,6 +705,21 @@ with one expensive build per host. Increase `max_parallel_builds` only after
 measuring peak RAM, leaving room for active language servers and the worker.
 Use container CPU/memory limits as the enforcement boundary; the build-slot
 budget coordinates cooperating helper calls, not arbitrary shell commands.
+Trusted Lean/library audits use that same compiler budget. Set `lean_checks: true`
+to enable the generic library lane, independently of agent `slots`. It requires
+an explicitly unrestricted managed-build host profile. Queue a ready library
+workspace with `POST /api/v3/lean/verifications` and `workspace_id`,
+`source_commit_oid`, `base_commit_oid`; follow its status and `check_id` using
+`GET /api/v3/lean/verifications/{id}` and `GET /api/v3/lean/checks/{id}`.
+`milestone_checks` and old milestone endpoints remain compatibility options for
+existing strict projects. New graph planning requires neither flag nor a
+milestone manifest. Checks audit exact-source elaboration and admissions; agents
+and maintainers assess statement meaning and integration quality.
+`max_parallel_preparations` separately bounds host-wide dependency downloads and
+checkout copies (default 1). Per-repository locks still coalesce identical Git
+fetches, and cache restoration during a build shares its compiler lane. These
+limits apply to managed helpers; native shell commands remain subject to the
+configured process/container limits.
 
 `lean_build.root` is explicit build storage outside journal,
 credentials, workspaces, provider homes, and scratch. Every container harness

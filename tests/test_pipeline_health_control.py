@@ -4,24 +4,14 @@ import pytest
 from sqlalchemy import func, select
 
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.health_control import (
-    ControlPlanSpec,
-    HealthIssueSpec,
-    HealthSnapshotSpec,
-    Scope,
-    apply_control_plan,
-    capture_health_snapshot,
-    propose_control_plan,
-    supervision_activity,
-    upsert_health_issue,
-)
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.operations.health_control import ControlPlanSpec, HealthIssueSpec, HealthSnapshotSpec, Scope, apply_control_plan, capture_health_snapshot, propose_control_plan, supervision_activity, upsert_health_issue
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # Reuse isolated PostgreSQL fixtures.
 
 
 def test_supervision_separates_journal_churn_from_work_and_scopes_owners(world):
-    from archon_horizon.pipeline.intent_reconciliation import JOURNAL_BLOCKER_PREFIX, INTENT_REPAIR_PREFIX
+    from archon_horizon.pipeline.execution.intent_reconciliation import JOURNAL_BLOCKER_PREFIX, INTENT_REPAIR_PREFIX
 
     run = world.run()
     world.disable_automations(run)

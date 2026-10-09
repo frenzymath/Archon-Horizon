@@ -4,15 +4,19 @@
   "api_url": "https://horizon.example.org",
   "token_file": "/absolute/private/worker-token",
   "journal_root": "/absolute/pipeline/worker-journal",
-  "workspace_roots": ["/absolute/formalization-workspaces"],
+  "workspace_roots": [
+    "/absolute/formalization-workspaces"
+  ],
   "slots": 2,
   "cleanup_target_free_percent": 20,
   "max_request_seconds": 3600,
   "max_execution_seconds": 14400,
+  "lean_checks": false,
   "milestone_checks": false,
   "lean_build": {
     "root": "/absolute/pipeline/lean-build",
     "max_parallel_builds": 1,
+    "max_parallel_preparations": 1,
     "timeout_seconds": 1800,
     "queue_timeout_seconds": 30,
     "minimum_free_bytes": 1073741824,
@@ -56,5 +60,12 @@
     }
   ],
   "publication_remotes": {},
-  "publication_header_files": {}
+  "publication_header_files": {},
+  "resource_policy": {
+    "enabled": true,
+    "minimum_available_memory_bytes": 1073741824,
+    "maximum_memory_psi_avg10": 20,
+    "maximum_io_psi_avg10": 50,
+    "maximum_cpu_psi_avg10": 95
+  }
 }

@@ -6,10 +6,10 @@ from uuid import uuid4
 
 from sqlalchemy import event, insert, select, text
 
-from archon_horizon.pipeline.readmodels import assignments
-from archon_horizon.pipeline.records import get
-from archon_horizon.pipeline.references import identifier_expression
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.dashboard.readmodels import assignments
+from archon_horizon.pipeline.persistence.records import get
+from archon_horizon.pipeline.projects.references import identifier_expression
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world  # noqa: F401
 
 

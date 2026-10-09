@@ -5,12 +5,12 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from archon_horizon.pipeline.connectors import ConnectorFailure, ConnectorManager, ForgejoClient
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ConnectorManager, ForgejoClient
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get, object_ref
-from archon_horizon.pipeline.reviewer_invocations import prepare
-from archon_horizon.pipeline.reviews import postprocessing_review_panel, queue_merge, queue_review
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get, object_ref
+from archon_horizon.pipeline.review.invocations import prepare
+from archon_horizon.pipeline.review.decisions import postprocessing_review_panel, queue_merge, queue_review
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_reviewer_invocations import review  # noqa: F401
 from test_pipeline_service import service_database, world  # noqa: F401
 

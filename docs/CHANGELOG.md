@@ -10,6 +10,21 @@ service configuration and catalog updates.
 
 ## [Unreleased]
 
+## [0.2.0-alpha.2] — 2026-10-09
+
+- Align Python, frontend and README version metadata with the second alpha
+  snapshot. Preserve `v0.2.0-alpha.1` and add the historical `v0.1.5` release tag.
+
+- Graph milestones use a star shape, including historical `type: milestone`
+  nodes. The Nodes directory combines milestone, type, progress, and text filters
+  with accurate pagination; custom node types are discovered from project sources.
+
+- References now store PDFs, original TeX, archives, and companion documents in
+  durable project artifacts. The dashboard supports upload, preview, download,
+  and archive; dispatched agents can list, upload, and retrieve files with
+  checksum verification and durable transfer recovery. Apply migration
+  `0031_reference_files` before restarting an existing control plane.
+
 ### Pipeline redesign
 
 - `horizon`, `horizon-pipeline`, and `python -m archon_horizon` now enter the
@@ -591,7 +606,8 @@ a **Ground agent** (blueprints, DAG, roadmap, reports, inboxes) and a
 - **Install / update.** `curl … | bash` installer (`install.sh`) and a
   `horizon update` self-update command.
 
-[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/frenzymath/Archon-Horizon/compare/v0.2.0-alpha.2...HEAD
+[0.2.0-alpha.2]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.5...v0.2.0-alpha.2
 [0.1.5]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/frenzymath/Archon-Horizon/compare/v0.1.2...v0.1.3

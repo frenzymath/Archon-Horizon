@@ -10,21 +10,27 @@ import pytest
 from sqlalchemy import func, insert, select, text, update
 
 from archon_horizon.pipeline import models
-from archon_horizon.pipeline.artifacts import ArtifactStore
+from archon_horizon.pipeline.persistence.artifacts import ArtifactStore
 from archon_horizon.pipeline.auth import Actor, authenticate, live_execution
 from archon_horizon.pipeline.config import PipelineConfig
 from archon_horizon.pipeline.commands import Command, execute as execute_command
-from archon_horizon.pipeline.database import Database
+from archon_horizon.pipeline.persistence.database import Database
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import create, get, snapshot, transaction_lock
-from archon_horizon.pipeline.scheduler import Scheduler
-from archon_horizon.pipeline.schema import tables
-from archon_horizon.pipeline.service import Service
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle as handle_worker_operation
+from archon_horizon.pipeline.persistence.records import create, get, snapshot, transaction_lock
+from archon_horizon.pipeline.execution.scheduler import Scheduler
+from archon_horizon.pipeline.persistence.schema import tables
+from archon_horizon.pipeline.missions.service import Service
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle as handle_worker_operation
 
 
 class HistoricalScheduler(Scheduler):
     """Seed persisted legacy profiles for lifecycle compatibility fixtures."""
+
+    @staticmethod
+    def validate_launch_profile(data):
+        # These fixtures reconstruct historical persisted runs. Production
+        # Scheduler rejects newly requested orchestrator profiles separately.
+        pass
 
     @staticmethod
     def automation_specs(run, phase, project_id, phase_repository_ids):
@@ -79,7 +85,7 @@ class World:
             mission_id=self.mission["id"],
             phase={"kind": "preprocessing", "roadmap_document_id": self.document["id"],
                    "orchestrated": orchestrated},
-            host_ids=[self.host["id"]], **kwargs))
+            host_ids=[self.host["id"]], orchestration=kwargs.pop("orchestration", "legacy"), **kwargs))
         self.mission = get(self.conn, "mission", self.mission["id"])
         return row
 
@@ -244,7 +250,7 @@ def test_maintainer_waits_for_new_evidence_after_changes_requested(world, unlock
         **maintainer["start_condition"]["expression"], "op": "forge_open_count"}}}
     assert world.service.readiness(world.conn, literal, now).ready
     if unlock == "new_head":
-        from archon_horizon.pipeline.records import change
+        from archon_horizon.pipeline.persistence.records import change
         change(world.conn, "forge_item", item["id"], head_commit_oid="b" * 40)
     else:
         create(world.conn, "forge_review", forge_item_id=item["id"], remote_id="review-2",
@@ -272,7 +278,7 @@ def test_disabled_automation_blocks_existing_pending_occurrence(world):
 
 
 def test_idle_recheck_wakes_only_planner_and_retains_recurring_rule(world):
-    from archon_horizon.pipeline.records import change
+    from archon_horizon.pipeline.persistence.records import change
     run = world.run()
     now = world.conn.execute(select(func.now())).scalar_one()
     a, au = tables["assignment"], tables["automation"]
@@ -332,7 +338,7 @@ def test_postprocessing_maintainer_ignores_other_repository_backlogs(world):
         review_policy_id=policy["id"], repository_id=library["id"]))
     workspace = world.conn.execute(select(tables["workspace"]).where(
         tables["workspace"].c.project_id == world.project["id"])).mappings().first()
-    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(
+    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(orchestration="legacy",
         mission_id=world.mission["id"], host_ids=[world.host["id"]],
         phase={"kind": "postprocessing", "source_workspace_id": workspace["id"],
                "source_commit_oid": "a" * 40, "target_repository_id": library["id"]}))
@@ -734,7 +740,7 @@ def test_adoption_updates_effective_baseline_and_preserves_initial_phase(world):
     snapshots = [create(world.conn, "roadmap_snapshot", project_id=world.project["id"],
         roadmap_document_id=world.document["id"], source_commit_oid=oid * 40,
         graph_manifest_artifact_id=artifact["id"]) for oid in ("a", "b")]
-    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(mission_id=world.mission["id"],
+    run = world.scheduler.run(world.conn, world.actor, models.RunCreate(orchestration="legacy", mission_id=world.mission["id"],
         phase={"kind": "formalization", "roadmap_snapshot_id": snapshots[0]["id"]}, host_ids=[world.host["id"]]))
     adopted = world.command("adopt_roadmap_snapshot", run, snapshot_id=str(snapshots[1]["id"]))
     assert adopted["adopted_roadmap_snapshot_id"] == snapshots[1]["id"]

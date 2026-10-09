@@ -3,9 +3,9 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
-from archon_horizon.pipeline.conditions import Evaluation, Truth, evaluate
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.missions.conditions import Evaluation, Truth, evaluate
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 
@@ -131,7 +131,7 @@ def test_blocked_event_checkpoint_does_not_bypass_settlement_or_execution_guards
             execution_id=claim["execution_id"], number=number, reason="continuation", status="completed",
             created_at=now - timedelta(minutes=3 - number), finished_at=now)
     if blocker == "control":
-        from archon_horizon.pipeline.notifications import OperatorNotice, operator_notice
+        from archon_horizon.pipeline.execution.notifications import OperatorNotice, operator_notice
         operator_notice(world.conn, world.actor, assignment["id"],
             OperatorNotice(message="Account for the failed publication before waiting"))
     elif blocker == "failed_delivery":

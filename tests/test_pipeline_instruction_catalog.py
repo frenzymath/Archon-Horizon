@@ -1,9 +1,14 @@
-from archon_horizon.pipeline.instruction_catalog import read_catalog
+from archon_horizon.pipeline.instructions.instruction_catalog import read_catalog
 from test_pipeline_api import api, api_database, auth  # noqa: F401
 
 
 def test_reviewer_skills_resolve_and_catalog_is_lazy():
     catalog = read_catalog()
+    assert {row["name"] for row in catalog["prompts"]} >= {
+        "core", "objective-planner", "reviewer/start", "legacy/orchestrator"}
+    for prompt in catalog["prompts"]:
+        assert prompt["path"] in catalog["files"]
+        assert read_catalog(path=prompt["path"])["content"]
     names = {row["name"] for row in catalog["skills"]}
     assert {"horizon-workspace", "horizon-zulip", "source-research", "lean-performance", "statement-alignment"} <= names
     assert len(catalog["reviewers"]) == 11
@@ -35,6 +40,9 @@ def test_catalog_api_authentication_cache_and_bounded_files(api):
     assert "private" in response.headers["cache-control"]
     assert client.get(path, headers={**auth(token), "If-None-Match": response.headers["etag"]}).status_code == 304
     skill = response.json()["skills"][0]
+    prompt = next(row for row in response.json()["prompts"] if row["name"] == "reviewer/start")
+    preview = client.get(path + "/file", params={"path": prompt["path"]}, headers=auth(token))
+    assert preview.status_code == 200 and "{{packet}}" in preview.json()["content"]
     file = client.get(path + "/file", params={"path": skill["path"]}, headers=auth(token))
     assert file.status_code == 200
     assert "SKILL.md" in file.json()["path"]

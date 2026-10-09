@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from archon_horizon.pipeline.search import SearchManager, SourceSpec, _tree_bytes
+from archon_horizon.pipeline.projects.search import SearchManager, SourceSpec, _tree_bytes
 
 
 def git(root: Path, *args: str) -> str:

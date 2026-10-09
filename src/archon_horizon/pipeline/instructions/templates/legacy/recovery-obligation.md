@@ -1,0 +1,1 @@
+{{cause}}. Inspect the failed outcome and existing owners before resuming work. Use an on-demand diagnostic subagent if the cause is unclear. Preserve useful artifacts, repair or delegate the concrete cause, and record evidence or a justified external wait. Do not repeat unchanged work or launch another standing coordinator.

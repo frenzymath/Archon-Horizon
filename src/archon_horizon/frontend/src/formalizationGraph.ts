@@ -33,6 +33,8 @@ export const graphStatusColors: Record<string, [string, string]> = {
   informal_stated: ["#4e738c", "#dce8f0"],
   "statement-aligned": ["#7b3f98", "#eadcf2"],
   candidate: ["#bc913d", "#fcf4d9"],
+  // A kernel pass may still admit sorry or the wrong statement; keep it amber.
+  kernel_checked: ["#bc913d", "#fcf4d9"],
   failed: ["#bd6767", "#f8e4e4"],
   archived: ["#9da6af", "#edf0f3"],
   stale: ["#c18b4b", "#fbeddc"],
@@ -47,6 +49,9 @@ export function nodeLabels(item: FormalizationItem): string[] {
   const labels = Array.isArray(listed) ? listed.map(normalizeLabel) : [];
   const stage = normalizeLabel(item.stage || item.metadata?.stage);
   if (stage) labels.push(stage);
+  // Older roadmaps used a node type; current roadmaps use an independent label.
+  // Both describe the same display marker, without changing proof progress.
+  if (normalizeLabel(item.kind || item.metadata?.type) === "milestone") labels.push("milestone");
   return [...new Set(labels)].filter((label) => label && label !== "potentially_outdated" && label !== "potentially-outdated");
 }
 
@@ -153,6 +158,8 @@ export function nodeHasLabel(item: FormalizationItem, wanted: string): boolean {
 
 const dotQuote = (value: string) => `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\r\n\t\u0000-\u001f\u007f]/g, " ")}"`;
 function dotLabel(value: string): string {
+  // Presentation bounds: cap labels at 92 code points and wrap at 28, so one
+  // long identifier cannot dominate a graph. These are tunable layout choices.
   const chars = Array.from(value.replace(/\s+/g, " ").trim());
   const text = chars.length > 92 ? `${chars.slice(0, 89).join("")}...` : chars.join("");
   const lines: string[] = [];
@@ -180,7 +187,7 @@ export function formalizationDot(model: FormalizationModel): string {
       .map((item) => progressLabelTitles[item]).join(" · ");
     const extra = [progress, pulls ? `${pulls} PR${pulls === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
     const label = math ? 'label="",width=3.8,height=1.7,fixedsize=true' : `label="${dotLabel(String(title))}\\n${dotLabel(identifier)}${extra ? `\\n${dotLabel(extra)}` : ""}"`;
-    lines.push(`${vertex.dotId} [shape=${isDefinition(vertex.item) ? "box" : "ellipse"},${label},color=${dotQuote(border)},fillcolor=${dotQuote(fill)},penwidth=${vertex.key === model.focusKey ? 2.5 : milestone ? 2.2 : 1.4},peripheries=${milestone ? 2 : 1},tooltip=${dotQuote(identifier)}];`);
+    lines.push(`${vertex.dotId} [shape=${milestone ? "star" : isDefinition(vertex.item) ? "box" : "ellipse"},${label},color=${dotQuote(border)},fillcolor=${dotQuote(fill)},penwidth=${vertex.key === model.focusKey ? 2.5 : milestone ? 2.2 : 1.4},tooltip=${dotQuote(identifier)}];`);
   }
   // Lean blueprint direction: prerequisites above their dependent conclusions.
   for (const [parent, child] of model.edges) lines.push(`${model.byKey.get(child)!.dotId} -> ${model.byKey.get(parent)!.dotId};`);

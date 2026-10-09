@@ -6,10 +6,10 @@ import pytest
 from sqlalchemy import select, update
 
 from archon_horizon.pipeline.auth import Actor
-from archon_horizon.pipeline.communications import queue_reply
-from archon_horizon.pipeline.connectors import ConnectorFailure, ZulipClient
-from archon_horizon.pipeline.records import create, get, transaction_lock
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.integrations.communications import queue_reply
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ZulipClient
+from archon_horizon.pipeline.persistence.records import create, get, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_connectors import connector_world, manager
 
 

@@ -97,6 +97,7 @@ version = { attr = "archon_horizon.__version__" }
     "pipeline/skills/**/*.md",
     "pipeline/skills/**/scripts/*.py",
     "pipeline/subagents/**/*.md",
+    "pipeline/instructions/templates/**/*.md",
     "frontend/dist/**/*",
 ]
 

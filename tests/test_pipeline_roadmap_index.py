@@ -4,11 +4,11 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select, update
 
-from archon_horizon.pipeline import readmodels
+from archon_horizon.pipeline.dashboard import readmodels
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.integration_views import project_integrations
+from archon_horizon.pipeline.integrations.integration_views import project_integrations
 from archon_horizon.pipeline.roadmap_index import index_snapshot
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_service import service_database, world
 
 
@@ -56,7 +56,7 @@ def test_source_metadata_is_not_used_for_another_commit(world):
 
 def test_public_links_never_expose_internal_loopback_and_use_override(world):
     from datetime import datetime, timezone
-    from archon_horizon.pipeline.records import create
+    from archon_horizon.pipeline.persistence.records import create
 
     integration_id = world.workspace_repo["integration_id"]
     world.conn.execute(update(tables["integration"]).where(tables["integration"].c.id == integration_id)

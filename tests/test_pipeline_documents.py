@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from archon_horizon.pipeline.documents import parse_document
+from archon_horizon.pipeline.projects.documents import parse_document
 
 
 def test_frontmatter_preserves_body_and_normalizes_dates():

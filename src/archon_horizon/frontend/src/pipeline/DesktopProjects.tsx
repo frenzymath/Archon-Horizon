@@ -1,21 +1,22 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, CircleDot, ExternalLink, GitBranch, Map as MapIcon, Network, Plus, RefreshCw, Search, Settings2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleDot, ExternalLink, GitBranch, Map as MapIcon, Network, Plus, RefreshCw, Search, Settings2, Star } from "lucide-react";
 import MathTitle from "../components/MathTitle";
 import RecordDates from "../components/RecordDates";
 import { NodeProgressLabels } from "../components/TagList";
-import { progressLabelTitles } from "../formalizationGraph";
+import { nodeHasLabel, progressLabelTitles } from "../formalizationGraph";
 import { composeDocument } from "../utils/document";
 import { request, type Project, type Run } from "./api";
 import { useRead } from "./queries";
 import RunPhase from "./RunPhase";
 const DesktopMissions = lazy(() => import("./DesktopMissions"));
 const Milestones = lazy(() => import("./Milestones"));
+const DesktopReferences = lazy(() => import("./DesktopReferences"));
 
 const DocumentView = lazy(() => import("../components/DocumentView"));
 const FormalizationDAG = lazy(() => import("../components/FormalizationDAG"));
 type Item = Record<string, any>;
 type Props = {accountId: string; projects: Project[]; projectId: string; view: string;
-  selection: {node?: string; objective?: string}; writable: boolean; admin: boolean;
+  selection: {node?: string; objective?: string; reference?: string}; writable: boolean; admin: boolean;
   onNavigate: (values: Record<string, string>) => void; onCreate: () => void; onEditProject?: () => void};
 const date = (value?: string) => value ? new Date(value).toLocaleString() : "";
 const pathFor = (project: string) => `/projects/${encodeURIComponent(project)}/dashboard`;
@@ -68,32 +69,37 @@ export default function DesktopProjects({accountId, projects, projectId, view, s
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [label, setLabel] = useState("");
+  const [nodeType, setNodeType] = useState("");
+  const [nodeTypes, setNodeTypes] = useState<string[]>([]);
+  const [milestone, setMilestone] = useState("");
   const [page, setPage] = useState(0);
   const [target, setTarget] = useState("");
-  useEffect(() => {setTarget("");}, [projectId]);
+  useEffect(() => {setTarget(""); setNodeTypes([]);}, [projectId]);
   const targetQuery = target ? `&target_repository_id=${encodeURIComponent(target)}` : "";
   const targets = useRead<{target_repository_id: string | null; targets: Item[]}>(accountId, "roadmap", projectId,
     `${pathFor(projectId)}/graph-targets`, !!projectId && ["graph", "nodes", "node", "node-dag", "roadmap"].includes(view));
-  useEffect(() => {setSearch(""); setQuery(""); setPage(0); setLabel("");}, [projectId, view]);
+  useEffect(() => {setSearch(""); setQuery(""); setPage(0); setLabel(""); setNodeType(""); setMilestone("");}, [projectId, view]);
   useEffect(() => {const timer = window.setTimeout(() => {setQuery(search); setPage(0);}, 180); return () => window.clearTimeout(timer);}, [search]);
   const base = pathFor(projectId);
   const project = projects.find(item => item.id === projectId);
   const overview = useRead<Item>(accountId, "projects", projectId, `${base}/overview`, !!projectId && view === "overview");
   const runs = useRead<{runs: Run[]}>(accountId, "assignments", projectId,
     `/dashboard/activity/runs?project_id=${encodeURIComponent(projectId)}&limit=5`, !!projectId && view === "overview");
-  const directory = useRead<{nodes: Item[]; total: number}>(accountId, "roadmap", projectId,
-    `${base}/nodes?search=${encodeURIComponent(query)}&label=${encodeURIComponent(label)}&offset=${page * 50}&limit=50${targetQuery}`, !!projectId && view === "nodes");
+  const directory = useRead<{nodes: Item[]; total: number; types: string[]}>(accountId, "roadmap", projectId,
+    `${base}/nodes?search=${encodeURIComponent(query)}&label=${encodeURIComponent(label)}&node_type=${encodeURIComponent(nodeType)}${milestone ? `&milestone=${milestone}` : ""}&offset=${page * 50}&limit=50${targetQuery}`, !!projectId && view === "nodes");
+  // Keep the project-wide selector usable while another filtered page loads.
+  useEffect(() => {if (directory.data?.types) setNodeTypes(directory.data.types);}, [directory.data]);
   const objectives = useRead<{items: Item[]}>(accountId, "roadmap", projectId, `${base}/objectives`, !!projectId && view === "roadmap" && !selection.objective);
   const objective = useRead<Item>(accountId, "roadmap", projectId, `${base}/objectives/${selection.objective || ""}`, !!projectId && view === "roadmap" && !!selection.objective);
   const node = useRead<{node: Item; nodes: Item[]}>(accountId, "roadmap", projectId, `${base}/nodes/${encodeURIComponent(selection.node || "")}?${targetQuery.slice(1)}`,
     !!projectId && ["node", "node-dag"].includes(view) && !!selection.node);
   const graph = useRead<Item>(accountId, "roadmap", projectId, `${base}/graph?${view === "node-dag" ? `focus=${encodeURIComponent(node.data?.node.id || "")}` : ""}${targetQuery}`,
     !!projectId && (view === "graph" || (view === "node-dag" && !!node.data)));
-  const go = (next: Record<string, string>) => onNavigate({tab: "projects", project: projectId, node: "", objective: ["node", "node-dag"].includes(next.view) ? selection.objective || "" : "", ...next});
+  const go = (next: Record<string, string>) => onNavigate({tab: "projects", project: projectId, node: "", reference: "", objective: ["node", "node-dag"].includes(next.view) ? selection.objective || "" : "", ...next});
   const openNode = (item: Item) => go({view: "node", node: String(item.id)});
   const activeReads = view === "overview" ? [overview] : view === "nodes" ? [directory]
     : view === "roadmap" ? [selection.objective ? objective : objectives]
-    : view === "missions" ? [] : view === "graph" ? [graph] : [node, graph];
+    : ["missions", "references"].includes(view) ? [] : view === "graph" ? [graph] : [node, graph];
   const error = activeReads.find(item => item.error)?.error;
   const searchField = (name: string) => <label className="platform-search-field"><Search size={16} /><input aria-label={`Search ${name}`} placeholder={`Search ${name}`} value={search} onChange={event => setSearch(event.target.value)} /></label>;
   const current = overview.data || project;
@@ -133,7 +139,7 @@ export default function DesktopProjects({accountId, projects, projectId, view, s
         <div className="platform-roadmap-tools"><button className="platform-text-button" onClick={() => go({view: "roadmap"})}><ChevronLeft size={14} />All objectives</button>
           {objective.data?.source_url && <a className="platform-node-repo-link" href={objective.data.source_url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Forgejo</a>}</div>
         {objective.data ? <><Heading title={objective.data.title} item={objective.data} /><SourceDocument item={objective.data} roadmap projectId={projectId} onNode={openNode} target={target} />
-          {(objective.data.metadata?.milestones || project?.workflow === "milestones") && <Suspense fallback={<Empty>Loading milestones...</Empty>}>
+          {project?.workflow === "milestones" && <Suspense fallback={<Empty>Loading milestones...</Empty>}>
             <Milestones key={objective.data.id} accountId={accountId} projectId={projectId} documentId={objective.data.id} writable={writable}
               onNode={key => openNode({id: key})} onRun={id => onNavigate({tab: "activity", project: projectId, run: id, session: ""})}/>
           </Suspense>}</> : <Empty>Loading objective...</Empty>}
@@ -143,11 +149,18 @@ export default function DesktopProjects({accountId, projects, projectId, view, s
           <MapIcon size={17} /><span className="platform-claim-copy"><strong>{item.title}</strong><small>Revision {item.revision}</small></span><small className="platform-updated">{date(item.updated_at)}</small><ChevronRight size={16} />
         </button>)}{!objectives.data?.items.length && <Empty>{objectives.isLoading ? "Loading objectives..." : "No objectives"}</Empty>}
       </>}</section>}
-      {view === "nodes" && <section><Heading title="Nodes" /><div className="platform-toolbar">{searchField("nodes")}<select aria-label="Node label" className="platform-filter-select" value={label} onChange={event => {setLabel(event.target.value); setPage(0);}}>
-        <option value="">All labels</option>{Object.entries(progressLabelTitles).map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></div>
+      {view === "nodes" && <section><Heading title="Nodes" /><div className="platform-toolbar">{searchField("nodes")}
+        <label>Milestones <select aria-label="Milestone filter" className="platform-filter-select" value={milestone} onChange={event => {setMilestone(event.target.value); setPage(0);}}>
+          <option value="">All nodes</option><option value="true">Milestones only</option><option value="false">Other nodes</option></select></label>
+        <label>Type <select aria-label="Node type" className="platform-filter-select" value={nodeType} onChange={event => {setNodeType(event.target.value); setPage(0);}}>
+          <option value="">All types</option>{nodeTypes.map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, " ")}</option>)}</select></label>
+        <label>Progress <select aria-label="Node label" className="platform-filter-select" value={label} onChange={event => {setLabel(event.target.value); setPage(0);}}>
+          <option value="">All progress</option>{Object.entries(progressLabelTitles).map(([value, title]) => <option key={value} value={value}>{title}</option>)}</select></label>
+        {(search || label || nodeType || milestone) && <button type="button" className="platform-text-button" onClick={() => {setSearch(""); setQuery(""); setLabel(""); setNodeType(""); setMilestone(""); setPage(0);}}>Clear filters</button>}
+      </div>
         <div className="platform-directory-label"><span>{directory.data?.total || 0} nodes</span><span>Labels</span></div>
         <div className="platform-claim-rows">{directory.data?.nodes.map(item => <div className="platform-node-directory-item" key={item.id}><div className="platform-node-list-row">
-          <button className="platform-node-list-link" onClick={() => openNode(item)}><CircleDot size={17} /><span><strong><MathTitle title={item.title} metadata={item.metadata} /></strong><small>{item.kind} <code className="platform-node-label">{item.label}</code></small><RecordDates item={item} /></span></button>
+          <button className="platform-node-list-link" onClick={() => openNode(item)}>{nodeHasLabel(item, "milestone") ? <Star size={17} aria-label="Milestone" /> : <CircleDot size={17} />}<span><strong><MathTitle title={item.title} metadata={item.metadata} /></strong><small>{item.kind} <code className="platform-node-label">{item.label}</code></small><RecordDates item={item} /></span></button>
           <NodeProgressLabels labels={item.labels || []} /></div></div>)}</div>
         {!directory.data?.nodes.length && <Empty>{directory.isLoading ? "Loading nodes..." : "No matching nodes"}</Empty>}
         <Pagination page={page} total={directory.data?.total || 0} onChange={setPage} />
@@ -161,6 +174,8 @@ export default function DesktopProjects({accountId, projects, projectId, view, s
       </section>}
       {view === "missions" && <Suspense fallback={<Empty>Loading missions...</Empty>}><DesktopMissions key={`${accountId}:${projectId}`} accountId={accountId} projectId={projectId} writable={writable} onNavigate={onNavigate}
         renderDocument={(mission, close) => <SourceDocument projectId={projectId} item={{...mission, markdown: mission.objective}} roadmap onNode={item => {close(); openNode(item);}} />} /></Suspense>}
+      {view === "references" && <Suspense fallback={<Empty>Loading references...</Empty>}><DesktopReferences key={`${accountId}:${projectId}`} accountId={accountId} projectId={projectId} referenceId={selection.reference} writable={writable}
+        onSelect={reference => go({view: "references", reference})}/></Suspense>}
     </>}
   </>;
 }

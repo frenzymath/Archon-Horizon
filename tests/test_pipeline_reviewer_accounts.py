@@ -7,10 +7,10 @@ import stat
 import httpx
 import pytest
 
-from archon_horizon.pipeline.connectors import ConnectorFailure, ForgejoClient, SecretResolver
+from archon_horizon.pipeline.integrations.connectors import ConnectorFailure, ForgejoClient, SecretResolver
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.reviewer_accounts import credentials, ensure_project_accounts, _write_secret
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.review.accounts import credentials, ensure_project_accounts, _write_secret
 from archon_horizon.pipeline.worker.contracts import ExecutionGrant
 from archon_horizon.pipeline.worker.transport import WorkerTransport
 from test_pipeline_reviewer_invocations import review  # noqa: F401

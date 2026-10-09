@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, LocateFixed, Maximize, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUpRight, LocateFixed, Maximize, RotateCcw, Star, ZoomIn, ZoomOut } from "lucide-react";
 import { cachedLayout, layoutDot } from "../vizInstance";
 import { buildFormalizationGraph, fitGraphTransform, formalizationDot, nodeHasLabel, nodeLabels, progressLabelPriority, progressLabelTitles, zoomGraphAt } from "../formalizationGraph";
 import type { FormalizationItem, GraphTransform } from "../formalizationGraph";
@@ -267,7 +267,7 @@ export default function FormalizationDAG({ graph, focusId = "", onOpenNode, acti
       <button type="button" aria-label="Reset graph view" title="Reset graph view" onClick={() => { setSelectedKey(model.focusKey); fit(); }}><RotateCcw size={16} /></button>
       </div>
         </div>
-        <div className="formalization-dag-legend" aria-label="Graph legend"><span>Progress:</span>{progressLabelPriority.map((label) => <span key={label}><i className={label === "formally_proved" ? "formalized" : label} /> {progressLabelTitles[label]}</span>)}<span><i className="milestone" /> Milestone</span><span><i className="definition" /> Definition</span><span><i className="active" /> Active mission</span><span><i className="incoming" /> Prerequisite</span><span><i className="outgoing" /> Dependent</span><span className="formalization-dag-direction-note">Arrows point from prerequisite to dependent</span>{model.hasCycle && <span className="formalization-dag-cycle" role="status">Dependency cycle</span>}</div>
+        <div className="formalization-dag-legend" aria-label="Graph legend"><span>Progress:</span>{progressLabelPriority.map((label) => <span key={label}><i className={label === "formally_proved" ? "formalized" : label} /> {progressLabelTitles[label]}</span>)}<span><Star className="formalization-dag-milestone-symbol" size={16} aria-hidden="true" /> Milestone</span><span><i className="definition" /> Definition</span><span><i className="active" /> Active mission</span><span><i className="incoming" /> Prerequisite</span><span><i className="outgoing" /> Dependent</span><span className="formalization-dag-direction-note">Arrows point from prerequisite to dependent</span>{model.hasCycle && <span className="formalization-dag-cycle" role="status">Dependency cycle</span>}</div>
         <div className="formalization-dag-canvas" ref={canvasRef}
           onPointerDown={(event) => {
             if (event.button !== 0) return;

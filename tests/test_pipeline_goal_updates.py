@@ -7,9 +7,9 @@ from sqlalchemy import select
 from archon_horizon.pipeline import models
 from archon_horizon.pipeline.auth import authenticate
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get, save_blob, snapshot
-from archon_horizon.pipeline.schema import tables
-from archon_horizon.pipeline.worker_events import WorkerOperation, handle
+from archon_horizon.pipeline.persistence.records import change, create, get, save_blob, snapshot
+from archon_horizon.pipeline.persistence.schema import tables
+from archon_horizon.pipeline.execution.worker_events import WorkerOperation, handle
 from test_pipeline_service import service_database, world  # noqa: F401
 
 

@@ -11,9 +11,9 @@ from archon_horizon.pipeline import models
 from archon_horizon.pipeline.client import AgentClient
 from archon_horizon.pipeline.command_args import COMMAND_ARGS
 from archon_horizon.pipeline.commands import COMMAND_TARGETS
-from archon_horizon.pipeline.connectors import ForgejoClient
-from archon_horizon.pipeline.records import create, get
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.integrations.connectors import ForgejoClient
+from archon_horizon.pipeline.persistence.records import create, get
+from archon_horizon.pipeline.persistence.schema import tables
 from test_pipeline_api import api, api_database, auth, mutate
 
 
@@ -194,7 +194,7 @@ def test_automation_creation_is_bound_to_run_tree_and_agent_authority(api):
 
 
 def test_resolve_named_branch_then_read_pinned_file(api, monkeypatch):
-    from archon_horizon.pipeline import forge_inspection
+    from archon_horizon.pipeline.integrations import forge_inspection
     client, database, world, _, token, _ = api
     calls = []
     def handler(request):

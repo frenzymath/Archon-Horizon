@@ -6,12 +6,12 @@ from uuid import UUID
 import pytest
 from sqlalchemy import func, select, update
 
-from archon_horizon.pipeline.catalog import CatalogUpdate, create_catalog, update_catalog
+from archon_horizon.pipeline.projects.catalog import CatalogUpdate, create_catalog, update_catalog
 from archon_horizon.pipeline.models import ObligationResolve
 from archon_horizon.pipeline.errors import DomainError
-from archon_horizon.pipeline.records import change, create, get
-from archon_horizon.pipeline.reviews import queue_review
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.records import change, create, get
+from archon_horizon.pipeline.review.decisions import queue_review
+from archon_horizon.pipeline.persistence.schema import tables
 
 from test_pipeline_service import service_database, world
 

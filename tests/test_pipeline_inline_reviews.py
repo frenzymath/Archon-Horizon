@@ -5,7 +5,7 @@ import httpx
 from pydantic import ValidationError
 import pytest
 
-from archon_horizon.pipeline.connectors import ForgejoClient
+from archon_horizon.pipeline.integrations.connectors import ForgejoClient
 from archon_horizon.pipeline.models import ForgeReview
 
 
@@ -42,7 +42,7 @@ def test_inline_findings_share_one_review_and_reconcile_lost_response():
             raise httpx.ReadTimeout("lost review receipt")
         return httpx.Response(200, json={"head": {"sha": "a" * 40}, "state": "open"})
     client = ForgejoClient("https://forge.test", "test-only", client=httpx.Client(transport=httpx.MockTransport(handler)))
-    from archon_horizon.pipeline.connectors import ConnectorFailure
+    from archon_horizon.pipeline.integrations.connectors import ConnectorFailure
     args = {"expected_head": data.commit_oid, "body": data.summary, "verdict": data.verdict,
             "operation_id": "inline-review", "comments": [c.model_dump() for c in data.comments]}
     with pytest.raises(ConnectorFailure) as error:

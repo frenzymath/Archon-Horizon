@@ -12,9 +12,9 @@ from sqlalchemy.exc import OperationalError
 
 from archon_horizon.pipeline.api import create_app
 from archon_horizon.pipeline.auth import PASSWORDS, issue_credential
-from archon_horizon.pipeline.database import Database
-from archon_horizon.pipeline.records import create, transaction_lock
-from archon_horizon.pipeline.schema import tables
+from archon_horizon.pipeline.persistence.database import Database
+from archon_horizon.pipeline.persistence.records import create, transaction_lock
+from archon_horizon.pipeline.persistence.schema import tables
 
 from test_pipeline_service import make_world
 
@@ -100,7 +100,7 @@ def test_reviewer_api_prepares_once_and_exposes_pinned_manifest(api):
         {"native_key": "child-context", "native_invocation_id": "native-call"}, grant["execution_token"])
     assert attached.status_code == 200 and attached.json()["status"] == "submitted", attached.text
     with database.transaction() as conn:
-        from archon_horizon.pipeline.records import change, get
+        from archon_horizon.pipeline.persistence.records import change, get
         repository = get(conn, "repository", item["repository_id"])
         identity = create(conn, "integration_identity", integration_id=repository["integration_id"],
             principal_id=world.actor.id, remote_user_id="specialist", credential_ref="secret:review-test")

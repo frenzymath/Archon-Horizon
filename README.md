@@ -1,32 +1,27 @@
 # Archon Horizon
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
-
-Archon Horizon coordinates automatic Lean formalization across projects and worker
-machines. Missions form a tree of scoped outcomes with explicit acceptance
-criteria. One PostgreSQL control plane schedules their assignments, preserves
-provider context, records progress, and reliably publishes work to Forge. The dashboard
-brings together roadmaps, graphs, missions, Activity, Forgejo, and Zulip.
+![Version](https://img.shields.io/badge/version-0.2.0--alpha.2-blue)
+[![Poincaré conjecture paper](https://img.shields.io/badge/arXiv-2610.08329-b31b1b)](https://arxiv.org/html/2610.08329v1)
 
 > [!WARNING]
-> Archon Horizon is **alpha software**. Interfaces, database schemas, worker
-> contracts, and operational workflows may change between releases.
+> Archon Horizon v0.2.0 is **alpha software** and substantially changes the
+> architecture from [v0.1.5](https://github.com/frenzymath/Archon-Horizon/tree/v0.1.5).
+> Use v0.2.0 for new projects only; keep existing projects on their current version.
 
-> [!IMPORTANT]
-> Version `0.2.0` is a substantial architectural change from `0.1.x`: the
-> control plane now uses PostgreSQL, the API is `/api/v3`, and the dashboard is
-> served at `/pipeline`. The former SQLite runtime and `/api/v2` interfaces are
-> retired.
+Archon Horizon coordinates automatic Lean formalization across projects and worker
+machines. Auto-formalization using Archon Horizon can be fully automatic, but integrates several ways for humans to interact with the system as well. Missions form a tree of scoped outcomes with explicit acceptance
+criteria. One PostgreSQL control plane schedules their assignments, preserves
+provider context, records progress, and reliably publishes work to Forge. Agents can coordinate through a Zulip instance and a Forge instance, where human can directly participate as well. The dashboard
+brings together roadmaps, graphs, missions, Activity, Forgejo, and Zulip.
 
-> [!CAUTION]
-> Migration from `0.1.x` is not automatic or trivial. The new Alembic history
-> does not convert the previous SQLite data model. Use a separate PostgreSQL
-> installation, review the configuration, and run the explicit `migrate`
-> command before operating the new runtime.
+<div align="center" style="text-align: center;">
+  <img src="docs/assets/schema.png" alt="Archon Horizon workflow: preprocessing, formalization, postprocessing, repositories, queues, and parallel agents" width="75%" />
+  <p><em>Archon Horizon: from a human objective to a reusable Lean library, coordinated through separate work and maintenance queues.</em></p>
+</div>
 
-> [!NOTE]
-> Archon Horizon has been used to coordinate development of the
-> [FrenzyMath Poincare Conjecture formalization](https://github.com/frenzymath/Poincare-Conjecture).
+Archon Horizon has been used to coordinate development of the
+[FrenzyMath Poincaré Conjecture formalization](https://github.com/frenzymath/Poincare-Conjecture)
+([paper](https://arxiv.org/html/2610.08329v1)).
 
 ## Installation
 
@@ -45,62 +40,124 @@ python -m pip install '.[control-plane]'
 
 Workers install `[pipeline-worker]`. Add `[search]` where Lean indexing is used;
 use `[dev]` for development. Configure PostgreSQL and explicit installation paths
-as described in the [setup guide](docs/pipeline-setup.md):
+as described in the [setup guide](docs/pipeline-setup.md).
 
-```sh
-horizon --config /absolute/path/server.json init --interactive
-# Review the plan, then repeat with --apply.
-horizon --config /absolute/path/server.json migrate
-horizon --config /absolute/path/server.json create-admin operator
-horizon --config /absolute/path/server.json serve
-```
+Configuration depends on your machine, provider accounts, isolation requirements,
+and project. Because it might be difficult to configure, we recommend preparing it with your coding agent using the setup guide and [configuration examples](deploy/pipeline), then reviewing the generated installation plan before applying it. It can be modified at any time.
 
-`horizon`, `horizon-pipeline`, and `python -m archon_horizon` invoke the same
-implementation. The dashboard is at `/pipeline`; the authenticated API is
-`/api/v3`. Configuration and database changes are explicit commands, never side
-effects of importing the package or opening the dashboard.
+During setup, you choose where Horizon stores its data and project workspaces.
+Agents can modify host files shared with their containers. The control plane and
+worker daemon run with their OS account’s permissions; storage settings do not
+restrict all host filesystem access. Database, container and tool caches may use
+additional directories.
 
-## Runs And Review
+## Security And Sandbox
 
-A run selects pre-processing, main formalization, or post-processing. All use
-the same queue, worker/maintainer roles, continuation, and publication machinery.
-Each phase can run independently. The workspace is free working space; review
-policies apply to changes entering roadmap or library repositories.
+By default, **agent processes run inside rootless Podman containers**; the worker
+daemon itself runs on the host. “Rootless” means Podman runs without host root
+privileges. Agents see the container filesystem and explicitly mounted host
+directories: the selected workspace, a dedicated provider home for authentication
+and session state, disk-backed scratch, read-only instructions and configured
+extra mounts. Writes through writable mounts modify the corresponding host files.
 
-New default runs start with one root maintainer that chooses work, reviews
-results and owns phase completion. Workers deliver scoped results; maintainers
-request concrete repairs or accept them. Planning belongs within these roles.
-Event waits release execution capacity instead of keeping a model polling.
-Agents can inspect dashboard-equivalent run observations with
-`horizon-pipeline agent context --view operations` and invoke an
-`orchestration-auditor` native helper for a concrete anomaly. A standing
-orchestrator is not part of this default path. See the
-[phase workflows](docs/architecture.md#phase-workflows) and
-[recovery contract](docs/coordination-recovery.md).
+<div align="center" style="text-align: center;">
+  <img src="docs/assets/security.png" alt="Archon Horizon security" width="75%" />
+  <p><em>Archon Horizon: security and sandboxing</em></p>
+</div>
 
-Assignments retain their obligation ledger and provider context across
-continuations. Host journals preserve uncertain requests and unpublished Git
-checkpoints for retry. Reviewers use pinned descriptions and exact PR revisions;
-the maintainer chooses useful perspectives and makes the final merge decision.
 
-Delegation creates a narrower child mission with a recorded purpose and bounded
-scope. The mission tree records responsibility; the mathematical dependency graph
-records prerequisites. Agents revise their own mission subtree through
-revision-checked API operations and inspect shared capacity before adding work.
-Queue readiness is derived from mission state, assignment conditions, leases and
-available resources. An execution ending is distinct from its mission being accepted.
-See [mission coordination](docs/mission-coordination.md) for the agent workflow,
-enforced boundaries and recovery rules.
+The image is pinned by its SHA-256 digest, identifying its exact contents. Its
+filesystem is read-only; writable mounts remain writable. Outbound networking
+is enabled by default without a destination allowlist; `"network": "none"`
+disables it.
 
-The grouped skill catalog is
-[`src/archon_horizon/pipeline/skills`](src/archon_horizon/pipeline/skills).
-Worker and reviewer subagent descriptions live separately in
-[`pipeline/subagents`](src/archon_horizon/pipeline/subagents), grouped by specialty.
-Read the [reviewer guide](docs/pipeline-reviewers.md) for skills, descriptors,
-review attribution, and editing existing project configuration.
+The **control plane runs as a host service** under its OS user’s permissions;
+the worker sandbox does not isolate it. Explicit `unrestricted` worker mode runs
+agent processes directly on the host, subject to OS permissions and the provider’s
+own sandbox policy.
 
-See the [documentation index](docs/README.md),
-[architecture](docs/architecture.md), and [development guide](CONTRIBUTING.md).
+You choose where Horizon keeps project workspaces, agent state and build caches.
+Keep credentials and recovery data separate from agent workspaces. See the
+[setup guide](docs/pipeline-setup.md) for storage and sandbox configuration,
+including [cleanup and backups](docs/pipeline-setup.md#cleanup-and-backups).
+
+## Parallelism And Resources
+
+One control plane can schedule one or several worker hosts. Work and Maintenance
+have separate queue policies and session limits; both share the available host
+and provider capacity. Worker `slots` bounds primary execution capacity, and
+native subagents use their provider’s native behavior by default, with no
+Horizon-imposed cap. Operators can optionally configure a separate subagent limit.
+
+<div align="center" style="text-align: center;">
+  <img src="docs/assets/parallelization.png" alt="Archon Horizon parallelization" width="75%" />
+  <p><em>Archon Horizon: a harness scalable to resource availability</em></p>
+</div>
+
+Compiler concurrency is independent of agent concurrency. Managed Lean builds
+default to one build and one dependency preparation at a time per shared build
+root. Resource observations can defer new work under memory or I/O pressure;
+they do not predict each proof's peak memory use. See
+[managed Lean checks](docs/pipeline-setup.md#managed-lean-checks).
+
+## Customization
+
+Adapt Horizon to your project through:
+
+- **Agent guidance:** add or override Markdown skills and specialist instructions,
+  and browse the installed skills and prompt templates in the dashboard.
+- **Review:** choose reviewers, their instructions and the acceptance criteria for
+  roadmap and library contributions.
+- **Execution:** select providers, models, reasoning effort, concurrency and budgets.
+- **Integrations:** connect your repositories, Forgejo and Zulip for collaboration
+  with agents and other people. In particular Forgejo handles mirroring a Github repository with scheduled synchronization.
+
+See [skills and reviewers](docs/pipeline-reviewers.md) and the
+[configuration guide](docs/pipeline-setup.md) for details. Running sessions retain
+their original instruction bundle.
+
+## Running a Project
+
+Once the control plane and workers are running, use the dashboard to create
+projects and monitor work, and the CLI/API to register objectives and launch
+objective runs. Your coding agent can guide you through setup and operation.
+
+Create a **project**, connect its repositories and workers, then add one or more
+**objectives**. Write each objective as a Markdown document describing the desired
+outcome; a human draft is enough to begin. Choose the phase that fits your project:
+
+- **Preprocessing:** review the literature, collect references, refine the objective
+  and propose a roadmap and milestones.
+- **Main formalization:** work toward the objective in the Lean workspace.
+- **Postprocessing:** improve the quality, organization and reuse of existing
+  formalizations, and prepare contributions to a destination library.
+
+Each phase can run independently. You can start directly with formalization, or
+use postprocessing on a Lean project developed outside Horizon. Monitor progress
+through the dashboard and join discussions or give further instructions through
+Zulip when useful. See the [setup guide](docs/pipeline-setup.md) for launch commands
+and the inputs needed to start at each phase.
+
+## Dashboard
+
+The dashboard brings together objectives, the formalization graph, agent activity,
+references and project integrations. Open `/pipeline` on the configured host and
+port; the default local address is `http://127.0.0.1:8788/pipeline`.
+
+For private remote access, expose the dashboard through **Tailscale Serve**.
+Tailscale device sharing can also give collaborators outside your tailnet access.
+They need a Horizon account and Tailscale access to the dashboard, but no OS account
+or SSH access on the control-plane machine. Use Tailscale access controls to allow
+only the dashboard’s HTTPS port. See [dashboard access](docs/pipeline-setup.md#dashboard-access)
+for configuration and sharing instructions.
+
+## Documentation And Demo
+
+The [documentation index](docs/README.md) collects setup, architecture, agent
+workflows, and review guidance. A GitHub Pages site and a read-only dashboard demo
+can be built from this checkout; see the [site guide](docs/documentation-site.md)
+and [demo guide](docs/dashboard-demo.md). The demo uses synthetic data and needs
+no Horizon installation or provider account.
 
 ## License
 
